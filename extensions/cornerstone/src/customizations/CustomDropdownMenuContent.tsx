@@ -94,12 +94,12 @@ export const CustomDropdownMenuContent = () => {
         <Icons.Rename className="text-foreground" />
         <span className="pl-2">{t('Rename')}</span>
       </DropdownMenuItem>
-      <ExportSegmentationSubMenuItem
+      {/* <ExportSegmentationSubMenuItem
         segmentationId={segmentationId}
         segmentationRepresentationType={segmentationRepresentationTypes?.[0]}
         allowExport={allowExport}
         actions={actions}
-      />
+      /> */}
       <DropdownMenuSeparator />
       <DropdownMenuItem onClick={() => onSegmentationDelete(segmentationId)}>
         <Icons.Delete className="text-red-600" />

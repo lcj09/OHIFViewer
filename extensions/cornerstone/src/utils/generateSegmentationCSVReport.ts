@@ -19,37 +19,37 @@ export function generateSegmentationCSVReport(
   const csvRows = [];
 
   // Add segmentation-level information
-  csvRows.push(['Segmentation ID', segmentationData.segmentationId || '']);
-  csvRows.push(['Segmentation Label', segmentationData.label || '']);
+  csvRows.push(['分割ID', segmentationData.segmentationId || '']);
+  csvRows.push(['分割标签', segmentationData.label || '']);
 
   csvRows.push([]);
 
   const additionalInfo = info.reference;
   // Add reference information
   const referenceKeys = [
-    ['Series Number', additionalInfo.SeriesNumber],
-    ['Series Instance UID', additionalInfo.SeriesInstanceUID],
-    ['Study Instance UID', additionalInfo.StudyInstanceUID],
-    ['Series Date', additionalInfo.SeriesDate],
-    ['Series Time', additionalInfo.SeriesTime],
-    ['Series Description', additionalInfo.SeriesDescription],
+    ['序列号', additionalInfo.SeriesNumber],
+    ['序列UID', additionalInfo.SeriesInstanceUID],
+    ['检查UID', additionalInfo.StudyInstanceUID],
+    ['序列日期', additionalInfo.SeriesDate],
+    ['序列时间', additionalInfo.SeriesTime],
+    ['序列描述', additionalInfo.SeriesDescription],
   ];
 
   referenceKeys.forEach(([key, value]) => {
     if (value) {
-      csvRows.push([`reference ${key}`, value]);
+      csvRows.push([`参考 ${key}`, value]);
     }
   });
 
   // Add a blank row for separation
   csvRows.push([]);
 
-  csvRows.push(['Segments Statistics']);
+  csvRows.push(['分段统计']);
 
   // Add segment information in columns
   if (segmentationData.segments) {
     // First row: Segment headers
-    const segmentHeaderRow = ['Label'];
+    const segmentHeaderRow = ['标签'];
     for (const segmentId in segmentationData.segments) {
       const segment = segmentationData.segments[segmentId];
       segmentHeaderRow.push(`${segment.label || ''}`);
@@ -58,16 +58,16 @@ export function generateSegmentationCSVReport(
 
     // Add segment properties
     csvRows.push([
-      'Segment Index',
+      '分段索引',
       ...Object.values(segmentationData.segments).map(s => s.segmentIndex || ''),
     ]);
     csvRows.push([
-      'Locked',
-      ...Object.values(segmentationData.segments).map(s => (s.locked ? 'Yes' : 'No')),
+      '锁定',
+      ...Object.values(segmentationData.segments).map(s => (s.locked ? '是' : '否')),
     ]);
     csvRows.push([
-      'Active',
-      ...Object.values(segmentationData.segments).map(s => (s.active ? 'Yes' : 'No')),
+      '激活',
+      ...Object.values(segmentationData.segments).map(s => (s.active ? '是' : '否')),
     ]);
 
     // Add segment statistics
