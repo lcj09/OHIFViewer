@@ -410,8 +410,9 @@ const ptCT: AppTypes.HangingProtocol.Protocol = {
     },
   },
   // [2026-05-11 修改] 扩展stages数组，新增冠状位2x2、原始2x3、原始2x4、TMTV MPR布局
+  // [2026-06-30 修改] 默认布局改为 Axial（stage3），将 stage3 放到第一位
   //可选的多种布局
-  stages: [stage1, stage2, stage3, stage4, stage5, stage6, stage7, stage8],
+  stages: [stage3, stage1, stage2, stage4, stage5, stage6, stage7, stage8],
   numberOfPriorsReferenced: -1,
 };
 

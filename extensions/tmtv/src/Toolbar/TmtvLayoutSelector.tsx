@@ -39,7 +39,7 @@ function TmtvLayoutSelectorWithServices({
   // 2x3/2x4布局：十字线正常工作
   const tmtvPresets = [
     {
-      title: t('Default'),
+      title: '3x4',
       icon: 'layout-common-2x3',
       commandOptions: {
         protocolId: '@ohif/extension-tmtv.hangingProtocolModule.ptCT',
