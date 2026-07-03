@@ -69,8 +69,31 @@ function CustomizableViewportOverlay({
     servicesManager.services;
   const [scale, setScale] = useState(1);
   const [annotationState, setAnnotationState] = useState(0);
+  // [2026-07-03] 订阅 customization变化，使 hideAll 切换能触发重新渲染
+  const [, setOverlayVersion] = useState(0);
   const { isViewportBackgroundLight: isLight, windowLevel: voi } = useViewportRendering(viewportId);
   const { imageIndex } = imageSliceData;
+
+  // [2026-07-03] 订阅 customizationService事件，当 viewportOverlay.hideAll 变化时触发重新渲染
+  useEffect(() => {
+    const EVENTS = customizationService.EVENTS || customizationService._events;
+    if (!EVENTS) return;
+
+    const eventName = EVENTS.MODE_CUSTOMIZATION_MODIFIED || EVENTS.modeModified;
+    if (!eventName) return;
+
+    const subscription = customizationService.subscribe(eventName, () => {
+      setOverlayVersion(v => v + 1);
+    });
+
+    return () => {
+      if (subscription?.unsubscribe) {
+        subscription.unsubscribe();
+      } else if (customizationService.unsubscribe) {
+        customizationService.unsubscribe(eventName, subscription);
+      }
+    };
+  }, [customizationService]);
 
   // Historical usage defined the overlays as separate items due to lack of
   // append functionality.  This code enables the historical usage, but
@@ -232,7 +255,12 @@ function CustomizableViewportOverlay({
     [_renderOverlayItem]
   );
 
-  return (
+  // [2026-07-03] 检查 viewportOverlay.hideAll 标志，支持 OverlayMenu 切换患者信息显隐
+  const viewportOverlayConfig = customizationService.getCustomization('viewportOverlay');
+  const shouldHideOverlay = viewportOverlayConfig?.hideAll;
+
+  // 使用条件渲染而非提前返回，确保所有 hooks 都能被调用
+  const overlayContent = shouldHideOverlay ? null : (
     <ViewportOverlay
       topLeft={getContent(topLeftCustomization, 'topLeftOverlayItem')}
       topRight={getContent(topRightCustomization, 'topRightOverlayItem')}
@@ -242,6 +270,8 @@ function CustomizableViewportOverlay({
       shadowClass={isLight ? 'shadow-light' : 'shadow-dark'}
     />
   );
+
+  return overlayContent;
 }
 
 /**

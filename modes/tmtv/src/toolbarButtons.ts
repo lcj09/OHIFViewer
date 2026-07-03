@@ -307,6 +307,17 @@ const toolbarButtons = [
       evaluate: 'evaluate.action',
     },
   },
+  // [2026-07-01 新增] 覆盖层菜单按钮 - 控制十字线和患者信息的显示/隐藏
+  {
+    id: 'Overlay',
+    uiType: 'ohif.overlayMenu',
+    props: {
+      icon: 'EyeVisible',
+      label: i18n.t('Buttons:Overlay'),
+      tooltip: i18n.t('Buttons:Toggle overlay visibility (crosshairs, patient info)'),
+      evaluate: 'evaluate.action',
+    },
+  },
   // [2026-05-11 新增] 3D旋转按钮 - 仅在MIP视口和3D视口中可用
   // 功能：鼠标左键拖拽旋转MIP图像或3D体积
   // 限制：CT/PT/Fusion等2D视口不可用（工具未注册到对应toolGroup）

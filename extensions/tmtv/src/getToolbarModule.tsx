@@ -2,6 +2,7 @@ import RectangleROIOptions from './Panels/RectangleROIOptions';
 import TmtvLayoutSelector from './Toolbar/TmtvLayoutSelector';
 import FusionAdjustMenu from './Toolbar/FusionAdjustMenu';
 import SaveMenu from './Toolbar/SaveMenu';
+import OverlayMenu from './Toolbar/OverlayMenu';
 
 // 2026-04-28 - TMTV专用toolbar模块
 // 注意：必须使用工厂函数模式，接收 commandsManager 和 servicesManager
@@ -27,6 +28,12 @@ export default function getToolbarModule({ commandsManager, servicesManager }) {
       name: 'ohif.saveMenu',
       defaultComponent: props =>
         SaveMenu({ ...props, commandsManager, servicesManager }),
+    },
+    // [2026-07-01 新增] 覆盖层菜单 - 控制十字线和患者信息显示
+    {
+      name: 'ohif.overlayMenu',
+      defaultComponent: props =>
+        OverlayMenu({ ...props, commandsManager, servicesManager }),
     },
   ];
 }
