@@ -128,7 +128,7 @@ function modeFactory({ modeConfiguration }) {
 
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.topLeft, [
         'orientationMenu'
-        //'dataOverlayMenu',
+        //'dataOverlayMenu',// [2026-07-06] TMTV模式下默认屏蔽视口叠加数据
       ]);
 
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.bottomMiddle, [
@@ -188,6 +188,10 @@ function modeFactory({ modeConfiguration }) {
         'tmtv.imageUpload': {
           // 从 default.js 配置文件读取上传地址，部署时只需修改配置文件
           apiUrl: (window.config?.customizationService?.['tmtv.imageUpload'] as { apiUrl?: string })?.apiUrl || 'http://localhost:8028/api/fileUpload',
+        },
+        // [2026-07-06] TMTV模式下屏蔽 orientationMenu 下拉框中的 Reformat 选项
+        orientationMenu: {
+          hideReformat: true,
         },
       });
 

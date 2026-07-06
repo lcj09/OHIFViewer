@@ -23,9 +23,13 @@ function ViewportOrientationMenu({
   disabled?: boolean;
 }>) {
   const { servicesManager, commandsManager } = useSystem();
-  const { cornerstoneViewportService, toolbarService } = servicesManager.services;
+  const { cornerstoneViewportService, toolbarService, customizationService } = servicesManager.services;
   const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
   const viewportOrientation = viewportInfo.getOrientation();
+
+  // [2026-07-06] 通过 customization 控制是否隐藏 Reformat 选项
+  const orientationMenuConfig = customizationService?.getCustomization?.('orientationMenu');
+  const hideReformat = orientationMenuConfig?.hideReformat === true;
 
   const [gridState] = useViewportGrid();
   const viewportIdToUse = viewportId || gridState.activeViewportId;
@@ -202,20 +206,24 @@ function ViewportOrientationMenu({
           </div>
           <div className="flex-1 text-left">Acquisition</div>
         </Button>
-        {/* Divider */}
-        <div className="border-input mx-1 my-2 border-t" />
-        <Button
-          variant="ghost"
-          className="flex h-7 w-full flex-shrink-0 items-center justify-start self-stretch px-1 py-0"
-          onClick={() => handleOrientationChange('reformat')}
-        >
-          <div className="mr-1 flex w-6 items-center justify-start">
-            {currentOrientation === 'reformat' ? (
-              <Icons.Checked className="text-primary h-6 w-6" />
-            ) : null}
-          </div>
-          <div className="flex-1 text-left">Reformat</div>
-        </Button>
+        {/* Divider + Reformat */}
+        {!hideReformat && (
+          <>
+            <div className="border-input mx-1 my-2 border-t" />
+            <Button
+              variant="ghost"
+              className="flex h-7 w-full flex-shrink-0 items-center justify-start self-stretch px-1 py-0"
+              onClick={() => handleOrientationChange('reformat')}
+            >
+              <div className="mr-1 flex w-6 items-center justify-start">
+                {currentOrientation === 'reformat' ? (
+                  <Icons.Checked className="text-primary h-6 w-6" />
+                ) : null}
+              </div>
+              <div className="flex-1 text-left">Reformat</div>
+            </Button>
+          </>
+        )}
       </PopoverContent>
     </Popover>
   );
