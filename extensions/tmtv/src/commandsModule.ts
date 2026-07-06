@@ -572,11 +572,15 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       const toolGroupId = viewportInfo.getToolGroupId();
       const ptVOI = _getPTVOIRange();
 
+      // [2026-07-06] 保存当前缩放，resetCamera后恢复，避免图像整体变小
+      const currentZoom = viewport.getZoom();
+
       // ── PT视口重置 ──
       // 只重置相机，不调用resetProperties（避免VOI被重置为错误的默认值）
       // 手动恢复自定义SUV窗宽窗位和反色状态
       if (toolGroupId === 'ptToolGroup') {
         viewport.resetCamera();
+        viewport.setZoom(currentZoom);
         if (ptVOI) {
           const { lower, upper } = csUtils.windowLevel.toLowHighRange(
             ptVOI.windowWidth,
@@ -596,6 +600,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       // 同时恢复自定义SUV窗宽窗位和反色状态
       } else if (toolGroupId === 'mipToolGroup') {
         viewport.resetCamera();
+        viewport.setZoom(currentZoom);
         viewport.setProperties({
           slabThickness: 500,
         });
@@ -614,11 +619,12 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         viewport.render();
       // ── Fusion视口重置 ──
       // 先调用resetProperties重置CT和PT的所有属性
-      // 然后单独恢复PT volume的VOI和HSV色彩映射
+      // 然后单独恢复PT volume的VOI和hot_iron色彩映射
       // 注意：setProperties必须指定volumeId，否则会影响CT volume
       } else if (toolGroupId === 'fusionToolGroup') {
         viewport.resetProperties?.();
         viewport.resetCamera();
+        viewport.setZoom(currentZoom);
         if (ptVOI) {
           const ptVolumeId = _getPTVolumeId(viewport);
           if (ptVolumeId) {
@@ -648,6 +654,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       } else {
         viewport.resetProperties?.();
         viewport.resetCamera();
+        viewport.setZoom(currentZoom);
         viewport.render();
       }
     },

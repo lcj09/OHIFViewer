@@ -54,6 +54,7 @@ function modeFactory({ modeConfiguration }) {
         hangingProtocolService,
         displaySetService,
         viewportGridService,
+        cornerstoneViewportService,
       } = servicesManager.services;
 
       const utilityModule = extensionManager.getModuleEntry(
@@ -90,6 +91,17 @@ function modeFactory({ modeConfiguration }) {
       );
 
       unsubscriptions.push(unsubscribe);
+
+      // [2026-07-06] 监听布局切换事件，延迟resize确保视口尺寸正确更新，避免图像变形
+      const { unsubscribe: protocolUnsubscribe } = hangingProtocolService.subscribe(
+        hangingProtocolService.EVENTS.PROTOCOL_CHANGED,
+        () => {
+          setTimeout(() => {
+            cornerstoneViewportService.resize();
+          }, 200);
+        }
+      );
+      unsubscriptions.push(protocolUnsubscribe);
 
     // 3. 注册工具栏按钮
       toolbarService.register(toolbarButtons);
@@ -217,8 +229,8 @@ function modeFactory({ modeConfiguration }) {
 
           if (isSUVAvailable) {
             return {
-              windowWidth: 10,
-              windowCenter: 5,
+              windowWidth: 5,
+              windowCenter: 2.5,
             };
           }
 
