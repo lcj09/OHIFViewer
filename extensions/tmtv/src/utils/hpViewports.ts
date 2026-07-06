@@ -287,7 +287,7 @@ const fusionAXIAL: AppTypes.HangingProtocol.Viewport = {
       id: 'ptDisplaySet',//上层：PT图像
       options: {
         colormap: {
-          name: 'hsv',
+          name: 'hot_iron',
           opacity: [
             { value: 0, opacity: 0 },
             { value: 0.1, opacity: 0.8 },
@@ -350,7 +350,7 @@ const fusionSAGITTAL = {
       id: 'ptDisplaySet',
       options: {
         colormap: {
-          name: 'hsv',
+          name: 'hot_iron',
           opacity: [
             { value: 0, opacity: 0 },
             { value: 0.1, opacity: 0.8 },
@@ -413,7 +413,7 @@ const fusionCORONAL = {
       id: 'ptDisplaySet',
       options: {
         colormap: {
-          name: 'hsv',
+          name: 'hot_iron',
           opacity: [
             { value: 0, opacity: 0 },
             { value: 0.1, opacity: 0.8 },

@@ -94,7 +94,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     const isSUVAvailable = imageIdScalingFactor && imageIdScalingFactor.suvbw;
 
     if (isSUVAvailable) {
-      return { windowWidth: 5, windowCenter: 2.5 };
+      return { windowWidth: 10, windowCenter: 5 };
     }
     return null;
   }

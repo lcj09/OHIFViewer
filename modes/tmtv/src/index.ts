@@ -217,8 +217,8 @@ function modeFactory({ modeConfiguration }) {
 
           if (isSUVAvailable) {
             return {
-              windowWidth: 5,
-              windowCenter: 2.5,
+              windowWidth: 10,
+              windowCenter: 5,
             };
           }
 

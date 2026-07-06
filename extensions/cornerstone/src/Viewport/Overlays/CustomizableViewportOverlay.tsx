@@ -405,24 +405,53 @@ function OverlayItem(props) {
 /**
  * Window Level / Center Overlay item
  * //
+ * [2026-07-06] 根据视口类型显示不同内容：
+ * - CT: 显示 W/L
+ * - PET: 显示 W/L，另起一行显示 SUV min--max（基于窗宽窗位实时计算）
+ * - Fusion: 显示 W/L，另起一行显示 SUV min--max（基于窗宽窗位实时计算）
  */
-function VOIOverlayItem({ voi, customization }: OverlayItemProps) {
+function VOIOverlayItem({ voi, customization, viewportData, servicesManager }: OverlayItemProps) {
   const { windowWidth, windowCenter } = voi;
   const { title } = customization;
   if (typeof windowCenter !== 'number' || typeof windowWidth !== 'number') {
     return null;
   }
 
+  const { displaySetService } = servicesManager.services;
+  const displaySets =
+    viewportData?.data
+      ?.map(datum => displaySetService.getDisplaySetByUID(datum.displaySetInstanceUID))
+      .filter(it => !!it) || [];
+
+  const modalities = displaySets.map(ds => ds.Modality);
+  const hasPT = modalities.includes('PT');
+
+  // 基于窗宽窗位实时计算 SUV 范围（下限不小于0）
+  const suvMin = Math.max(0, windowCenter - windowWidth / 2);
+  const suvMax = windowCenter + windowWidth / 2;
+
   return (
-    <div
-      className="overlay-item flex flex-row"
-      style={{ color: customization?.color }}
-      title={title}
-    >
-      <span className="mr-0.5 shrink-0 opacity-[0.70]">W:</span>
-      <span className="mr-2.5 shrink-0">{windowWidth.toFixed(0)}</span>
-      <span className="mr-0.5 shrink-0 opacity-[0.70]">L:</span>
-      <span className="shrink-0">{windowCenter.toFixed(0)}</span>
+    <div title={title}>
+      <div
+        className="overlay-item flex flex-row"
+        style={{ color: customization?.color }}
+      >
+        <span className="mr-0.5 shrink-0 opacity-[0.70]">W:</span>
+        <span className="mr-2.5 shrink-0">{windowWidth.toFixed(0)}</span>
+        <span className="mr-0.5 shrink-0 opacity-[0.70]">L:</span>
+        <span className="shrink-0">{windowCenter.toFixed(0)}</span>
+      </div>
+      {hasPT && (
+        <div
+          className="overlay-item flex flex-row"
+          style={{ color: customization?.color }}
+        >
+          <span className="mr-0.5 shrink-0 opacity-[0.70]">SUV:</span>
+          <span className="mr-1 shrink-0">{suvMin.toFixed(2)}</span>
+          <span className="mr-1 shrink-0 opacity-[0.70]">--</span>
+          <span className="shrink-0">{suvMax.toFixed(2)}</span>
+        </div>
+      )}
     </div>
   );
 }
