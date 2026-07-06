@@ -127,8 +127,8 @@ function modeFactory({ modeConfiguration }) {
       ]);
 
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.topLeft, [
-        'orientationMenu',
-        'dataOverlayMenu',
+        'orientationMenu'
+        //'dataOverlayMenu',
       ]);
 
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.bottomMiddle, [
