@@ -318,6 +318,17 @@ const toolbarButtons = [
       evaluate: 'evaluate.action',
     },
   },
+  // [2026-07-06 新增] 伪彩色菜单按钮 - 切换PT volume的伪彩色映射
+  {
+    id: 'Colormap',
+    uiType: 'ohif.colormapMenu',
+    props: {
+      icon: 'icon-color-lut',
+      label: '伪彩色',
+      tooltip: '切换伪彩色映射',
+      evaluate: 'evaluate.action',
+    },
+  },
   // [2026-05-11 新增] 3D旋转按钮 - 仅在MIP视口和3D视口中可用
   // 功能：鼠标左键拖拽旋转MIP图像或3D体积
   // 限制：CT/PT/Fusion等2D视口不可用（工具未注册到对应toolGroup）

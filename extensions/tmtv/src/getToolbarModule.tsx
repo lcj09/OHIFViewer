@@ -3,6 +3,7 @@ import TmtvLayoutSelector from './Toolbar/TmtvLayoutSelector';
 import FusionAdjustMenu from './Toolbar/FusionAdjustMenu';
 import SaveMenu from './Toolbar/SaveMenu';
 import OverlayMenu from './Toolbar/OverlayMenu';
+import ColormapMenu from './Toolbar/ColormapMenu';
 
 // 2026-04-28 - TMTV专用toolbar模块
 // 注意：必须使用工厂函数模式，接收 commandsManager 和 servicesManager
@@ -34,6 +35,12 @@ export default function getToolbarModule({ commandsManager, servicesManager }) {
       name: 'ohif.overlayMenu',
       defaultComponent: props =>
         OverlayMenu({ ...props, commandsManager, servicesManager }),
+    },
+    // [2026-07-06 新增] 伪彩色菜单 - 切换PT volume的colormap
+    {
+      name: 'ohif.colormapMenu',
+      defaultComponent: props =>
+        ColormapMenu({ ...props, commandsManager, servicesManager }),
     },
   ];
 }
