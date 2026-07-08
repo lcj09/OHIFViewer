@@ -1,6 +1,7 @@
 import { MIN_SEGMENTATION_DRAWING_RADIUS, MAX_SEGMENTATION_DRAWING_RADIUS } from './constants';
 import { PlanarFreehandROITool, CrosshairsTool } from '@cornerstonejs/tools'; // [2026-05-11 新增] 导入CrosshairsTool，用于修补mouseMoveCallback崩溃问题
 import { getRenderingEngine } from '@cornerstonejs/core'; // [2026-05-20 新增] 用于获取视口实例以重置相机旋转
+import { wrapGetTextLinesWithSUV } from 'd:/OHIF/extensions/tmtv/src/utils/fusionMeasurementText'; // [2026-07-07 新增] Fusion视口测量结果显示SUV值
 
 // [2026-05-11 修改] 工具组ID定义
 // 移除了 MPR: 'mpr'，原因：TMTV模式不再创建独立的MPR工具组，
@@ -190,6 +191,32 @@ function _initToolGroups(toolNames, Enums, toolGroupService, commandsManager) {
     passive: [...tools.passive, { toolName: 'RectangleROIStartEndThreshold' }, { toolName: toolNames.FusionAdjust }],
   });
   toolGroupService.createToolGroupAndAddTools(toolGroupIds.default, tools);
+
+  // [2026-07-07 新增] 为Fusion工具组的测量工具添加SUV值显示
+  // 原理：wrapGetTextLinesWithSUV会检查cachedStats中是否有PT volume的统计
+  //       如果没有（CT/PT视口），则返回原始文本，不影响其他视口
+  // 适用工具：椭圆(EllipticalROI)、多边形(PlanarFreehandROI)、圆(CircleROI)、球体(SphereROI)
+  const fusionToolGroup = toolGroupService.getToolGroup(toolGroupIds.Fusion);
+  if (fusionToolGroup) {
+    const csToolGroup = fusionToolGroup._toolGroup || fusionToolGroup;
+    const suvToolNames = [
+      toolNames.EllipticalROI,
+      toolNames.PlanarFreehandROI,
+      toolNames.CircleROI,
+      toolNames.SphereROI,
+    ];
+    for (const toolName of suvToolNames) {
+      try {
+        const tool = csToolGroup.getToolInstance(toolName);
+        if (tool?.configuration?.getTextLines) {
+          const originalGetTextLines = tool.configuration.getTextLines;
+          tool.configuration.getTextLines = wrapGetTextLinesWithSUV(originalGetTextLines);
+        }
+      } catch (e) {
+        console.warn(`initToolGroups: 包装${toolName}的getTextLines失败`, e);
+      }
+    }
+  }
 
   // [2026-05-11 修改] MIP工具组添加passive工具（StackScroll/Zoom/Pan）
   // 和disabled工具（Crosshairs），确保MIP视口支持基本操作和十字线兼容
