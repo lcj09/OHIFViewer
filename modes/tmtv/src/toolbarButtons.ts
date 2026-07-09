@@ -329,6 +329,17 @@ const toolbarButtons = [
       evaluate: 'evaluate.action',
     },
   },
+  // [2026-07-08 新增] SUV阈值菜单按钮 - 快速设置PET窗位(体部SUV=6/头部SUV=10)
+  {
+    id: 'SuvThreshold',
+    uiType: 'ohif.suvThresholdMenu',
+    props: {
+      icon: 'Threshold',
+      label: 'SUV阈值',
+      tooltip: '设置SUV窗位阈值',
+      evaluate: 'evaluate.action',
+    },
+  },
   // [2026-05-11 新增] 3D旋转按钮 - 仅在MIP视口和3D视口中可用
   // 功能：鼠标左键拖拽旋转MIP图像或3D体积
   // 限制：CT/PT/Fusion等2D视口不可用（工具未注册到对应toolGroup）

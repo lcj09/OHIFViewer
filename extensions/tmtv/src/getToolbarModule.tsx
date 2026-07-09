@@ -4,6 +4,7 @@ import FusionAdjustMenu from './Toolbar/FusionAdjustMenu';
 import SaveMenu from './Toolbar/SaveMenu';
 import OverlayMenu from './Toolbar/OverlayMenu';
 import ColormapMenu from './Toolbar/ColormapMenu';
+import SuvThresholdMenu from './Toolbar/SuvThresholdMenu';
 
 // 2026-04-28 - TMTV专用toolbar模块
 // 注意：必须使用工厂函数模式，接收 commandsManager 和 servicesManager
@@ -41,6 +42,12 @@ export default function getToolbarModule({ commandsManager, servicesManager }) {
       name: 'ohif.colormapMenu',
       defaultComponent: props =>
         ColormapMenu({ ...props, commandsManager, servicesManager }),
+    },
+    // [2026-07-08 新增] SUV阈值菜单 - 快速设置PET窗位(体部SUV=6/头部SUV=10)
+    {
+      name: 'ohif.suvThresholdMenu',
+      defaultComponent: props =>
+        SuvThresholdMenu({ ...props, commandsManager, servicesManager }),
     },
   ];
 }

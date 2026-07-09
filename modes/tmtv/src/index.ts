@@ -134,6 +134,7 @@ function modeFactory({ modeConfiguration }) {
         'FusionAdjust',       // [2026-05-22 新增] 手动微调菜单（融合图像位置调整）
         'Overlay',            // [2026-07-01 新增] 覆盖层菜单（十字线/患者信息显示切换）
         'Colormap',           // [2026-07-06 新增] 伪彩色菜单（切换PT伪彩色映射）
+        'SuvThreshold',       // [2026-07-08 新增] SUV阈值菜单（设置PET窗位）
         'TrackballRotate',    // [2026-05-11 新增] 3D旋转（仅MIP视口可用）
         'TmtvLayout',         // [2026-04-28] TMTV布局选择器 (2x1/1x2/MPR等)
         'Probe',              // [2026-04-29] 探针功能 (独立于测量区域)
