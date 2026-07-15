@@ -30,6 +30,15 @@ class CornerstoneCacheService {
     return cs3DCache.getBytesAvailable();
   }
 
+  /**
+   * Called by ExtensionManager when exiting a mode. Clears the imageId Maps
+   * that hold arrays of strings and display set references, preventing GC.
+   */
+  public onModeExit() {
+    this.stackImageIds.clear();
+    this.volumeImageIds.clear();
+  }
+
   public async createViewportData(
     displaySets: Types.DisplaySet[],
     viewportOptions: AppTypes.ViewportGrid.GridViewportOptions,

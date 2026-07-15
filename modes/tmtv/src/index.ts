@@ -1,4 +1,4 @@
-import { classes } from '@ohif/core';
+import { classes, DicomMetadataStore } from '@ohif/core';
 import toolbarButtons from './toolbarButtons';
 import { id } from './id.js';
 import initToolGroups from './initToolGroups.js';
@@ -35,6 +35,14 @@ const extensionDependencies = {
 };
 
 const unsubscriptions = [];
+// Timer for delayed DicomMetadataStore.clear() on mode exit.
+// In-flight image load requests (wadors/wadouri) have cancelFn=undefined and cannot
+// be cancelled. They call createImage -> getImageFrame -> metaData.get('imagePixelModule'),
+// which requires DicomMetadataStore to still have the metadata. Clearing immediately
+// causes "Cannot read properties of undefined (reading 'samplesPerPixel')" errors.
+// Delay the clear so in-flight requests can complete. Cancelled in onModeEnter.
+let metadataClearTimer: ReturnType<typeof setTimeout> | null = null;
+
 function modeFactory({ modeConfiguration }) {
   return {
     // TODO: We're using this as a route segment
@@ -47,6 +55,13 @@ function modeFactory({ modeConfiguration }) {
      */
     //点击按钮，启动TMTV模式
     onModeEnter: ({ servicesManager, extensionManager, commandsManager }: withAppTypes) => {
+      // Cancel any pending delayed metadata clear from a previous mode exit.
+      // This prevents wiping the new study's metadata if the user re-enters quickly.
+      if (metadataClearTimer) {
+        clearTimeout(metadataClearTimer);
+        metadataClearTimer = null;
+      }
+
       const {
         toolbarService,
         toolGroupService,
@@ -250,13 +265,81 @@ function modeFactory({ modeConfiguration }) {
         uiModalService,
       } = servicesManager.services;
 
+      console.log('[tmtv-mode] onModeExit called, destroying services...');
       unsubscriptions.forEach(unsubscribe => unsubscribe());
       uiDialogService.hideAll();
       uiModalService.hide();
+
+      // CRITICAL: Manually clean up tool instances BEFORE toolGroupService.destroy().
+      // OrientationMarkerTool creates ResizeObservers and event listeners that are NOT
+      // cleaned up by toolGroupService.destroy() or cornerstoneTools.destroy().
+      // If we don't disconnect them here, the tool instances become orphaned (toolGroups=0)
+      // but stay alive via ResizeObserver callbacks and event listener closures, preventing GC.
+      // This MUST run while toolGroups still exist. Access toolGroups via toolGroupService
+      // (NOT direct import of @cornerstonejs/tools, which may resolve to a different module instance).
+      let cleanedTools = 0;
+      let cleanedOrientationMarkers = 0;
+      try {
+        const toolGroupIds = toolGroupService.getToolGroupIds();
+        console.log('[tmtv-mode] Found', toolGroupIds.length, 'toolGroups:', toolGroupIds);
+        toolGroupIds.forEach(tgId => {
+          const tg = toolGroupService.getToolGroup(tgId);
+          if (!tg) return;
+          const toolInstances = (tg as any)._toolInstances || {};
+          const toolNames = Object.keys(toolInstances);
+          console.log('[tmtv-mode] toolGroup', tgId, 'has tools:', toolNames);
+          toolNames.forEach(name => {
+            const tool = toolInstances[name];
+            // Disconnect all ResizeObservers (OrientationMarkerTool creates one per viewport)
+            if (tool._resizeObservers && tool._resizeObservers.size > 0) {
+              console.log('[tmtv-mode]   tool', name, 'has', tool._resizeObservers.size, 'ResizeObservers');
+              tool._resizeObservers.forEach((ro: any) => {
+                try { ro.disconnect(); } catch {}
+              });
+              tool._resizeObservers.clear();
+              cleanedTools++;
+            }
+            // Clean up orientation marker widgets (VTK actors/widgets)
+            if (tool.orientationMarkers) {
+              const markerIds = Object.keys(tool.orientationMarkers);
+              console.log('[tmtv-mode]   tool', name, 'has orientationMarkers for viewports:', markerIds);
+              markerIds.forEach(vid => {
+                const om = tool.orientationMarkers[vid];
+                try {
+                  om?.orientationWidget?.setEnabled(false);
+                  om?.orientationWidget?.delete?.();
+                  om?.actor?.delete?.();
+                  cleanedOrientationMarkers++;
+                } catch {}
+              });
+              tool.orientationMarkers = {};
+            }
+            if (tool.updatingOrientationMarker) {
+              tool.updatingOrientationMarker = {};
+            }
+            // Call the tool's own cleanup method if available
+            try { tool.cleanUpData?.(); } catch {}
+          });
+        });
+      } catch (e) {
+        console.warn('[tmtv-mode] Tool instance cleanup failed', e);
+      }
+      console.log('[tmtv-mode] Cleanup result: disconnected ResizeObserver sets =', cleanedTools, ', orientation markers =', cleanedOrientationMarkers);
+
       toolGroupService.destroy();
       syncGroupService.destroy();
       segmentationService.destroy();
       cornerstoneViewportService.destroy();
+      // Delay DicomMetadataStore.clear() to allow in-flight image load requests to complete.
+      // wadors/wadouri loaders have cancelFn=undefined, so HTTP requests already sent cannot
+      // be cancelled. They need metadata available when createImage calls getImageFrame.
+      // 10s is enough for most in-flight requests; cancelled in onModeEnter if user re-enters.
+      if (metadataClearTimer) clearTimeout(metadataClearTimer);
+      metadataClearTimer = setTimeout(() => {
+        try { DicomMetadataStore.clear(); } catch {}
+        metadataClearTimer = null;
+      }, 10000);
+      console.log('[tmtv-mode] onModeExit complete');
     },
     validationTags: {
       study: [],

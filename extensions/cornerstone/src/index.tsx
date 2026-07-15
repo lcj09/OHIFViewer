@@ -7,6 +7,11 @@ import {
   imageRetrievalPoolManager,
 } from '@cornerstonejs/core';
 import { Enums as cs3DToolsEnums } from '@cornerstonejs/tools';
+// Internal singletons not exposed via the public API. These hold DOM element
+// references and requestAnimationFrame loops that cornerstoneTools.destroy()
+// does NOT clean up, causing memory leaks on mode exit.
+import { annotationRenderingEngine } from '@cornerstonejs/tools/annotation/AnnotationRenderingEngine';
+import { segmentationRenderingEngine } from '@cornerstonejs/tools/segmentation/SegmentationRenderingEngine';
 import { Types } from '@ohif/core';
 import Enums from './enums';
 
@@ -23,7 +28,7 @@ import CornerstoneViewportService from './services/ViewportService/CornerstoneVi
 import ColorbarService from './services/ColorbarService';
 import * as CornerstoneExtensionTypes from './types';
 
-import { toolNames } from './initCornerstoneTools';
+import initCornerstoneTools, { toolNames } from './initCornerstoneTools';
 import { getEnabledElement, reset as enabledElementReset, setEnabledElement } from './state';
 import dicomLoaderService from './utils/dicomLoaderService';
 import getActiveViewportEnabledElement from './utils/getActiveViewportEnabledElement';
@@ -106,6 +111,13 @@ const cornerstoneExtension: Types.Extensions.Extension = {
     commandsManager,
     extensionManager,
   }: withAppTypes): void => {
+    // Re-initialize cornerstone tools after a potential destroy() in onModeExit.
+    // init() is idempotent (checks csToolsInitialized flag), and addTool() skips
+    // duplicates, so this is safe to call on every mode enter.
+    console.log('[CS-Extension] onModeEnter: calling initCornerstoneTools()');
+    initCornerstoneTools();
+    console.log('[CS-Extension] onModeEnter: initCornerstoneTools() done, registered tools:', Object.keys((cornerstoneTools as any).state?.tools || {}).length);
+
     const { cornerstoneViewportService, toolbarService, segmentationService } =
       servicesManager.services;
 
@@ -156,20 +168,18 @@ const cornerstoneExtension: Types.Extensions.Extension = {
   },
   getPanelModule,
   onModeExit: ({ servicesManager }: withAppTypes): void => {
+    console.log('[CS-Extension] onModeExit: STARTED');
+
     unsubscriptions.forEach(unsubscribe => unsubscribe());
-    // Clear the unsubscriptions
     unsubscriptions.length = 0;
 
     const { cineService, segmentationService } = servicesManager.services;
-    // Empty out the image load and retrieval pools to prevent memory leaks
-    // on the mode exits
     Object.values(cs3DEnums.RequestType).forEach(type => {
       imageLoadPoolManager.clearRequestStack(type);
       imageRetrievalPoolManager.clearRequestStack(type);
     });
 
     cineService.setIsCineEnabled(false);
-
     enabledElementReset();
 
     useLutPresentationStore.getState().clearLutPresentationStore();
@@ -181,6 +191,135 @@ const cornerstoneExtension: Types.Extensions.Extension = {
       .getState()
       .clearSelectedSegmentationsForViewportStore();
     segmentationService.removeAllSegmentations();
+
+    // Manually clean up tool instances BEFORE destroy() - disconnect ResizeObservers,
+    // release VTK widgets, call tool.cleanUpData() to remove document-level listeners
+    try {
+      const toolGroups = (cornerstoneTools as any).state?.toolGroups || [];
+      let cleanedTools = 0;
+      toolGroups.forEach(tg => {
+        const toolInstances = tg._toolInstances || {};
+        Object.values(toolInstances).forEach((tool: any) => {
+          if (tool._resizeObservers && tool._resizeObservers.size > 0) {
+            tool._resizeObservers.forEach((ro: any) => { try { ro.disconnect(); } catch {} });
+            tool._resizeObservers.clear();
+            cleanedTools++;
+          }
+          if (tool.orientationMarkers) {
+            Object.values(tool.orientationMarkers).forEach((om: any) => {
+              try {
+                om?.orientationWidget?.setEnabled(false);
+                om?.orientationWidget?.delete?.();
+                om?.actor?.delete?.();
+              } catch {}
+            });
+            tool.orientationMarkers = {};
+          }
+          if (tool.updatingOrientationMarker) tool.updatingOrientationMarker = {};
+          try { tool.cleanUpData?.(); } catch {}
+        });
+      });
+      if (cleanedTools > 0) console.log('[CS-Extension] Cleaned', cleanedTools, 'tool ResizeObserver sets');
+    } catch (e) {
+      console.warn('[CS-Extension] Tool cleanup failed', e);
+    }
+
+    // Before destroy(), dispatch ELEMENT_DISABLED for any remaining enabled elements
+    // so removeEnabledElement removes their DOM listeners
+    try {
+      const csState = (cornerstoneTools as any).state;
+      const remainingElements = csState?.enabledElements ? [...csState.enabledElements] : [];
+      if (remainingElements.length > 0) {
+        console.log('[CS-Extension] Fallback ELEMENT_DISABLED for', remainingElements.length, 'elements');
+        remainingElements.forEach((element: any) => {
+          try {
+            const viewportId = element?.dataset?.viewportUid;
+            const renderingEngineId = element?.dataset?.renderingEngineUid;
+            if (viewportId && element) {
+              cornerstone.eventTarget.dispatchEvent(
+                new CustomEvent(cornerstone.Enums.Events.ELEMENT_DISABLED,
+                  { detail: { element, viewportId, renderingEngineId } })
+              );
+            }
+          } catch (e) {
+            console.warn('[CS-Extension] Fallback ELEMENT_DISABLED failed', e);
+          }
+        });
+      }
+    } catch (e) {
+      console.warn('[CS-Extension] Fallback cleanup failed', e);
+    }
+
+    try {
+      if (typeof cornerstoneTools.destroy === 'function') {
+        cornerstoneTools.destroy();
+      }
+    } catch (e) {
+      console.error('[CS-Extension] cornerstoneTools.destroy() failed', e);
+    }
+
+    // Clean up singleton rendering engines (hold DOM refs + requestAnimationFrame loops)
+    try {
+      const are = annotationRenderingEngine as any;
+      const sre = segmentationRenderingEngine as any;
+
+      if (are._animationFrameHandle != null) window.cancelAnimationFrame(are._animationFrameHandle);
+      if (sre._animationFrameHandle != null) window.cancelAnimationFrame(sre._animationFrameHandle);
+
+      are._viewportElements?.clear?.();
+      are._needsRender?.clear?.();
+      sre._needsRender?.clear?.();
+      if (Array.isArray(sre._pendingRenderQueue)) sre._pendingRenderQueue.length = 0;
+
+      are._animationFrameSet = false;
+      are._animationFrameHandle = null;
+      sre._animationFrameSet = false;
+      sre._animationFrameHandle = null;
+    } catch (e) {
+      console.warn('[CS-Extension] Singleton rendering engine cleanup failed', e);
+    }
+
+    // Reset eventTarget to remove all remaining listeners (incl. anonymous ones from tools)
+    try {
+      const et = (cornerstone as any).eventTarget;
+      if (et && typeof et.reset === 'function') {
+        et.reset();
+      }
+    } catch (e) {
+      console.warn('[CS-Extension] eventTarget.reset() failed', e);
+    }
+
+    // Clear CornerstoneCacheService Maps (stackImageIds, volumeImageIds) that hold
+    // arrays of imageId strings and prevent GC of display set references
+    try {
+      const { cornerstoneCacheService } = servicesManager.services;
+      cornerstoneCacheService?.stackImageIds?.clear?.();
+      cornerstoneCacheService?.volumeImageIds?.clear?.();
+    } catch (e) {
+      console.warn('[CS-Extension] onModeExit: CornerstoneCacheService clear failed', e);
+    }
+
+    // Brief diagnostic: verify cleanup succeeded
+    try {
+      const { getRenderingEngines, cache } = cornerstone;
+      const csToolsState = (cornerstoneTools as any).state;
+      const are = annotationRenderingEngine as any;
+      const sre = segmentationRenderingEngine as any;
+      console.log('[CS-Extension] onModeExit: cleanup summary:', {
+        renderingEngines: getRenderingEngines?.().length || 0,
+        volumes: (cache as any)?._volumeCache?.size || 0,
+        images: (cache as any)?._imageCache?.size || 0,
+        enabledElements: csToolsState?.enabledElements?.length || 0,
+        toolGroups: csToolsState?.toolGroups?.length || 0,
+        areViewportElements: are._viewportElements?.size || 0,
+        sreNeedsRender: sre._needsRender?.size || 0,
+        domViewportEls: document.querySelectorAll('[data-viewport-uid]').length,
+      });
+    } catch (e) {
+      console.warn('[CS-Extension] onModeExit: diagnostics failed', e);
+    }
+
+    console.log('[CS-Extension] onModeExit: DONE');
   },
 
   /**

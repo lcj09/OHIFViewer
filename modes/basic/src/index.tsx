@@ -205,12 +205,14 @@ export function onModeExit({ servicesManager }: withAppTypes) {
   this._activatePanelTriggersSubscriptions.forEach(sub => sub.unsubscribe());
   this._activatePanelTriggersSubscriptions.length = 0;
 
+  console.log('[basic-mode] onModeExit called, destroying services...');
   uiDialogService.hideAll();
   uiModalService.hide();
   toolGroupService.destroy();
   syncGroupService.destroy();
   segmentationService.destroy();
   cornerstoneViewportService.destroy();
+  console.log('[basic-mode] onModeExit complete');
 }
 
 export const toolbarSections = {

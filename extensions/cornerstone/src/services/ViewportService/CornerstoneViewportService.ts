@@ -12,7 +12,9 @@ import {
   ECGViewport,
   cache,
   Enums as csEnums,
+  eventTarget,
   BaseVolumeViewport,
+  imageLoadPoolManager,
 } from '@cornerstonejs/core';
 
 import { utilities as csToolsUtils, Enums as csToolsEnums } from '@cornerstonejs/tools';
@@ -40,6 +42,7 @@ import { useSynchronizersStore } from '../../stores/useSynchronizersStore';
 import { useSegmentationPresentationStore } from '../../stores/useSegmentationPresentationStore';
 import getClosestOrientationFromIOP from '../../utils/isReferenceViewable';
 import { BlendModes } from '@cornerstonejs/core/enums';
+import { reset as resetEnabledElementsState } from '../../state';
 
 const EVENTS = {
   VIEWPORT_DATA_CHANGED: 'event::cornerstoneViewportService:viewportDataChanged',
@@ -182,16 +185,215 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
    * Removes the viewport from cornerstone, and destroys the rendering engine
    */
   public destroy() {
+    console.log('[ViewportService] destroy() called, renderingEngine exists:', !!this.renderingEngine);
+
     this._removeResizeObserver();
     this.viewportGridResizeObserver = null;
+
+    // CRITICAL: Disable each viewport individually BEFORE releasing WebGL contexts.
+    //
+    // The previous order was: _releaseWebGLContexts() → renderingEngine.destroy().
+    // After loseContext(), VTK.js objects are in a broken state. When
+    // renderingEngine.destroy() calls _resetViewport(), viewport.removeWidgets()
+    // throws (VTK objects invalid), which prevents triggerEvent(ELEMENT_DISABLED)
+    // from firing. Without ELEMENT_DISABLED, removeEnabledElement never runs,
+    // and ALL DOM event listeners (mouse/wheel/touch/keyboard) on viewport
+    // elements are never removed. This is the root cause of Listeners staying
+    // at 2,371 and DOM Nodes staying at 2,268 after mode exit.
+    //
+    // By disabling each viewport first (while the rendering engine is still
+    // valid), ELEMENT_DISABLED fires properly, removeEnabledElement runs, and
+    // all DOM listeners are removed. Each viewport is in its own try/catch so
+    // one failure doesn't block the rest. If disableElement throws, we manually
+    // dispatch ELEMENT_DISABLED as a fallback so removeEnabledElement still runs.
+    const viewportIds = Array.from(this.viewportsById.keys());
+    const renderingEngineId = (this.renderingEngine as any)?.id;
+
+    let disabledCount = 0;
+    let fallbackCount = 0;
+    viewportIds.forEach(vid => {
+      const vpInfo = this.viewportsById.get(vid);
+      const element = vpInfo?.getElement?.();
+      try {
+        this.renderingEngine?.disableElement(vid);
+        disabledCount++;
+      } catch (e) {
+        console.warn('[ViewportService] disableElement failed for', vid, '- using fallback', e);
+        if (element) {
+          try {
+            const eventDetail = { element, viewportId: vid, renderingEngineId };
+            eventTarget.dispatchEvent(new CustomEvent(csEnums.Events.ELEMENT_DISABLED, { detail: eventDetail }));
+            fallbackCount++;
+          } catch (e2) {
+            console.warn('[ViewportService] Fallback also failed for', vid, e2);
+          }
+        }
+      }
+    });
+    console.log('[ViewportService] Disabled', disabledCount + '/' + viewportIds.length,
+      'viewports (fallbacks:', fallbackCount + ')');
+
+    // Release WebGL contexts AFTER disabling viewports (DOM listeners already cleaned)
+    this._releaseWebGLContexts();
+
     try {
       this.renderingEngine?.destroy?.();
     } catch (e) {
-      console.warn('Rendering engine not destroyed', e);
+      console.warn('[ViewportService] renderingEngine.destroy() failed', e);
     }
+
+    // Clear all viewport info to release DOM element references
+    const viewportCount = this.viewportsById.size;
+    this.viewportsById.clear();
     this.viewportsDisplaySets.clear();
+    this.beforeResizePositionPresentations.clear();
     this.renderingEngine = null;
-    cache.purgeCache();
+
+    // Reset the global enabled elements state (holds DOM element references)
+    resetEnabledElementsState();
+
+    // Cancel all pending image load requests to release references from the
+    // request pool to image load objects. Without this, pending requests keep
+    // image pixel data alive even after cache.purgeCache().
+    this._clearImageLoadPool();
+
+    // Purge the cornerstone cache (volumes + images) with robust error handling
+    this._purgeCacheRobust();
+
+    console.log('[ViewportService] destroy() done:', viewportCount, 'viewports cleared');
+  }
+
+  /**
+   * Clears all pending image load requests from the imageLoadPoolManager.
+   * Pending requests hold references to image load objects (and their pixel data),
+   * preventing GC even after cache.purgeCache().
+   */
+  private _clearImageLoadPool() {
+    try {
+      const requestTypes = ['interaction', 'thumbnail', 'prefetch', 'compute'];
+      requestTypes.forEach(type => {
+        try {
+          imageLoadPoolManager.clearRequestStack(type);
+        } catch (e) {
+          // Ignore if the type doesn't exist
+        }
+      });
+      if ((imageLoadPoolManager as any).awake) {
+        (imageLoadPoolManager as any).awake = false;
+      }
+    } catch (e) {
+      console.warn('[ViewportService] Failed to clear image load pool', e);
+    }
+  }
+
+  /**
+   * Purges the cornerstone cache with per-entry error handling.
+   * The built-in purgeCache() can fail on a single entry and stop cleanup,
+   * leaving remaining volumes/images in memory.
+   */
+  private _purgeCacheRobust() {
+    const cacheAny = cache as any;
+    const volumeCache = cacheAny._volumeCache;
+    const imageCache = cacheAny._imageCache;
+
+    const volumeCountBefore = volumeCache?.size || 0;
+    const imageCountBefore = imageCache?.size || 0;
+
+    // Purge volume cache with per-entry error handling
+    if (volumeCache) {
+      const volumeIds = Array.from(volumeCache.keys());
+      volumeIds.forEach(volumeId => {
+        try {
+          cache.removeVolumeLoadObject(volumeId);
+        } catch (e) {
+          // If removeVolumeLoadObject fails, force-remove from the Map
+          try {
+            const cachedVolume = volumeCache.get(volumeId);
+            if (cachedVolume?.volume?.imageData) {
+              cachedVolume.volume.imageData.delete?.();
+            }
+            volumeCache.delete(volumeId);
+          } catch (e2) {
+            console.warn('[ViewportService] Failed to remove volume', volumeId, e2);
+          }
+        }
+      });
+    }
+
+    // Purge image cache with per-entry error handling
+    if (imageCache) {
+      const imageIds = Array.from(imageCache.keys());
+      imageIds.forEach(imageId => {
+        try {
+          cache.removeImageLoadObject(imageId, { force: true });
+        } catch (e) {
+          // If removeImageLoadObject fails, force-remove from the Map
+          try {
+            const cachedImage = imageCache.get(imageId);
+            if (cachedImage?.imageLoadObject?.cancelFn) {
+              cachedImage.imageLoadObject.cancelFn();
+            }
+            if (cachedImage?.imageLoadObject?.decache) {
+              cachedImage.imageLoadObject.decache();
+            }
+            imageCache.delete(imageId);
+          } catch (e2) {
+            console.warn('[ViewportService] Failed to remove image', imageId, e2);
+          }
+        }
+      });
+    }
+
+    const volumeCountAfter = volumeCache?.size || 0;
+    const imageCountAfter = imageCache?.size || 0;
+    console.log('[ViewportService] Cache purged:', volumeCountBefore, '→', volumeCountAfter, 'volumes,',
+      imageCountBefore, '→', imageCountAfter, 'images');
+  }
+
+  /**
+   * Explicitly releases WebGL contexts by calling loseContext() on each
+   * WebGL context in the rendering engine's context pool.
+   * VTK.js's delete() does not call loseContext(), causing GPU memory leaks.
+   */
+  private _releaseWebGLContexts() {
+    try {
+      const renderingEngine = this.renderingEngine as any;
+      if (!renderingEngine) return;
+
+      // Try multiple paths to find contextPool (wrapper._implementation.contextPool or direct)
+      let contextPool = renderingEngine._implementation?.contextPool || renderingEngine.contextPool;
+
+      if (!contextPool) {
+        console.log('[ViewportService] No WebGL contextPool (CPU rendering or already destroyed)');
+        return;
+      }
+
+      const contexts = contextPool.contexts || contextPool.getAllContexts?.() || [];
+      let releasedCount = 0;
+      contexts.forEach((ctx, index) => {
+        try {
+          if (!ctx || ctx.isDeleted?.()) return;
+          const glRenderWindow = ctx.getOpenGLRenderWindow?.();
+          const gl = glRenderWindow?.get3DContext?.() ?? glRenderWindow?.getContext?.();
+          if (gl?.getExtension) {
+            const loseExt = gl.getExtension('WEBGL_lose_context');
+            if (loseExt) { loseExt.loseContext(); releasedCount++; }
+          }
+        } catch (e) {
+          console.warn('[ViewportService] WebGL context release failed for', index, e);
+        }
+      });
+      console.log('[ViewportService] WebGL contexts released:', releasedCount + '/' + contexts.length);
+
+      // Clean up offscreen canvas containers
+      const containers = contextPool.offScreenCanvasContainers;
+      if (containers && Array.isArray(containers)) {
+        containers.forEach(c => { try { c?.parentNode?.removeChild(c); } catch {} });
+        containers.length = 0;
+      }
+    } catch (e) {
+      console.warn('[ViewportService] _releaseWebGLContexts failed', e);
+    }
   }
 
   /**

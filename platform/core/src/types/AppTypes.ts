@@ -97,6 +97,7 @@ declare global {
       strictZSpacingForVolumeViewport?: boolean;
       useCursors?: boolean;
       maxCacheSize?: number;
+      webGlContextCount?: number;
       max3DTextureSize?: number;
       showWarningMessageForCrossOrigin?: boolean;
       showCPUFallbackMessage?: boolean;

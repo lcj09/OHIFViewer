@@ -25,6 +25,10 @@ window.config = {
   showLoadingIndicator: true,
   experimentalStudyBrowserSort: false,
   strictZSpacingForVolumeViewport: true,
+  // [2026-07-08 WebGL内存优化] TMTV模式仅4个视口，减少WebGL上下文数量(默认7个)
+  webGlContextCount: 4,
+  // [2026-07-08 WebGL内存优化] 增大缓存到4GB，减少频繁淘汰
+  maxCacheSize: 4 * 1024 * 1024 * 1024,
   groupEnabledModesFirst: true,
   allowMultiSelectExport: false,
   maxNumRequests: {

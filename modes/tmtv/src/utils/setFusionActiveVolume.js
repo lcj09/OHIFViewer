@@ -9,7 +9,7 @@ export default function setFusionActiveVolume(
   const matchDetails = matches.get('ptDisplaySet');
   const matchDetails2 = matches.get('ctDisplaySet');
 
-  if (!matchDetails) {
+  if (!matchDetails || !matchDetails2) {
     return;
   }
 

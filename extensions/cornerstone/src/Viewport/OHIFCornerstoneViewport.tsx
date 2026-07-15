@@ -203,26 +203,51 @@ const OHIFCornerstoneViewport = React.memo(
       setImageScrollBarHeight();
 
       return () => {
+        // Always clear this viewport's entry from the module-level dimensions cache
+        viewportDimensions.delete(viewportId);
+
         const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
 
+        // Always remove the ELEMENT_ENABLED listener, even if viewportInfo is null,
+        // to prevent event listener leaks when viewportInfo is unavailable.
+        const cleanupListener = () => {
+          eventTarget.removeEventListener(Enums.Events.ELEMENT_ENABLED, elementEnabledHandler);
+        };
+
         if (!viewportInfo) {
+          // Expected when ModeRoute cleanup already destroyed the viewport service
+          cleanupListener();
           return;
         }
 
-        cornerstoneViewportService.storePresentation({ viewportId });
-
-        // This should be done after the store presentation since synchronizers
-        // will get cleaned up and they need the viewportInfo to be present
-        cleanUpServices(viewportInfo);
+        try {
+          cornerstoneViewportService.storePresentation({ viewportId });
+          cleanUpServices(viewportInfo);
+        } catch (e) {
+          console.warn('[OHIFViewport] cleanup failed for', viewportId, e);
+        }
 
         if (onElementDisabled && typeof onElementDisabled === 'function') {
           onElementDisabled(viewportInfo);
         }
 
-        cornerstoneViewportService.disableElement(viewportId);
+        try {
+          cornerstoneViewportService.disableElement(viewportId);
+        } catch (e) {
+          // Fallback: dispatch ELEMENT_DISABLED so removeEnabledElement removes DOM listeners
+          try {
+            const element = elementRef.current;
+            if (element) {
+              const eventDetail = { element, viewportId, renderingEngineId: 'ohif-rendering-engine' };
+              eventTarget.dispatchEvent(new CustomEvent(Enums.Events.ELEMENT_DISABLED, { detail: eventDetail }));
+            }
+          } catch (e2) {
+            console.warn('[OHIFViewport] fallback also failed for', viewportId, e2);
+          }
+        }
         viewportRef.unregister();
 
-        eventTarget.removeEventListener(Enums.Events.ELEMENT_ENABLED, elementEnabledHandler);
+        cleanupListener();
       };
     }, []);
 
@@ -307,6 +332,7 @@ const OHIFCornerstoneViewport = React.memo(
     const Notification = customizationService.getCustomization('ui.notificationComponent');
 
     return (
+
       <React.Fragment>
         <div className="viewport-wrapper">
           <div

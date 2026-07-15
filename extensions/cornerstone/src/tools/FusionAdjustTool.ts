@@ -293,6 +293,25 @@ class FusionAdjustTool extends BaseTool {
     });
     this._transforms.clear();
   }
+
+  /**
+   * Clean up document-level event listeners to prevent memory leaks.
+   * Called during toolGroup cleanup via tool.cleanUpData().
+   */
+  cleanUpData() {
+    if (typeof document !== 'undefined') {
+      if (this._onMouseDown) {
+        document.removeEventListener('mousedown', this._onMouseDown, true);
+        this._onMouseDown = null;
+      }
+      if (this._onMouseUp) {
+        document.removeEventListener('mouseup', this._onMouseUp, true);
+        this._onMouseUp = null;
+      }
+    }
+    this._transforms.clear();
+    this._activeButton = 0;
+  }
 }
 
 export default FusionAdjustTool;

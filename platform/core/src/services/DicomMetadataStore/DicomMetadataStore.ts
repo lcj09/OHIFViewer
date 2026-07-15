@@ -307,6 +307,22 @@ const BaseImplementation = {
   getInstanceByImageId: _getInstanceByImageId,
   updateMetadataForSeries: _updateMetadataForSeries,
   setMetaDataProvider: _setMetaDataProvider,
+  /**
+   * Clears all studies, series, and instances from the metadata store.
+   * Called on mode exit to release DICOM metadata that would otherwise
+   * persist in memory (each study can have tens of thousands of instance
+   * metadata objects with many string fields).
+   */
+  clear() {
+    _model.studies.length = 0;
+  },
+  /**
+   * Called automatically by ExtensionManager.onModeExit() to clean up
+   * all DICOM metadata when exiting the viewer mode.
+   */
+  onModeExit() {
+    this.clear();
+  },
 };
 const DicomMetadataStore = Object.assign(
   // get study

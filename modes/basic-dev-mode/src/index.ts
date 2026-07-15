@@ -105,10 +105,22 @@ function modeFactory({ modeConfiguration }) {
       ]);
     },
     onModeExit: ({ servicesManager }: withAppTypes) => {
-      const { toolGroupService, uiDialogService, uiModalService } = servicesManager.services;
+      const {
+        toolGroupService,
+        syncGroupService,
+        segmentationService,
+        cornerstoneViewportService,
+        uiDialogService,
+        uiModalService,
+      } = servicesManager.services;
+      console.log('[basic-dev-mode] onModeExit called, destroying services...');
       uiDialogService.hideAll();
       uiModalService.hide();
       toolGroupService.destroy();
+      syncGroupService.destroy();
+      segmentationService.destroy();
+      cornerstoneViewportService.destroy();
+      console.log('[basic-dev-mode] onModeExit complete');
     },
     validationTags: {
       study: [],

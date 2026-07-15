@@ -62,8 +62,12 @@ export default async function init({
   // Note: this should run first before initializing the cornerstone
   // DO NOT CHANGE THE ORDER
 
+  // [2026-07-08 WebGL内存优化] 在init时传入rendering配置，确保webGlContextCount在创建上下文前生效
   await cs3DInit({
     peerImport: appConfig.peerImport,
+    rendering: {
+      webGlContextCount: appConfig.webGlContextCount ?? 7,
+    },
   });
 
   // For debugging e2e tests that are failing on CI
