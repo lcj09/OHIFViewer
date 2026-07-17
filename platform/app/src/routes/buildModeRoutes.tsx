@@ -1,5 +1,14 @@
-import React from 'react';
-import ModeRoute from '@routes/Mode';
+import React, { lazy, Suspense } from 'react';
+
+// 懒加载查看器路由，确保查询页面不加载查看器相关组件
+// （ViewportGrid、@cornerstonejs/core 扩展、工具栏等）
+const ModeRoute = lazy(() => import('@routes/Mode'));
+
+const ModeRouteWrapper = props => (
+  <Suspense fallback={null}>
+    <ModeRoute {...props} />
+  </Suspense>
+);
 
 /*
   Routes uniquely define an entry point to:
@@ -69,7 +78,7 @@ export default function buildModeRoutes({
 
     // TODO move up.
     const children = () => (
-      <ModeRoute
+      <ModeRouteWrapper
         mode={mode}
         extensionManager={extensionManager}
         servicesManager={servicesManager}

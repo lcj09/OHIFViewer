@@ -1,4 +1,4 @@
-import { Types as csTypes } from '@cornerstonejs/core';
+import type { Types as csTypes } from '@cornerstonejs/core';
 import guid from '../utils/guid.js';
 import {
   instancesSortCriteria,

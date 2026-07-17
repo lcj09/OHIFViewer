@@ -1,8 +1,9 @@
 import dcmjs from 'dcmjs';
-import moment from 'moment';
 import React, { useState, useMemo, useCallback } from 'react';
-import { classes, Types } from '@ohif/core';
+import { classes, Types, utils } from '@ohif/core';
 import { InputFilter } from '@ohif/ui-next';
+
+const moment = utils.dayjs;
 import {
   Select,
   SelectTrigger,

@@ -68,18 +68,44 @@ module.exports = (env, argv, { SRC_DIR, ENTRY }) => {
     devtool: isProdBuild ? 'source-map' : 'cheap-module-source-map',
     entry: ENTRY,
     optimization: {
-      // 不启用 splitChunks —— 让 webpack 通过动态 import() 自然拆分 chunk，
-      // 避免查询页面加载 VTK/Cornerstone 等仅在查看器中使用的依赖。
-      // splitChunks: {
-      //   chunks: 'all',
-      // },
-      // runtimeChunk: 'single',
+      splitChunks: {
+        chunks: 'all',
+        cacheGroups: {
+          defaultVendors: false,
+          default: false,
+          // vtk.js / @kitware — 仅被动态导入的扩展使用，提取为按需加载的 chunk
+          vtk: {
+            test: /[\\/]node_modules[\\/](vtk\.js|@kitware)[\\/]/,
+            name: 'vtk-vendor',
+            chunks: 'all',
+            priority: 30,
+          },
+          // @cornerstonejs — 被 @ohif/core 静态引用，提取为独立可缓存 chunk
+          cornerstone: {
+            test: /[\\/]node_modules[\\/]@cornerstonejs[\\/]/,
+            name: 'cornerstone-vendor',
+            chunks: 'all',
+            priority: 25,
+          },
+          // @ohif 工作区包
+          ohif: {
+            test: /[\\/]node_modules[\\/]@ohif[\\/]/,
+            name: 'ohif-vendor',
+            chunks: 'all',
+            priority: 20,
+          },
+          // 其余第三方依赖
+          vendors: {
+            test: /[\\/]node_modules[\\/]/,
+            name: 'vendors',
+            chunks: 'all',
+            priority: 10,
+          },
+        },
+      },
+      runtimeChunk: 'single',
       minimize: isProdBuild,
       sideEffects: false,
-      // 显式启用 usedExports 和 concatenateModules，让 dev 模式也支持 tree-shaking
-      // 这样查询页面只加载实际使用的 @ohif/ui-next 组件，而非全部 100+ 组件
-      usedExports: true,
-      concatenateModules: true,
     },
     output: {
       // clean: true,

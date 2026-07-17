@@ -1,5 +1,7 @@
-import moment from 'moment';
+import { utils } from '@ohif/core';
 import i18n from 'i18next';
+
+const dayjs = utils.dayjs;
 
 /**
  * Formats DICOM date.
@@ -15,10 +17,10 @@ export function formatDICOMDate(date: string, strFormat?: string): string {
 
   const format = strFormat ?? i18n.t('Common:localDateFormat', 'MMM D, YYYY');
   const locale = i18n.language || 'en';
-  const parsed = moment(date, ['YYYYMMDD', 'YYYY.MM.DD'], true);
+  const parsed = dayjs(date, ['YYYYMMDD', 'YYYY.MM.DD'], true);
 
   if (!parsed.isValid()) {
-    return moment(date).locale(locale).format(format);
+    return dayjs(date).locale(locale).format(format);
   }
 
   return parsed.locale(locale).format(format);

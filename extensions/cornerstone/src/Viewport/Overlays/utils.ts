@@ -1,7 +1,9 @@
-import moment from 'moment';
 import i18n from 'i18next';
 import { metaData } from '@cornerstonejs/core';
 import { formatDICOMDate } from '@ohif/ui-next';
+import { utils } from '@ohif/core';
+
+const moment = utils.dayjs;
 
 /**
  * Checks if value is valid.

@@ -1,8 +1,20 @@
-import dcmjs from 'dcmjs';
-
 import pubSubServiceInterface from '../_shared/pubSubServiceInterface';
 import createStudyMetadata from './createStudyMetadata';
 import addProxyFields from '../../utils/addProxyFields';
+
+/**
+ * 延迟加载 dcmjs（1.8MB，包含巨大 DICOM 字典）。
+ * 查询页面通过 DICOMweb API 获取 JSON 元数据，不需要 dcmjs；
+ * 仅在处理 ArrayBuffer 形式的 DICOM 数据（如本地文件加载）时才动态加载。
+ */
+let _dcmjs: any = null;
+async function getDcmjs() {
+  if (!_dcmjs) {
+    const mod = await import('dcmjs');
+    _dcmjs = mod.default || mod;
+  }
+  return _dcmjs;
+}
 
 const EVENTS = {
   STUDY_ADDED: 'event::dicomMetadataStore:studyAdded',
@@ -173,11 +185,12 @@ function _updateMetadataForSeries(StudyInstanceUID, SeriesInstanceUID, metadata)
 const BaseImplementation = {
   EVENTS,
   listeners: {},
-  addInstance(dicomJSONDatasetOrP10ArrayBuffer) {
+  async addInstance(dicomJSONDatasetOrP10ArrayBuffer) {
     let dicomJSONDataset;
 
     // If Arraybuffer, parse to DICOMJSON before naturalizing.
     if (dicomJSONDatasetOrP10ArrayBuffer instanceof ArrayBuffer) {
+      const dcmjs = await getDcmjs();
       const dicomData = dcmjs.data.DicomMessage.readFile(dicomJSONDatasetOrP10ArrayBuffer);
 
       dicomJSONDataset = dicomData.dict;
@@ -188,6 +201,7 @@ const BaseImplementation = {
     let naturalizedDataset;
 
     if (dicomJSONDataset['SeriesInstanceUID'] === undefined) {
+      const dcmjs = await getDcmjs();
       naturalizedDataset = dcmjs.data.DicomMetaDictionary.naturalizeDataset(dicomJSONDataset);
     } else {
       naturalizedDataset = dicomJSONDataset;

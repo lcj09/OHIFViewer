@@ -1,4 +1,4 @@
-import moment from 'moment';
+import dayjs from './dayjsConfig';
 
 /**
  * Format time in HHmmss.SSS format (24h time) into HH:mm:ss
@@ -8,5 +8,5 @@ import moment from 'moment';
  * @returns Formatted time
  */
 export default function formatTime(time: string, format = 'HH:mm:ss') {
-  return moment(time, 'HH:mm:ss').format(format);
+  return dayjs(time, 'HH:mm:ss').format(format);
 }

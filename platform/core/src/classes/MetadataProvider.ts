@@ -1,13 +1,21 @@
 import queryString from 'query-string';
 import dicomParser from 'dicom-parser';
-import { utilities } from '@cornerstonejs/core';
 import { imageIdToURI } from '../utils';
 import DicomMetadataStore from '../services/DicomMetadataStore';
 import fetchPaletteColorLookupTableData from '../utils/metadataProvider/fetchPaletteColorLookupTableData';
 import toNumber from '../utils/toNumber';
 import combineFrameInstance from '../utils/combineFrameInstance';
 
-const { calibratedPixelSpacingMetadataProvider, getPixelSpacingInformation } = utilities;
+/**
+ * 延迟注入 @cornerstonejs/core 的 utilities。
+ * 查询页面不加载 @cornerstonejs/core，仅在查看器初始化时由
+ * extensions/cornerstone/src/init.tsx 调用 setCornerstoneUtilities 注入。
+ * imagePlaneModule 仅在查看器中被调用，此时 _csUtilities 已就绪。
+ */
+let _csUtilities: any = null;
+export function setCornerstoneUtilities(utils: any) {
+  _csUtilities = utils;
+}
 
 class MetadataProvider {
   private readonly imageURIToUIDs: Map<string, any> = new Map();
@@ -556,7 +564,7 @@ const WADO_IMAGE_LOADER = {
     // Fallback for DX images.
     // TODO: We should use the rest of the results of this function
     // to update the UI somehow
-    const { PixelSpacing, type } = getPixelSpacingInformation(instance) || {};
+    const { PixelSpacing, type } = (_csUtilities?.getPixelSpacingInformation(instance)) || {};
 
     let rowPixelSpacing;
     let columnPixelSpacing;
@@ -570,16 +578,19 @@ const WADO_IMAGE_LOADER = {
     let imageOrientationPatient;
     if (PixelSpacing) {
       [rowPixelSpacing, columnPixelSpacing] = PixelSpacing;
-      const calibratedPixelSpacing = utilities.calibratedPixelSpacingMetadataProvider.get(
-        'calibratedPixelSpacing',
-        instance.imageId
-      );
-      if (!calibratedPixelSpacing) {
-        calibratedPixelSpacingMetadataProvider.add(instance.imageId, {
-          rowPixelSpacing: parseFloat(PixelSpacing[0]),
-          columnPixelSpacing: parseFloat(PixelSpacing[1]),
-          type,
-        });
+      const calibratedProvider = _csUtilities?.calibratedPixelSpacingMetadataProvider;
+      if (calibratedProvider) {
+        const calibratedPixelSpacing = calibratedProvider.get(
+          'calibratedPixelSpacing',
+          instance.imageId
+        );
+        if (!calibratedPixelSpacing) {
+          calibratedProvider.add(instance.imageId, {
+            rowPixelSpacing: parseFloat(PixelSpacing[0]),
+            columnPixelSpacing: parseFloat(PixelSpacing[1]),
+            type,
+          });
+        }
       }
     } else {
       rowPixelSpacing = columnPixelSpacing = 1;

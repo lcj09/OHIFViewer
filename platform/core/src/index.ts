@@ -1,6 +1,6 @@
 import { ExtensionManager, MODULE_TYPES } from './extensions';
 import { ServiceProvidersManager, ServicesManager } from './services';
-import classes, { CommandsManager, HotkeysManager } from './classes';
+import classes, { CommandsManager, HotkeysManager, setCornerstoneUtilities } from './classes';
 import { SystemContextProvider, useSystem } from './contextProviders/SystemProvider';
 import { ViewportRefsProvider } from './hooks/useViewportRef';
 
@@ -140,6 +140,7 @@ export {
   StudyPrefetcherService,
   useSystem,
   useActiveViewportDisplaySets,
+  setCornerstoneUtilities,
 };
 
 export { OHIF };

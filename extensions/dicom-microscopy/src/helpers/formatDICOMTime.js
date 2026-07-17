@@ -1,4 +1,6 @@
-import moment from 'moment';
+import { utils } from '@ohif/core';
+
+const moment = utils.dayjs;
 
 /**
  *    DICOM Time is stored as HHmmss.SSS, where:

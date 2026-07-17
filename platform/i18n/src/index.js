@@ -11,7 +11,37 @@ import { getLanguageLabel, getAvailableLanguagesInfo } from './utils.js';
 
 // Note: The index.js files inside src/locales are dynamically generated
 // by the pullTranslations.sh script
-import locales from './locales';
+// 静态导入 en-US（fallback）和 zh（主要语言），其他语言按需动态加载
+import enUSLocales from './locales/en-US';
+import zhLocales from './locales/zh';
+
+// 支持的语言列表（不导入内容，仅用于语言检测和切换）
+const SUPPORTED_LANGUAGES = [
+  'ar', 'de', 'en-US', 'es', 'fr', 'ja-JP', 'nl',
+  'pt-BR', 'ru', 'tr-TR', 'vi', 'zh', 'test-LNG'
+];
+
+// 已加载语言缓存（en-US 和 zh 在启动时就加载）
+// 注意：enUSLocales 和 zhLocales 已经是 { 'en-US': {...} } 和 { 'zh': {...} } 的结构
+const loadedLocales = { ...enUSLocales, ...zhLocales };
+
+/**
+ * 动态加载指定语言的资源
+ * 使用 webpack 动态 import，每种语言生成独立 chunk
+ */
+async function loadLanguageResources(lng) {
+  if (loadedLocales[lng]) {
+    return loadedLocales[lng];
+  }
+  try {
+    const module = await import(/* webpackChunkName: "locale-[request]" */ `./locales/${lng}`);
+    loadedLocales[lng] = module.default;
+    return module.default;
+  } catch (err) {
+    customDebug(`Failed to load language ${lng}: ${err.message}`, 'error');
+    return null;
+  }
+}
 
 function addLocales(newLocales) {
   customDebug(`Adding locales ${newLocales}`, 'info');
@@ -114,7 +144,9 @@ function initI18n(
       // for all options read: https://www.i18next.com/overview/configuration-options
       .init({
         fallbackLng: DEFAULT_LANGUAGE,
-        resources: locales,
+        // 仅注入 en-US fallback 资源，其他语言通过 languageChanged 事件按需加载
+        partialBundledLanguages: true,
+        resources: loadedLocales,
         debug: debugMode,
         keySeparator: false,
         interpolation: {
@@ -125,6 +157,34 @@ function initI18n(
           useSuspense: true,
         },
       });
+
+    // 语言切换时按需加载对应语言资源
+    i18n.on('languageChanged', async lng => {
+      if (lng !== DEFAULT_LANGUAGE && !loadedLocales[lng]) {
+        const resources = await loadLanguageResources(lng);
+        if (resources) {
+          Object.keys(resources).forEach(ns => {
+            i18n.addResourceBundle(lng, ns, resources[ns], true, true);
+          });
+          // 重新触发渲染
+          i18n.emit('loaded');
+        }
+      }
+    });
+
+    // 启动时检测到非 en-US 语言，主动加载
+    const detectedLng = i18n.language;
+    if (detectedLng && detectedLng !== DEFAULT_LANGUAGE && !loadedLocales[detectedLng]) {
+      loadLanguageResources(detectedLng).then(resources => {
+        if (resources) {
+          Object.keys(resources).forEach(ns => {
+            i18n.addResourceBundle(detectedLng, ns, resources[ns], true, true);
+          });
+          // 触发重新翻译
+          i18n.changeLanguage(detectedLng);
+        }
+      });
+    }
   }
 
   return initialized.then(function (t) {
@@ -138,7 +198,12 @@ customDebug(`version ${pkg.version} loaded.`, 'info');
 i18n.initializing = initI18n();
 i18n.initI18n = initI18n;
 i18n.addLocales = addLocales;
-i18n.availableLanguages = getAvailableLanguagesInfo(locales);
+i18n.availableLanguages = getAvailableLanguagesInfo(
+  SUPPORTED_LANGUAGES.reduce((acc, lng) => {
+    acc[lng] = true;
+    return acc;
+  }, {})
+);
 i18n.defaultLanguage = {
   label: getLanguageLabel(DEFAULT_LANGUAGE),
   value: DEFAULT_LANGUAGE,

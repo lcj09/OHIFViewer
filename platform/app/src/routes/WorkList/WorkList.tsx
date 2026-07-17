@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import classnames from 'classnames';
 import PropTypes from 'prop-types';
 import { Link, useNavigate } from 'react-router-dom';
-import moment from 'moment';
 import qs from 'query-string';
 import isEqual from 'lodash.isequal';
 import { useTranslation } from 'react-i18next';
@@ -11,6 +10,8 @@ import filtersMeta from './filtersMeta.js';
 import { useAppConfig } from '@state';
 import { useDebounce, useSearchParams } from '../../hooks';
 import { utils, Types as coreTypes } from '@ohif/core';
+
+const moment = utils.dayjs;
 
 import {
   StudyListExpandedRow,

@@ -1,5 +1,6 @@
 import ObjectPath from './objectPath';
 import absoluteUrl from './absoluteUrl';
+import dayjs from './dayjsConfig';
 import guid from './guid';
 import uuidv4 from './uuidv4';
 import sortBy from './sortBy.js';
@@ -72,6 +73,7 @@ const utils = {
   formatDate,
   formatTime,
   formatPN,
+  dayjs,
   b64toBlob,
   urlUtil,
   imageIdToURI,
@@ -115,6 +117,7 @@ export {
   absoluteUrl,
   sortBy,
   formatDate,
+  dayjs,
   writeScript,
   b64toBlob,
   urlUtil,

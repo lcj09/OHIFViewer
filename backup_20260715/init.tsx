@@ -1,4 +1,4 @@
-import OHIF, { errorHandler, setCornerstoneUtilities } from '@ohif/core';
+import OHIF, { errorHandler } from '@ohif/core';
 import React from 'react';
 
 import * as cornerstone from '@cornerstonejs/core';
@@ -86,6 +86,15 @@ export default async function init({
   if (maxCacheSize) {
     cornerstone.cache.setMaxCacheSize(maxCacheSize);
   }
+
+  // [2026-07-15 GPU显存优化] 打印当前配置，验证是否生效
+  console.log('[Init] Cache & Rendering Config:', {
+    maxCacheSize: cornerstone.cache.getMaxCacheSize(),
+    currentCacheSize: cornerstone.cache.getCacheSize(),
+    webGlContextCount: cornerstone.getConfiguration().rendering.webGlContextCount,
+    useCPURendering: cornerstone.getShouldUseCPURendering(),
+    maxNumRequests: appConfig?.maxNumRequests,
+  });
 
   initCornerstoneTools();
 
@@ -181,10 +190,6 @@ export default async function init({
       createMetadataWrappedStrategy(strategyFn)
     );
   });
-
-  // 注入 @cornerstonejs/core utilities 到 MetadataProvider（延迟加载机制）
-  // 查询页面不加载 @cornerstonejs/core，此处仅在查看器初始化时注入
-  setCornerstoneUtilities(csUtilities);
 
   // add metadata providers
   metaData.addProvider(
