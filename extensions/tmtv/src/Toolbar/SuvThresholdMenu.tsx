@@ -12,9 +12,6 @@ import {
   PopoverContent,
   Button,
   Icons,
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
 } from '@ohif/ui-next';
 import { cache, BaseVolumeViewport, utilities as csUtils } from '@cornerstonejs/core';
 
@@ -25,39 +22,49 @@ const SUV_PRESETS = [
 ];
 
 // 应用SUV阈值到所有包含PT volume的视口（PET、Fusion、MIP）
-function applySuvThresholdToAll(suvValue, windowWidth, cornerstoneViewportService, viewportGridService) {
+function applySuvThresholdToAll(suvValue, windowWidth, cornerstoneViewportService, viewportGridService, toolGroupService) {
   const { lower, upper } = csUtils.windowLevel.toLowHighRange(
     windowWidth,
     suvValue
   );
 
-  const { viewports } = viewportGridService.getState();
+  // 获取所有相关的 toolGroup
+  const toolGroupNames = ['ctToolGroup', 'ptToolGroup', 'fusionToolGroup', 'mipToolGroup'];
 
-  for (const [viewportId] of Object.entries(viewports)) {
+  for (const toolGroupName of toolGroupNames) {
     try {
-      const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
-      if (!viewport || !(viewport instanceof BaseVolumeViewport)) continue;
+      const toolGroup = toolGroupService.getToolGroup(toolGroupName);
+      if (!toolGroup) continue;
 
-      const volumeIds = viewport.getAllVolumeIds();
-      if (!volumeIds?.length) continue;
+      const viewportIds = toolGroup.getViewportIds();
 
-      // 查找该视口中的PT volume
-      for (const volId of volumeIds) {
-        const vol = cache.getVolume(volId);
-        if (vol?.metadata?.Modality === 'PT') {
-          viewport.setProperties(
-            {
-              voiRange: { lower, upper },
-            },
-            volId
-          );
-          break;
+      for (const viewportId of viewportIds) {
+        try {
+          const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+          if (!viewport || !(viewport instanceof BaseVolumeViewport)) continue;
+
+          const volumeIds = viewport.getAllVolumeIds();
+          if (!volumeIds?.length) continue;
+
+          for (const volId of volumeIds) {
+            const vol = cache.getVolume(volId);
+            if (vol?.metadata?.Modality === 'PT') {
+              viewport.setProperties(
+                {
+                  voiRange: { lower, upper },
+                },
+                volId
+              );
+              viewport.render();
+              break;
+            }
+          }
+        } catch (e) {
+          // 忽略无效视口
         }
       }
-
-      viewport.render();
     } catch (e) {
-      // 忽略无效视口
+      // 忽略无效 toolGroup
     }
   }
 }
@@ -86,6 +93,7 @@ function SuvThresholdMenu({ commandsManager, servicesManager, ...props }) {
   const {
     cornerstoneViewportService,
     viewportGridService,
+    toolGroupService,
   } = servicesManager.services;
 
   // 获取当前视口的窗位，判断是否匹配某个预设
@@ -152,7 +160,7 @@ function SuvThresholdMenu({ commandsManager, servicesManager, ...props }) {
 
     try {
       const windowWidth = suvValue * 2;
-      applySuvThresholdToAll(suvValue, windowWidth, cornerstoneViewportService, viewportGridService);
+      applySuvThresholdToAll(suvValue, windowWidth, cornerstoneViewportService, viewportGridService, toolGroupService);
       setCurrentPreset({ id: 'custom', label: 'Custom', suvValue, windowWidth });
     } catch (e) {
       console.warn('SuvThresholdMenu: 设置SUV阈值失败', e);
@@ -167,7 +175,7 @@ function SuvThresholdMenu({ commandsManager, servicesManager, ...props }) {
     setShowCustomInput(false);
 
     try {
-      applySuvThresholdToAll(preset.suvValue, preset.windowWidth, cornerstoneViewportService, viewportGridService);
+      applySuvThresholdToAll(preset.suvValue, preset.windowWidth, cornerstoneViewportService, viewportGridService, toolGroupService);
       setCurrentPreset(preset);
     } catch (e) {
       console.warn('SuvThresholdMenu: 设置SUV阈值失败', e);
@@ -188,28 +196,21 @@ function SuvThresholdMenu({ commandsManager, servicesManager, ...props }) {
   return (
     <div id="SuvThresholdMenu" data-cy="SuvThresholdMenu">
       <Popover open={isMenuOpen} onOpenChange={handleOpenChange}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <PopoverTrigger asChild>
-              <div className="flex h-[56px] flex-col items-center justify-between gap-0 py-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={`inline-flex h-10 w-10 items-center justify-center rounded-lg text-foreground/80 hover:bg-background hover:text-highlight`}
-                  aria-label="SUV Threshold"
-                >
-                  <Icons.ByName name="Threshold" className="h-7 w-7" />
-                </Button>
-                <span className="text-[12px] leading-tight text-white whitespace-nowrap">
-                  SUV阈值
-                </span>
-              </div>
-            </PopoverTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            <div>SUV Threshold</div>
-          </TooltipContent>
-        </Tooltip>
+        <PopoverTrigger asChild>
+          <div className="flex h-[56px] flex-col items-center justify-between gap-0 py-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className={`inline-flex h-10 w-10 items-center justify-center rounded-lg text-foreground/80 hover:bg-background hover:text-highlight`}
+              aria-label="SUV Threshold"
+            >
+              <Icons.ByName name="Threshold" className="h-7 w-7" />
+            </Button>
+            <span className="text-[12px] leading-tight text-white whitespace-nowrap">
+              SUV阈值
+            </span>
+          </div>
+        </PopoverTrigger>
         <PopoverContent
           className="w-48 rounded-lg border-none p-1 shadow-lg"
           align="center"
