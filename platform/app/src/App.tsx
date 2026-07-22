@@ -100,6 +100,13 @@ function App({
   if (gl) {
     const max3DTextureSize = gl.getParameter(gl.MAX_3D_TEXTURE_SIZE);
     appConfigState.max3DTextureSize = max3DTextureSize;
+    // Release the WebGL context immediately. Without this, the context persists
+    // in the browser's GPU context list (counted against the max ~16 WebGL
+    // contexts per page), and the canvas cannot be GC'd.
+    const loseExt = gl.getExtension('WEBGL_lose_context');
+    if (loseExt) {
+      loseExt.loseContext();
+    }
   }
 
   const {

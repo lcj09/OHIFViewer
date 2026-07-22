@@ -211,9 +211,64 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
 
     let disabledCount = 0;
     let fallbackCount = 0;
+    let removedListeners = 0;
+    let releasedVtkObjects = 0;
     viewportIds.forEach(vid => {
       const vpInfo = this.viewportsById.get(vid);
       const element = vpInfo?.getElement?.();
+
+      // Release VTK.js ColorTransferFunction and PiecewiseFunction instances
+      // from volume actors BEFORE disabling the viewport. VTK.js objects require
+      // explicit delete() calls; without this, ColorTransferFunction instances
+      // (which hold large RGB point arrays / lookup tables) leak across mode
+      // switches, retaining MB of compiled code and lookup table data.
+      try {
+        const csViewport = this.renderingEngine?.getViewport?.(vid);
+        const actorEntries = csViewport?.getActors?.();
+        if (actorEntries?.length) {
+          actorEntries.forEach(entry => {
+            const actor = entry?.actor;
+            if (!actor) return;
+            try {
+              const property = actor.getProperty?.();
+              if (property) {
+                // Release RGB Transfer Function (ColorTransferFunction)
+                const rgbTF = property.getRGBTransferFunction?.(0);
+                if (rgbTF && typeof rgbTF.delete === 'function') {
+                  rgbTF.delete();
+                  releasedVtkObjects++;
+                }
+                // Release Scalar Opacity (PiecewiseFunction)
+                const opacityTF = property.getScalarOpacity?.(0);
+                if (opacityTF && typeof opacityTF.delete === 'function') {
+                  opacityTF.delete();
+                  releasedVtkObjects++;
+                }
+                // Release Gradient Opacity (PiecewiseFunction)
+                const gradTF = property.getGradientOpacity?.(0);
+                if (gradTF && typeof gradTF.delete === 'function') {
+                  gradTF.delete();
+                  releasedVtkObjects++;
+                }
+              }
+            } catch { /* actor already destroyed */ }
+          });
+        }
+      } catch { /* viewport already gone */ }
+
+      // Remove the named VIEWPORT_NEW_IMAGE_SET handler before disabling the element.
+      // Without this, the listener (and its closure over viewport.element) persists on
+      // the DOM element even after disableElement(), contributing to Listeners leak.
+      const handler = (vpInfo as any)?._newImageSetHandler;
+      if (handler && element) {
+        try {
+          element.removeEventListener(csEnums.Events.VIEWPORT_NEW_IMAGE_SET, handler);
+          (vpInfo as any)._newImageSetHandler = null;
+          removedListeners++;
+        } catch (e) {
+          // Ignore
+        }
+      }
       try {
         this.renderingEngine?.disableElement(vid);
         disabledCount++;
@@ -231,7 +286,8 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       }
     });
     console.log('[ViewportService] Disabled', disabledCount + '/' + viewportIds.length,
-      'viewports (fallbacks:', fallbackCount + ')');
+      'viewports (fallbacks:', fallbackCount + ', listeners removed:', removedListeners +
+      ', VTK objects released:', releasedVtkObjects + ')');
 
     // Release WebGL contexts AFTER disabling viewports (DOM listeners already cleaned)
     this._releaseWebGLContexts();
@@ -1047,7 +1103,10 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       properties.colormap = colormap ?? properties.colormap;
     }
 
-    viewport.element.addEventListener(csEnums.Events.VIEWPORT_NEW_IMAGE_SET, evt => {
+    // Use a named handler so we can remove it in destroy() to prevent listener leak.
+    // The previous anonymous arrow function could never be removed via removeEventListener,
+    // causing the listener (and its closure over `viewport.element`) to persist forever.
+    const handleNewImageSet = (evt: any) => {
       const { element } = evt.detail;
 
       if (element !== viewport.element) {
@@ -1055,7 +1114,10 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       }
 
       csToolsUtils.stackContextPrefetch.enable(element);
-    });
+    };
+    viewport.element.addEventListener(csEnums.Events.VIEWPORT_NEW_IMAGE_SET, handleNewImageSet);
+    // Store the handler on viewportInfo so destroy() can remove it
+    (viewportInfo as any)._newImageSetHandler = handleNewImageSet;
 
     const overlayProcessingResults = this._processExtraDisplaySetsForViewport(viewport);
 

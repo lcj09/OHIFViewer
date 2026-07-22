@@ -255,7 +255,7 @@ function modeFactory({ modeConfiguration }) {
         }
       );
     },
-    onModeExit: ({ servicesManager }: withAppTypes) => {
+    onModeExit: ({ servicesManager, extensionManager }: withAppTypes) => {
       const {
         toolGroupService,
         syncGroupService,
@@ -337,6 +337,18 @@ function modeFactory({ modeConfiguration }) {
       if (metadataClearTimer) clearTimeout(metadataClearTimer);
       metadataClearTimer = setTimeout(() => {
         try { DicomMetadataStore.clear(); } catch {}
+        // Also clear the StudyMetaDataPromises cache in the DicomWebDataSource.
+        // This Map caches retrieval Promises whose resolved results (DICOM tag
+        // data: {Value, vr} objects, ~89,000+ per study) are retained via
+        // Promise.reactions_or_result and never GC'd. Without this, switching
+        // studies or exiting the viewer leaves DICOM metadata stuck in memory.
+        try {
+          // getActiveDataSource() returns an array of data sources
+          const dataSources = extensionManager?.getActiveDataSource?.() || [];
+          dataSources.forEach(ds => {
+            try { ds?.clearStudyMetadataPromises?.(); } catch {}
+          });
+        } catch {}
         metadataClearTimer = null;
       }, 10000);
       console.log('[tmtv-mode] onModeExit complete');

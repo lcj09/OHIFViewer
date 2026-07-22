@@ -137,6 +137,23 @@ export default class ToolbarService extends PubSubService {
   }
 
   /**
+   * Called by ExtensionManager.onModeExit() when the user exits the viewer mode.
+   * Without this, state.buttons and state.buttonSections retain references to
+   * button props (including evaluate and listeners callback closures) that
+   * capture service/component references, preventing GC of viewer components.
+   */
+  public onModeExit(): void {
+    // Unsubscribe any service event subscriptions registered for toolbar updates
+    if (this.unsubscriptions?.length) {
+      this.unsubscriptions.forEach(unsub => {
+        try { unsub?.(); } catch { /* ignore */ }
+      });
+      this.unsubscriptions = [];
+    }
+    this.reset();
+  }
+
+  /**
    * Registers an evaluate function with the specified name.
    *
    * @param name - The name of the evaluate function.

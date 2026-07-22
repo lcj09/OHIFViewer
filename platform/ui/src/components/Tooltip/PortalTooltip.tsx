@@ -7,6 +7,33 @@ import Card from './PortalTooltipCard';
 const portalNodes = {};
 
 /**
+ * Clears all portal tooltip DOM nodes from document.body and resets the
+ * portalNodes cache. Called on mode exit to release orphaned DOM nodes
+ * that were appended to document.body but never removed (e.g., when
+ * tooltip components unmount before their show/hide timeout fires).
+ * Without this, detached <div> nodes persist in the DOM tree, retaining
+ * React FiberNodes via ReactDOM render roots.
+ */
+export function clearPortalTooltipNodes() {
+  Object.keys(portalNodes).forEach(group => {
+    const entry = portalNodes[group];
+    if (entry?.node) {
+      try {
+        ReactDOM.unmountComponentAtNode(entry.node);
+      } catch { /* ignore */ }
+      try {
+        if (entry.node.parentNode) {
+          entry.node.parentNode.removeChild(entry.node);
+        } else {
+          document.body.removeChild(entry.node);
+        }
+      } catch { /* already removed */ }
+    }
+    portalNodes[group] = null;
+  });
+}
+
+/**
  * A portal based tooltip component.
  *
  * This component has been repurposed and modified

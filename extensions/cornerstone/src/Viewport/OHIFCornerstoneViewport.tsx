@@ -23,6 +23,15 @@ const STACK = 'stack';
 // Cache for viewport dimensions, persists across component remounts
 const viewportDimensions = new Map<string, { width: number; height: number }>();
 
+/**
+ * Clears the module-level viewport dimensions cache.
+ * Called on mode exit to release references to viewport size objects that
+ * would otherwise persist across mode switches.
+ */
+export function clearViewportDimensionsCache() {
+  viewportDimensions.clear();
+}
+
 // Todo: This should be done with expose of internal API similar to react-vtkjs-viewport
 // Then we don't need to worry about the re-renders if the props change.
 const OHIFCornerstoneViewport = React.memo(
@@ -248,6 +257,14 @@ const OHIFCornerstoneViewport = React.memo(
         viewportRef.unregister();
 
         cleanupListener();
+
+        // Force-null the element ref to break any remaining references from
+        // closures or external caches to the DOM element. Without this, the
+        // DOM node can be retained by ResizeObserver callbacks or other
+        // module-level state even after the component unmounts.
+        if (elementRef) {
+          elementRef.current = null;
+        }
       };
     }, []);
 

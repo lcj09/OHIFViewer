@@ -234,6 +234,9 @@ function createDicomLocalApi(dicomLocalConfig) {
     deleteStudyMetadataPromise() {
       console.log('deleteStudyMetadataPromise not implemented');
     },
+    clearStudyMetadataPromises() {
+      // No-op for local data source (no Promise cache)
+    },
     getStudyInstanceUIDs: ({ params, query }) => {
       const { StudyInstanceUIDs: paramsStudyInstanceUIDs } = params;
       const queryStudyInstanceUIDs = query.getAll('StudyInstanceUIDs');

@@ -32,6 +32,11 @@ const OverlayPlaneModuleProvider = {
     }
     return _cachedOverlayMetadata.get(query);
   },
+
+  /** Clears all cached overlay metadata. Called on mode exit to release imageId/metadata references. */
+  clear: () => {
+    _cachedOverlayMetadata.clear();
+  },
 };
 
 // Needs to be higher priority than default provider

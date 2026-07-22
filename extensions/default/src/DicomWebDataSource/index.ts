@@ -12,7 +12,7 @@ import dcm4cheeReject from './dcm4cheeReject.js';
 
 import getImageId from './utils/getImageId.js';
 import dcmjs from 'dcmjs';
-import { retrieveStudyMetadata, deleteStudyMetadataPromise } from './retrieveStudyMetadata.js';
+import { retrieveStudyMetadata, deleteStudyMetadataPromise, clearStudyMetadataPromises } from './retrieveStudyMetadata.js';
 import StaticWadoClient from './utils/StaticWadoClient';
 import getDirectURL from '../utils/getDirectURL';
 import { fixBulkDataURI } from './utils/fixBulkDataURI';
@@ -649,6 +649,7 @@ function createDicomWebApi(dicomWebConfig: DicomWebConfig, servicesManager) {
       return seriesSummaryMetadata;
     },
     deleteStudyMetadataPromise,
+    clearStudyMetadataPromises,
     //获取DisplaySet中的所有图像ID
     getImageIdsForDisplaySet(displaySet) {
       const images = displaySet.images;

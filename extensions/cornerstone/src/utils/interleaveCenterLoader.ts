@@ -9,6 +9,16 @@ const volumeIdMapsToLoad = new Map<string, string>();
 const viewportIdVolumeInputArrayMap = new Map<string, unknown[]>();
 
 /**
+ * Clears module-level Maps that hold volume/viewport references.
+ * Called on mode exit to prevent references to volumes and volume input
+ * arrays from being retained after the viewer is closed.
+ */
+export function clearLoaderCache() {
+  volumeIdMapsToLoad.clear();
+  viewportIdVolumeInputArrayMap.clear();
+}
+
+/**
  * This function caches the volumeUIDs until all the volumes inside the
  * hanging protocol are initialized. Then it goes through the imageIds
  * of the volumes, and interleave them, in order for the volumes to be loaded

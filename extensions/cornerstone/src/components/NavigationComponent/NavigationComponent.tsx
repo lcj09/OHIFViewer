@@ -21,7 +21,6 @@ function NavigationComponent({ viewportId }: { viewportId: string }) {
   const { viewportDisplaySets } = useViewportDisplaySets(viewportId);
   const [measurementSelected, setMeasurementSelected] = useState(0);
   const isSRDisplaySet = viewportDisplaySets.some(displaySet => displaySet?.Modality === 'SR');
-  const cornerstoneViewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
 
   // Get segmentation information
   const { segmentationsWithRepresentations } = useViewportSegmentations({
@@ -59,7 +58,12 @@ function NavigationComponent({ viewportId }: { viewportId: string }) {
         setMeasurementSelected(newIndex);
 
         const measurement = measurements[newIndex];
-        cornerstoneViewport.setViewReference({
+        // Dynamically fetch viewport inside callback to avoid holding a long-term
+        // reference via useCallback closure. A long-term viewport reference would
+        // transitively retain vtkRenderer.backingStore (~3.5MB frame buffer data),
+        // preventing GC even when no navigation is happening.
+        const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+        viewport?.setViewReference({
           referencedImageId: measurement.imageId,
         });
         return;
@@ -77,7 +81,6 @@ function NavigationComponent({ viewportId }: { viewportId: string }) {
     },
     [
       viewportId,
-      cornerstoneViewport,
       measurementSelected,
       measurementService,
       isTracked,

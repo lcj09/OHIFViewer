@@ -85,7 +85,22 @@ export function retrieveStudyMetadata(
  * @param {String} StudyInstanceUID The UID of the Study to be removed from cache
  */
 export function deleteStudyMetadataPromise(StudyInstanceUID) {
-  if (StudyMetaDataPromises.has(StudyInstanceUID)) {
-    StudyMetaDataPromises.delete(StudyInstanceUID);
+  // Keys are stored as `${dicomWebConfig.name}:${StudyInstanceUID}` (see line 41),
+  // so a direct has(StudyInstanceUID) lookup never matches. Search by suffix.
+  for (const key of StudyMetaDataPromises.keys()) {
+    if (key.endsWith(`:${StudyInstanceUID}`)) {
+      StudyMetaDataPromises.delete(key);
+    }
   }
+}
+
+/**
+ * Clears ALL cached study metadata retrieval promises. Called on mode exit to
+ * release resolved Promise results (DICOM tag data: {Value, vr} objects) that
+ * are retained via Promise.reactions_or_result and never GC'd otherwise.
+ * Without this, switching studies or exiting the viewer leaves 89,000+ DICOM
+ * tag objects stuck in memory (the "StudyMetaDataPromises" retainer leak).
+ */
+export function clearStudyMetadataPromises() {
+  StudyMetaDataPromises.clear();
 }

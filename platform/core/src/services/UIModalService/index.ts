@@ -52,6 +52,15 @@ class UIModalService {
   }
 
   /**
+   * Called by ExtensionManager.onModeExit() to dismiss any open modal.
+   * Without this, modal content components and their DOM overlays persist
+   * across mode switches, retaining React FiberNodes.
+   */
+  onModeExit() {
+    try { this.hide(); } catch { /* ignore */ }
+  }
+
+  /**
    * This provides flexibility in customizing the Modal's default component
    *
    * @returns {React.Component}

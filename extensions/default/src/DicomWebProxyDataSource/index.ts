@@ -55,6 +55,7 @@ function createDicomWebProxyApi(dicomWebProxyConfig, servicesManager: AppTypes.S
       dicom: (...args) => dicomWebDelegate.store.dicom(...args),
     },
     deleteStudyMetadataPromise: (...args) => dicomWebDelegate.deleteStudyMetadataPromise(...args),
+    clearStudyMetadataPromises: () => dicomWebDelegate.clearStudyMetadataPromises(),
     getImageIdsForDisplaySet: (...args) => dicomWebDelegate.getImageIdsForDisplaySet(...args),
     getImageIdsForInstance: (...args) => dicomWebDelegate.getImageIdsForInstance(...args),
     getStudyInstanceUIDs({ params, query }) {

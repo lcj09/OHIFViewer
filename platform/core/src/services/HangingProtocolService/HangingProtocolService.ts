@@ -154,16 +154,36 @@ export default class HangingProtocolService extends PubSubService {
   }
 
   public reset(): void {
+    // Release references to displaySets (which contain image metadata and
+    // imageId arrays), active study, and protocol state. Without this,
+    // exiting the viewer mode leaves displaySets retained by this service
+    // instance, preventing GC of image pixel data and DICOM metadata.
+    this.displaySets = [];
     this.studies = [];
+    this.activeStudy = undefined;
     this.viewportMatchDetails = new Map();
     this.displaySetMatchDetails = new Map();
     this.protocol = undefined;
+    this._originalProtocol = undefined;
     this.stageIndex = undefined;
     this.protocolEngine = undefined;
+    this.activeProtocolIds = [];
+    this.customImageLoadPerformed = false;
+    this.activeImageLoadStrategyName = null;
   }
 
   /** Leave the hanging protocol in the initialized state */
   public onModeEnter(): void {
+    this.reset();
+  }
+
+  /**
+   * Called by ExtensionManager.onModeExit() when the user exits the viewer mode.
+   * Without this, displaySets and studies referenced by this service instance
+   * persist across mode switches, retaining image metadata and pixel data
+   * references that prevent GC.
+   */
+  public onModeExit(): void {
     this.reset();
   }
 

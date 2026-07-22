@@ -39,6 +39,7 @@ import PlanarFreehandROI from './utils/measurementServiceMappings/PlanarFreehand
 import RectangleROI from './utils/measurementServiceMappings/RectangleROI';
 import type { PublicViewportOptions } from './services/ViewportService/Viewport';
 import ImageOverlayViewerTool from './tools/ImageOverlayViewerTool';
+import OverlayPlaneModuleProvider from './tools/OverlayPlaneModuleProvider';
 import getSOPInstanceAttributes from './utils/measurementServiceMappings/utils/getSOPInstanceAttributes';
 import { findNearbyToolData } from './utils/findNearbyToolData';
 import { createFrameViewSynchronizer } from './synchronizers/frameViewSynchronizer';
@@ -65,6 +66,13 @@ import { useMeasurementTracking } from './hooks/useMeasurementTracking';
 import { setUpSegmentationEventHandlers } from './utils/setUpSegmentationEventHandlers';
 import { setUpAnnotationEventHandlers } from './utils/setUpAnnotationEventHandlers';
 import update from 'immutability-helper';
+// Module-level cache cleanup helpers. These loader utilities keep module-level
+// Maps that hold volume ID and viewport input array references; without clearing
+// them on mode exit, those references persist across mode switches.
+import { clearLoaderCache as clearInterleaveCenterLoader } from './utils/interleaveCenterLoader';
+import { clearLoaderCache as clearInterleaveTopToBottomLoader } from './utils/interleaveTopToBottom';
+import { clearLoaderCache as clearNthLoader } from './utils/nthLoader';
+import { clearViewportDimensionsCache } from './Viewport/OHIFCornerstoneViewport';
 export * from './components';
 
 const { imageRetrieveMetadataProvider } = cornerstone.utilities;
@@ -192,14 +200,29 @@ const cornerstoneExtension: Types.Extensions.Extension = {
       .clearSelectedSegmentationsForViewportStore();
     segmentationService.removeAllSegmentations();
 
+    // CRITICAL: Destroy CornerstoneViewportService to release rendering engine,
+    // WebGL contexts, DOM element references, and purge volume/image cache.
+    // Without this, ~20-30MB of JS heap leaks on every mode exit.
+    try {
+      const { cornerstoneViewportService } = servicesManager.services;
+      cornerstoneViewportService?.destroy?.();
+      console.log('[CS-Extension] ViewportService.destroy() called');
+    } catch (e) {
+      console.warn('[CS-Extension] ViewportService.destroy() failed', e);
+    }
+
     // Manually clean up tool instances BEFORE destroy() - disconnect ResizeObservers,
     // release VTK widgets, call tool.cleanUpData() to remove document-level listeners
     try {
       const toolGroups = (cornerstoneTools as any).state?.toolGroups || [];
       let cleanedTools = 0;
+      let cleanedUpDataTools = 0;
+      const cleanedToolNames = [];
+      const noCleanUpDataToolNames = [];
       toolGroups.forEach(tg => {
         const toolInstances = tg._toolInstances || {};
         Object.values(toolInstances).forEach((tool: any) => {
+          const toolName = tool?.toolName || 'unknown';
           if (tool._resizeObservers && tool._resizeObservers.size > 0) {
             tool._resizeObservers.forEach((ro: any) => { try { ro.disconnect(); } catch {} });
             tool._resizeObservers.clear();
@@ -216,10 +239,49 @@ const cornerstoneExtension: Types.Extensions.Extension = {
             tool.orientationMarkers = {};
           }
           if (tool.updatingOrientationMarker) tool.updatingOrientationMarker = {};
-          try { tool.cleanUpData?.(); } catch {}
+          // Call cleanUpData() to remove document/window-level event listeners.
+          // CRITICAL: FusionAdjustTool and AdvancedMagnifyTool add document.addEventListener
+          // in their constructors. Without cleanUpData(), these listeners persist forever
+          // (document is global, never GC'd), holding tool instance references → viewport →
+          // vtkRenderer → backingStore (3.5MB frame buffer). This is the "stubborn tenant"
+          // causing DOM Nodes and Listeners to not release after mode exit.
+          if (typeof tool.cleanUpData === 'function') {
+            try {
+              tool.cleanUpData();
+              cleanedUpDataTools++;
+              cleanedToolNames.push(toolName);
+            } catch (e) {
+              console.warn('[CS-Extension] cleanUpData() failed for', toolName, e);
+            }
+          } else {
+            noCleanUpDataToolNames.push(toolName);
+          }
+          // Also call dispose() for tools that use it instead of cleanUpData()
+          // (e.g. AdvancedMagnifyTool has dispose() but not cleanUpData())
+          if (typeof tool.dispose === 'function' && typeof tool.cleanUpData !== 'function') {
+            try {
+              tool.dispose();
+              cleanedUpDataTools++;
+              cleanedToolNames.push(toolName + ' (dispose)');
+            } catch (e) {
+              console.warn('[CS-Extension] dispose() failed for', toolName, e);
+            }
+          }
         });
+        // CRITICAL: Clear _toolInstances after cleanup. destroyToolGroup() only removes
+        // the toolGroup from state.toolGroups array; it does NOT clear _toolInstances.
+        // This means tool instances (and their references to viewports, DOM elements,
+        // vtkRenderer) would persist in memory even after destroy().
+        tg._toolInstances = {};
+        tg.toolOptions = {};
       });
-      if (cleanedTools > 0) console.log('[CS-Extension] Cleaned', cleanedTools, 'tool ResizeObserver sets');
+      console.log('[CS-Extension] Tool cleanup:', {
+        resizeObserverSets: cleanedTools,
+        cleanUpDataCalled: cleanedUpDataTools,
+        cleanedTools: cleanedToolNames,
+        noCleanUpData: noCleanUpDataToolNames,
+        toolGroups: toolGroups.length,
+      });
     } catch (e) {
       console.warn('[CS-Extension] Tool cleanup failed', e);
     }
@@ -299,12 +361,121 @@ const cornerstoneExtension: Types.Extensions.Extension = {
       console.warn('[CS-Extension] onModeExit: CornerstoneCacheService clear failed', e);
     }
 
+    // Clear imageRetrieveMetadataProvider - holds volume/stack retrieve strategy
+    // configurations that reference volume loader functions. Without this, the
+    // strategies (and their bound volume loader references) persist across mode
+    // switches and retain volume metadata references.
+    try {
+      imageRetrieveMetadataProvider.clear();
+    } catch (e) {
+      console.warn('[CS-Extension] onModeExit: imageRetrieveMetadataProvider clear failed', e);
+    }
+
+    // Clear module-level loader caches. These loader utilities (used by hanging
+    // protocols) keep Maps of volumeId → SeriesInstanceUID and viewportId →
+    // volumeInputArray at module scope. If mode exit happens mid-load, these
+    // Maps retain references to volume IDs and volume input arrays (which
+    // include imageId arrays and metadata references).
+    try {
+      clearInterleaveCenterLoader();
+      clearInterleaveTopToBottomLoader();
+      clearNthLoader();
+    } catch (e) {
+      console.warn('[CS-Extension] onModeExit: loader cache clear failed', e);
+    }
+
+    // Clear the module-level viewport dimensions cache in OHIFCornerstoneViewport.
+    // This Map stores { width, height } per viewportId and persists across mode
+    // switches, retaining viewport ID strings and dimension objects.
+    try {
+      clearViewportDimensionsCache();
+    } catch (e) {
+      console.warn('[CS-Extension] onModeExit: viewport dimensions cache clear failed', e);
+    }
+
+    // Clear the OverlayPlaneModuleProvider's cached metadata. This module-level
+    // Map stores imageId → overlay metadata entries and is never cleared by
+    // cornerstoneTools.destroy(), retaining DICOM metadata references.
+    try {
+      OverlayPlaneModuleProvider.clear();
+    } catch (e) {
+      console.warn('[CS-Extension] onModeExit: overlay metadata cache clear failed', e);
+    }
+
+    // Terminate Web Workers and clear pending worker request queue.
+    // Without this:
+    //  - blink::DedicatedWorkerMessagingProxy persists, retaining DOM refs via
+    //    pending message queue entries and Comlink proxy callbacks ("Documents: 3"
+    //    ghost pages in incognito mode).
+    //  - webWorkerManager.workerPoolManager (SEPARATE from imageLoadPoolManager)
+    //    holds pending requestFn closures capturing args = { imageFrame, pixelData,
+    //    options, decodeConfig } which indirectly reference volumes → viewports →
+    //    canvas (DOM), preventing detached divs from being GC'd.
+    //  - idleCheckIntervalId setInterval leaks (upstream bug: terminate() doesn't
+    //    clear it).
+    // After terminate(), instances[] is [null, null, ...]. The next executeTask()
+    // call auto-recreates the worker via workerFn() in getNextWorkerAPI(), so no
+    // re-registration is needed on mode enter.
+    try {
+      const webWorkerManager = (cornerstone as any).getWebWorkerManager?.();
+      if (webWorkerManager) {
+        // 1) Clear pending worker requests FIRST (before terminating workers) to
+        //    prevent in-flight requests from holding stale volume/DOM references.
+        try {
+          const wpm = webWorkerManager.workerPoolManager;
+          if (wpm && typeof wpm.clearRequestStack === 'function') {
+            Object.values(cs3DEnums.RequestType).forEach(type => {
+              try { wpm.clearRequestStack(type); } catch {}
+            });
+          }
+        } catch (e) {
+          console.warn('[CS-Extension] onModeExit: workerPoolManager clear failed', e);
+        }
+        // 2) Terminate each registered worker (dicomImageLoader × 3, histogram-worker × 1)
+        const registry = webWorkerManager.workerRegistry || {};
+        let terminatedCount = 0;
+        Object.keys(registry).forEach(workerName => {
+          try {
+            const props = registry[workerName];
+            // Clear the idle-check setInterval (upstream leak: terminate() doesn't clear it)
+            if (props?.idleCheckIntervalId) {
+              clearInterval(props.idleCheckIntervalId);
+              props.idleCheckIntervalId = null;
+            }
+            // Terminate all native worker instances (releases DedicatedWorkerMessagingProxy
+            // and Comlink proxies, calls nativeWorker.terminate())
+            if (typeof webWorkerManager.terminate === 'function') {
+              webWorkerManager.terminate(workerName);
+            }
+            // Clear nativeWorkers array (terminateWorkerInstance sets instances[i]=null
+            // but does NOT clear nativeWorkers[i], leaving orphan Worker references)
+            if (Array.isArray(props?.nativeWorkers)) {
+              props.nativeWorkers.length = 0;
+            }
+            terminatedCount++;
+          } catch (e) {
+            console.warn('[CS-Extension] onModeExit: terminate worker failed for', workerName, e);
+          }
+        });
+        console.log('[CS-Extension] onModeExit: terminated', terminatedCount, 'web worker types');
+      }
+    } catch (e) {
+      console.warn('[CS-Extension] onModeExit: webWorkerManager cleanup failed', e);
+    }
+
     // Brief diagnostic: verify cleanup succeeded
     try {
       const { getRenderingEngines, cache } = cornerstone;
       const csToolsState = (cornerstoneTools as any).state;
       const are = annotationRenderingEngine as any;
       const sre = segmentationRenderingEngine as any;
+      const wwm = (cornerstone as any).getWebWorkerManager?.();
+      const wpmPool = wwm?.workerPoolManager?.getRequestPool?.() || {};
+      const pendingWorkerRequests = Object.values(wpmPool).reduce(
+        (sum: number, prioMap: any) =>
+          sum + Object.values(prioMap || {}).reduce((s: number, arr: any) => s + (arr?.length || 0), 0),
+        0
+      );
       console.log('[CS-Extension] onModeExit: cleanup summary:', {
         renderingEngines: getRenderingEngines?.().length || 0,
         volumes: (cache as any)?._volumeCache?.size || 0,
@@ -314,6 +485,8 @@ const cornerstoneExtension: Types.Extensions.Extension = {
         areViewportElements: are._viewportElements?.size || 0,
         sreNeedsRender: sre._needsRender?.size || 0,
         domViewportEls: document.querySelectorAll('[data-viewport-uid]').length,
+        webWorkerTypes: Object.keys(wwm?.workerRegistry || {}).length,
+        pendingWorkerRequests,
       });
     } catch (e) {
       console.warn('[CS-Extension] onModeExit: diagnostics failed', e);

@@ -264,6 +264,14 @@ function createMergeDataSourceApi(
         dataSourceNames,
         defaultDataSourceName,
       }),
+    clearStudyMetadataPromises: () =>
+      callForAllDataSources({
+        path: 'clearStudyMetadataPromises',
+        args: [],
+        extensionManager,
+        dataSourceNames,
+        defaultDataSourceName,
+      }),
     getImageIdsForDisplaySet: (...args: unknown[]) =>
       callByRetrieveAETitle({
         path: 'getImageIdsForDisplaySet',

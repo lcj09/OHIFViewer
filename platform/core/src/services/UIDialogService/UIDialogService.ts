@@ -57,6 +57,15 @@ class UIDialogService {
   }
 
   /**
+   * Called by ExtensionManager.onModeExit() to dismiss any open dialogs.
+   * Without this, dialog component instances and their DOM overlays persist
+   * across mode switches, retaining React FiberNodes and event listeners.
+   */
+  onModeExit(): void {
+    try { this.hideAll(); } catch { /* ignore */ }
+  }
+
+  /**
    * Check if there are any dialogs currently shown
    *
    * @returns {boolean} True if no dialogs are shown

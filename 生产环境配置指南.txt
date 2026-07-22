@@ -1,0 +1,148 @@
+============================================================
+  OHIF Viewer 生产环境配置指南
+============================================================
+
+一、环境要求
+------------------------------------------------------------
+1. Node.js >= 18
+2. Yarn >= 1.20.0
+3. Nginx 1.26.3（或其他版本）
+4. Orthanc DICOM 服务器（端口 8042）
+
+二、安装步骤
+------------------------------------------------------------
+
+【1. 构建生产版本】
+   在项目根目录 (D:\OHIF) 执行：
+   
+   yarn build
+   
+   构建产物输出到：platform\app\dist\
+
+【2. 安装 Nginx】
+   下载地址：https://nginx.org/download/nginx-1.26.3.zip
+   
+   解压到：D:\nginx\nginx-1.26.3\
+
+【3. 配置 Nginx】
+   编辑文件：D:\nginx\nginx-1.26.3\conf\nginx.conf
+   
+   完整配置内容如下：
+   --------------------------------------------------
+   worker_processes  1;
+
+   events {
+       worker_connections  1024;
+   }
+
+   http {
+       include       mime.types;
+       default_type  application/octet-stream;
+
+       sendfile        on;
+       keepalive_timeout  65;
+
+       server {
+           listen       3000;
+           server_name  localhost;
+
+           # OHIF 生产构建静态文件
+           root D:/OHIF/platform/app/dist;
+           index index.html;
+
+           # SPA 路由支持 - 所有非文件请求回退到 index.html
+           location / {
+               try_files $uri $uri/ /index.html;
+           }
+
+           # 代理 DICOMweb 请求到 Orthanc 服务器
+           location /dicomweb/ {
+               proxy_pass http://localhost:8042/dicom-web/;
+               proxy_set_header Host $host;
+               proxy_set_header X-Real-IP $remote_addr;
+               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+               proxy_set_header X-Forwarded-Proto $scheme;
+
+               # DICOM 文件可能很大
+               client_max_body_size 100m;
+               proxy_read_timeout 300s;
+               proxy_send_timeout 300s;
+           }
+
+           error_page   500 502 503 504  /50x.html;
+           location = /50x.html {
+               root   html;
+           }
+       }
+   }
+   --------------------------------------------------
+
+三、启动/停止命令
+------------------------------------------------------------
+
+【启动 Nginx】
+   方式1（隐藏窗口）：
+   Start-Process -FilePath "D:\nginx\nginx-1.26.3\nginx.exe" -WorkingDirectory "D:\nginx\nginx-1.26.3" -WindowStyle Hidden
+
+   方式2（命令行）：
+   cd D:\nginx\nginx-1.26.3
+   .\nginx.exe
+
+【停止 Nginx】
+   cd D:\nginx\nginx-1.26.3
+   .\nginx.exe -s stop
+
+【重新加载配置】
+   cd D:\nginx\nginx-1.26.3
+   .\nginx.exe -s reload
+
+【检查 Nginx 是否运行】
+   tasklist | findstr "nginx"
+
+四、访问地址
+------------------------------------------------------------
+   http://localhost:3000
+
+   如果端口 3000 被占用，可修改 nginx.conf 中的 listen 端口号。
+   注意：端口 80 通常被 Windows HTTP.sys 占用，不建议使用。
+
+五、Orthanc 服务器配置
+------------------------------------------------------------
+   确保 Orthanc 运行在 http://localhost:8042
+   
+   启动命令（如果使用 Docker）：
+   docker compose -f platform/app/.recipes/Nginx-Orthanc/docker-compose.yml up
+
+六、验证清单
+------------------------------------------------------------
+   [ ] yarn build 构建成功，dist 目录存在
+   [ ] nginx.conf 配置正确（root 指向 dist 目录）
+   [ ] nginx 进程正在运行
+   [ ] Orthanc 服务器正在运行（端口 8042）
+   [ ] 浏览器访问 http://localhost:3000 能打开页面
+   [ ] 能正常查询和加载 DICOM 图像
+
+七、常见问题
+------------------------------------------------------------
+
+Q1: 端口 80 被占用
+A: Windows 系统 HTTP.sys 服务占用端口 80，改用其他端口（如 3000）
+
+Q2: 页面 404
+A: 检查 nginx.conf 中 root 路径是否正确指向 dist 目录
+
+Q3: 图像加载失败/服务不可用
+A: 检查 Orthanc 是否运行，以及 /dicomweb/ 代理配置是否正确
+
+Q4: nginx 启动后立即退出
+A: 查看 D:\nginx\nginx-1.26.3\logs\error.log 了解错误原因
+
+八、内存测试建议
+------------------------------------------------------------
+   1. 打开 Chrome DevTools → Memory 标签页
+   2. 拍 Heap Snapshot 作为基线
+   3. 执行操作流程（进入 TMTV 模式、加载图像、退出模式）
+   4. 再拍 Heap Snapshot，对比差异
+   5. 关注 Detached DOM nodes、JS Heap、Event Listeners 数量
+
+============================================================

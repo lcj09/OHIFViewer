@@ -43,6 +43,9 @@ function ViewportImageSliceLoadingIndicator({ viewportData, element }) {
       element.removeEventListener(Enums.Events.STACK_NEW_IMAGE, setFinishLoadingState);
 
       element.removeEventListener(Enums.Events.IMAGE_LOAD_ERROR, setErrorState);
+      // Clear any pending loading indicator timeout to prevent the setTimeout
+      // closure (which captures setLoading) from firing after unmount.
+      clearTimeout(loadIndicatorRef.current);
     };
   }, [element, viewportData]);
 

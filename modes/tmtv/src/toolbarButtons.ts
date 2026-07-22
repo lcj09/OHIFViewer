@@ -62,6 +62,10 @@ const toolbarButtons = [
     uiType: 'ohif.advancedRenderingControls',
     props: {
       buttonSection: true,
+      evaluate: {
+        name: 'evaluate.advancedRenderingControls',
+        hideWhenDisabled: true,
+      },
     },
   },
   {
@@ -618,7 +622,10 @@ const toolbarButtons = [
       tooltip: i18n.t(
         'Buttons:Configure data overlay options and manage foreground/background display sets'
       ),
-      evaluate: 'evaluate.dataOverlayMenu',
+      evaluate: {
+        name: 'evaluate.dataOverlayMenu',
+        hideWhenDisabled: true,
+      },
     },
   },
   {
@@ -632,7 +639,7 @@ const toolbarButtons = [
       ),
       evaluate: {
         name: 'evaluate.orientationMenu',
-        // hideWhenDisabled: true,
+        hideWhenDisabled: true,
       },
     },
   },
@@ -643,7 +650,10 @@ const toolbarButtons = [
       icon: 'WindowLevel',
       label: i18n.t('Buttons:Window Level'),
       tooltip: i18n.t('Buttons:Adjust window/level presets and customize image contrast settings'),
-      evaluate: 'evaluate.windowLevelMenu',
+      evaluate: {
+        name: 'evaluate.windowLevelMenu',
+        hideWhenDisabled: true,
+      },
     },
   },
   {
@@ -653,7 +663,10 @@ const toolbarButtons = [
       icon: 'WindowLevelAdvanced',
       label: i18n.t('Buttons:Advanced Window Level'),
       tooltip: i18n.t('Buttons:Advanced window/level settings with manual controls and presets'),
-      evaluate: 'evaluate.voiManualControlMenu',
+      evaluate: {
+        name: 'evaluate.voiManualControlMenu',
+        hideWhenDisabled: true,
+      },
     },
   },
   {
