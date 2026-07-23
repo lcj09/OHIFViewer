@@ -1579,8 +1579,10 @@ function commandsModule({
       const crosshairInstances = [];
 
       const getCrosshairInstances = toolGroupId => {
-        const toolGroup = toolGroupService.getToolGroup(toolGroupId);
-        crosshairInstances.push(toolGroup.getToolInstance('Crosshairs'));
+        const toolGroup = toolGroupService.getToolGroup(toolGroupId) as any;
+        // 直接访问 _toolInstances，不调用 getToolInstance，
+        // 否则未注册的工具(如volume3d)会触发console.warn产生垃圾字符串。
+        crosshairInstances.push(toolGroup?._toolInstances?.Crosshairs);
       };
 
       if (!viewportId) {

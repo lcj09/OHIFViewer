@@ -316,6 +316,14 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     // Purge the cornerstone cache (volumes + images) with robust error handling
     this._purgeCacheRobust();
 
+    // Clear pending resize timers. These setTimeout closures capture `this`
+    // (the ViewportService instance), preventing it from being GC'd after
+    // destroy(). Without this, the service instance leaks on every mode exit.
+    clearTimeout(this.viewportResizeTimer);
+    clearTimeout(this.gridResizeTimeOut);
+    this.viewportResizeTimer = null;
+    this.gridResizeTimeOut = null;
+
     console.log('[ViewportService] destroy() done:', viewportCount, 'viewports cleared');
   }
 

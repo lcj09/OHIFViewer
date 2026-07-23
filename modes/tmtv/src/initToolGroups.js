@@ -514,9 +514,11 @@ function _initToolGroups(toolNames, Enums, toolGroupService, commandsManager) {
           const csToolGroup = tg._toolGroup || tg;
 
           // 尝试获取 Crosshairs 工具实例
-          const toolInstance = csToolGroup.getToolInstance
-            ? csToolGroup.getToolInstance('Crosshairs')
-            : csToolGroup._toolInstances?.Crosshairs;
+          // 注意：不能使用 csToolGroup.getToolInstance('Crosshairs')，因为当工具
+          // 未注册时它会 console.warn("'Crosshairs' is not registered...")，
+          // 在遍历所有工具组(含volume3d)时会产生大量垃圾字符串对象。
+          // 直接访问 _toolInstances 属性，未注册时返回 undefined，无副作用。
+          const toolInstance = csToolGroup._toolInstances?.Crosshairs;
 
           if (toolInstance && typeof toolInstance.mouseMoveCallback === 'function') {
             const originalCallback = toolInstance.mouseMoveCallback.bind(toolInstance);
@@ -559,11 +561,12 @@ function _initToolGroups(toolNames, Enums, toolGroupService, commandsManager) {
           const csToolGroup = tg._toolGroup || tg;
 
           // 修补 Crosshairs 和 SingleSliceLine 两个工具
+          // 注意：直接访问 _toolInstances，不调用 getToolInstance，
+          // 否则未注册的工具(如volume3d中的Crosshairs)会触发console.warn，
+          // 产生大量垃圾字符串对象。
           const toolNamesToPatch = ['Crosshairs', 'SingleSliceLine'];
           toolNamesToPatch.forEach(toolName => {
-            const toolInstance = csToolGroup.getToolInstance
-              ? csToolGroup.getToolInstance(toolName)
-              : csToolGroup._toolInstances?.[toolName];
+            const toolInstance = csToolGroup._toolInstances?.[toolName];
 
             if (toolInstance?._computeToolCenter) {
               const orig = toolInstance._computeToolCenter.bind(toolInstance);
@@ -621,9 +624,9 @@ function _initToolGroups(toolNames, Enums, toolGroupService, commandsManager) {
 
           const toolNamesToPatch = ['Crosshairs', 'SingleSliceLine'];
           toolNamesToPatch.forEach(toolName => {
-            const toolInstance = csToolGroup.getToolInstance
-              ? csToolGroup.getToolInstance(toolName)
-              : csToolGroup._toolInstances?.[toolName];
+            // 直接访问 _toolInstances，不调用 getToolInstance，
+            // 否则未注册的工具(如volume3d)会触发console.warn产生垃圾字符串。
+            const toolInstance = csToolGroup._toolInstances?.[toolName];
 
             if (toolInstance && typeof toolInstance.onSetToolActive === 'function') {
               const originalOnSetToolActive = toolInstance.onSetToolActive.bind(toolInstance);

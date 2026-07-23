@@ -204,6 +204,73 @@ export default class ExtensionManager extends PubSubService {
         console.warn('onModeExit caught', e);
       }
     }
+
+    // 【关键】统一清理所有 PubSubService 实例的事件订阅（listeners）。
+    //
+    // 问题：多数 Service（DisplaySetService、PanelService、ToolbarService、
+    //   HangingProtocolService、MeasurementService、StudyPrefetcherService、
+    //   CineService、WorkflowStepsService 等）的 onModeExit/reset 方法只清理
+    //   自己的业务状态，却忘记了调用 super.reset() 来清空 PubSubService 父类
+    //   的 this.listeners 数组。这导致：
+    //   - 组件 useEffect 中 subscribe 的回调函数（闭包捕获组件 props/state）
+    //     在 mode 切换后仍被 Service 持有
+    //   - 下次进入 mode 时旧回调和新回调同时响应事件，造成内存泄漏和重复响应
+    //   - ExtensionManager 作为全局单例挂载在 App.tsx 上下文中，只要页面不
+    //     刷新就永远存在，所以泄漏的 listeners 永远不会被回收
+    //
+    // 修复：在所有 service.onModeExit() 执行完毕后，遍历所有持有 listeners
+    //   的 service（包括 class extends PubSubService 和 Object.assign 混合
+    //   pubSubServiceInterface 的对象，如 DicomMetadataStore），显式清空
+    //   listeners。对于已经正确调用 super.reset() 的服务（如
+    //   CustomizationService、SegmentationService），这是 no-op
+    //   （listeners 已经为空），不会重复清理或产生副作用。
+    //
+    // 注意：必须放在 service.onModeExit() 之后，因为某些服务的 onModeExit
+    //   可能还需要触发事件（通过 _broadcastEvent），如果在之前清空 listeners
+    //   会导致这些事件无人响应。
+    let clearedServices = 0;
+    let clearedListeners = 0;
+    for (const service of services) {
+      // 使用 duck typing 而非 instanceof，因为 DicomMetadataStore 不是 class
+      // 而是通过 Object.assign(BaseImplementation, pubSubServiceInterface) 组合的，
+      // 但它同样持有 listeners 对象，同样会泄漏。
+      if (service?.listeners && typeof service?.listeners === 'object') {
+        try {
+          const beforeCount = Object.values(service.listeners).reduce(
+            (sum, arr) => sum + (arr?.length || 0),
+            0
+          );
+          if (beforeCount > 0) {
+            // 对于 PubSubService 实例，优先调用父类的 reset()（它会调用
+            // 每个 debounced callback 的 clearDebounceTimeout 清理 setTimeout）
+            if (service instanceof PubSubService) {
+              PubSubService.prototype.reset.call(service);
+            } else {
+              // 对于混合对象（如 DicomMetadataStore），手动清空 listeners
+              // 并调用 clearDebounceTimeout
+              Object.keys(service.listeners).forEach(eventName => {
+                const arr = service.listeners[eventName];
+                if (Array.isArray(arr)) {
+                  arr.forEach(({ callback }) => {
+                    callback?.clearDebounceTimeout?.();
+                  });
+                }
+              });
+              service.listeners = {};
+            }
+            clearedServices++;
+            clearedListeners += beforeCount;
+          }
+        } catch (e) {
+          console.warn('[ExtensionManager] Failed to clear listeners for', service?.constructor?.name, e);
+        }
+      }
+    }
+    if (clearedListeners > 0) {
+      console.log(
+        `[ExtensionManager] Cleared ${clearedListeners} leaked listeners across ${clearedServices} service instances`
+      );
+    }
   }
 
   /**

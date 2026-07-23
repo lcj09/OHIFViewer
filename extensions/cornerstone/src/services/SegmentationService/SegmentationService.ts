@@ -276,6 +276,14 @@ class SegmentationService extends PubSubService {
       this._onSegmentationAddedFromSource
     );
 
+    // Remove the ANNOTATION_CUT_MERGE_PROCESS_COMPLETED listener registered in
+    // _initSegmentationService. Without this, the listener (and its closure
+    // capturing `this`) leaks across mode enter/exit cycles.
+    eventTarget.removeEventListener(
+      csToolsEnums.Events.ANNOTATION_CUT_MERGE_PROCESS_COMPLETED,
+      this._onAnnotationCutMergeProcessCompletedFromSource
+    );
+
     this.reset();
   };
 

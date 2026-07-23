@@ -240,6 +240,52 @@ const OHIFCornerstoneViewport = React.memo(
           onElementDisabled(viewportInfo);
         }
 
+        // 【关键】在 disableElement 之前手动清理 VTK 资源，不依赖 React 自动回收。
+        // disableElement() 只触发 removeWidgets() 和 ELEMENT_DISABLED 事件,
+        // 不会显式释放 vtkRenderWindow / interactor / actor 等底层 C++ 对象,
+        // 必须在这里手动调用 .delete() 切断 VTK 与 DOM 的联系。
+        try {
+          const csViewport = cornerstoneViewportService.getViewport?.(viewportId);
+          const actorEntries = csViewport?.getActors?.();
+          if (actorEntries?.length) {
+            actorEntries.forEach(entry => {
+              const actor = entry?.actor;
+              if (!actor) return;
+              try {
+                const property = actor.getProperty?.();
+                if (property) {
+                  // 释放 ColorTransferFunction (RGB 查找表, 持有大型数组)
+                  const rgbTF = property.getRGBTransferFunction?.(0);
+                  if (rgbTF && typeof rgbTF.delete === 'function' && !rgbTF.isDeleted?.()) {
+                    rgbTF.delete();
+                  }
+                  // 释放 PiecewiseFunction (标量不透明度)
+                  const opacityTF = property.getScalarOpacity?.(0);
+                  if (opacityTF && typeof opacityTF.delete === 'function' && !opacityTF.isDeleted?.()) {
+                    opacityTF.delete();
+                  }
+                  // 释放 PiecewiseFunction (梯度不透明度)
+                  const gradTF = property.getGradientOpacity?.(0);
+                  if (gradTF && typeof gradTF.delete === 'function' && !gradTF.isDeleted?.()) {
+                    gradTF.delete();
+                  }
+                }
+                // 释放 mapper (VolumeMapper 持有对 volume 的引用和 scalar data 引用)
+                const mapper = actor.getMapper?.();
+                if (mapper && typeof mapper.delete === 'function' && !mapper.isDeleted?.()) {
+                  mapper.delete();
+                }
+                // 最后释放 actor 自身
+                if (typeof actor.delete === 'function' && !actor.isDeleted?.()) {
+                  actor.delete();
+                }
+              } catch { /* actor already destroyed */ }
+            });
+          }
+        } catch (e) {
+          console.warn('[OHIFViewport] VTK actor cleanup failed for', viewportId, e);
+        }
+
         try {
           cornerstoneViewportService.disableElement(viewportId);
         } catch (e) {

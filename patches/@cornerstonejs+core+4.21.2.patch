@@ -1,0 +1,50 @@
+diff --git a/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkOffscreenMultiRenderWindow.js b/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkOffscreenMultiRenderWindow.js
+index bbaf2ed..9d5c4eb 100644
+--- a/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkOffscreenMultiRenderWindow.js
++++ b/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkOffscreenMultiRenderWindow.js
+@@ -27,8 +27,43 @@ function vtkOffscreenMultiRenderWindow(publicAPI, model) {
+         model.rendererMap[id] = renderer;
+     };
+     publicAPI.destroy = () => {
+-        const rwi = model.renderWindow.getInteractor();
+-        rwi.delete();
++        // Release OpenGL graphics resources (shader cache, texture unit
++        // manager, cached graphics resources). vtkOpenGLRenderWindow.delete()
++        // only calls deleteGLContext() and setContainer(); it does NOT release
++        // graphics resources, causing shader/texture leaks across mode exits.
++        try {
++            const glRW = model.openGLRenderWindow;
++            if (glRW && !glRW.isDeleted() && glRW.releaseGraphicsResources) {
++                glRW.releaseGraphicsResources();
++            }
++        } catch (e) { /* ignore */ }
++
++        // Delete all renderers that still remain in the rendererMap.
++        // RenderingEngine.destroy() calls removeRenderer() for each viewport
++        // before delete(), but any renderer added without a matching removeRenderer
++        // would leak here.
++        const rendererIds = Object.keys(model.rendererMap || {});
++        rendererIds.forEach(id => {
++            const renderer = model.rendererMap[id];
++            if (renderer && !renderer.isDeleted()) {
++                renderer.delete();
++            }
++            delete model.rendererMap[id];
++        });
++
++        // Delete the vtkRenderWindow. VTK's default delete() does NOT cascade
++        // to associated objects, so without this the vtkRenderWindow instance
++        // (and its internal model object holding references to renderers, views,
++        // etc.) leaks on every mode exit.
++        if (model.renderWindow && !model.renderWindow.isDeleted()) {
++            model.renderWindow.delete();
++        }
++
++        // Delete the interactor.
++        const rwi = model.renderWindow?.getInteractor?.();
++        if (rwi && !rwi.isDeleted()) {
++            rwi.delete();
++        }
+     };
+     publicAPI.removeRenderer = (id) => {
+         const renderer = publicAPI.getRenderer(id);

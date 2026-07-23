@@ -33,10 +33,12 @@ window.config = {
   allowMultiSelectExport: false,
   maxNumRequests: {
     interaction: 100,
-    thumbnail: 75,
-    // Prefetch number is dependent on the http protocol. For http 2 or
-    // above, the number of requests can be go a lot higher.
-    prefetch: 25,
+    // [2026-07-22 内存优化] 从75降到25，减少缩略图并发请求
+    thumbnail: 25,
+    // [2026-07-22 内存优化] 从25降到6，匹配3个web worker的解码能力
+    // 25个并发请求导致大量未解码DICOM数据堆积在内存中，触发C++ GC(3984ms)
+    // 6个并发请求让下载速度匹配解码速度，避免内存堆积
+    prefetch: 6,
   },
   showErrorDetails: 'always', // 'always', 'dev', 'production'
   // filterQueryParam: false,

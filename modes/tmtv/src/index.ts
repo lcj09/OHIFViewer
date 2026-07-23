@@ -320,6 +320,14 @@ function modeFactory({ modeConfiguration }) {
             // Call the tool's own cleanup method if available
             try { tool.cleanUpData?.(); } catch {}
           });
+          // CRITICAL: Clear _toolInstances and toolOptions AFTER cleanup.
+          // toolGroupService.destroy() only removes toolGroups from state.toolGroups
+          // array (sets it to []); it does NOT clear _toolInstances. Without this,
+          // the extension's onModeExit (which runs AFTER mode's onModeExit) tries to
+          // iterate state.toolGroups to clear _toolInstances, but finds an empty array,
+          // leaving tool instance references stuck in memory.
+          (tg as any)._toolInstances = {};
+          (tg as any).toolOptions = {};
         });
       } catch (e) {
         console.warn('[tmtv-mode] Tool instance cleanup failed', e);

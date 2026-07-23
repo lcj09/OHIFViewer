@@ -116,9 +116,15 @@ export default async function init({
     segmentationService.EVENTS.SEGMENTATION_ANNOTATION_CUT_MERGE_PROCESS_COMPLETED,
   ]);
 
-  window.services = servicesManager.services;
-  window.extensionManager = extensionManager;
-  window.commandsManager = commandsManager;
+  // Expose services on window for debugging and e2e tests only in non-production
+  // builds. In production, these global references prevent the entire service
+  // tree (ViewportService, SegmentationService, ToolGroupService, etc.) from
+  // being GC'd after mode exit, even when internal cleanup is complete.
+  if (process.env.NODE_ENV !== 'production') {
+    window.services = servicesManager.services;
+    window.extensionManager = extensionManager;
+    window.commandsManager = commandsManager;
+  }
 
   if (appConfig.showCPUFallbackMessage && cornerstone.getShouldUseCPURendering()) {
     _showCPURenderingModal(uiModalService, hangingProtocolService);
