@@ -15,6 +15,7 @@ import {
   eventTarget,
   BaseVolumeViewport,
   imageLoadPoolManager,
+  getWebWorkerManager,
 } from '@cornerstonejs/core';
 
 import { utilities as csToolsUtils, Enums as csToolsEnums } from '@cornerstonejs/tools';
@@ -351,6 +352,89 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
   }
 
   /**
+   * Public cache purge entry point for external callers (e.g. return-to-study-list button).
+   * Wraps _purgeCacheRobust with try/catch and clears the image load pool to release
+   * pending request references. Safe to call before destroy(); destroy() will still
+   * run its own cleanup, but calling this earlier releases memory sooner.
+   */
+  public purgeCache() {
+    try {
+      this._clearImageLoadPool();
+      this._purgeCacheRobust();
+    } catch (e) {
+      console.warn('[ViewportService] purgeCache() failed', e);
+    }
+  }
+
+  /**
+   * [2026-07-28 内存诊断] 返回当前 cornerstone 内存状态快照。
+   * 用于 ViewerHeader 在"返回查询界面"前后对比，验证清理是否真的执行。
+   *
+   * 关键指标：
+   * - cacheSizeBytes: cache 中的字节总数（对应 JSArrayBufferData 主体）
+   * - volumeCount / imageCount: 缓存条目数
+   * - pendingRequests: imageLoadPool 中待处理的请求（持有 imageLoadObject 引用）
+   * - renderingEngineViewports: 仍然存活的 viewport 数（actor 持有 scalarData 引用）
+   * - workerCount: 存活的 web worker 类型数（持有解码 ArrayBuffer）
+   */
+  public getMemoryStats(): Record<string, number | string> {
+    try {
+      const cacheAny = cache as any;
+      const stats: Record<string, number | string> = {
+        cacheSizeBytes: cache.getCacheSize(),
+        maxCacheSizeBytes: cache.getMaxCacheSize(),
+        volumeCount: cacheAny._volumeCache?.size ?? 0,
+        imageCount: cacheAny._imageCache?.size ?? 0,
+        renderingEngineExists: this.renderingEngine ? 1 : 0,
+        renderingEngineViewports: 0,
+        viewportsByIdCount: this.viewportsById.size,
+        workerCount: 0,
+        pendingWorkerRequests: 0,
+      };
+
+      // 统计 imageLoadPoolManager 各类型的 pending 请求数
+      let pendingPool = 0;
+      try {
+        const pool = (imageLoadPoolManager as any).getRequestPool?.() || {};
+        Object.values(pool).forEach((prioMap: any) => {
+          Object.values(prioMap || {}).forEach((arr: any) => {
+            pendingPool += arr?.length || 0;
+          });
+        });
+      } catch { /* ignore */ }
+      stats.pendingPoolRequests = pendingPool;
+
+      // 统计 renderingEngine 中存活的 viewport（这些 viewport 的 actor 持有 scalarData 引用）
+      try {
+        const re = this.renderingEngine as any;
+        if (re && !re.hasBeenDestroyed) {
+          stats.renderingEngineViewports = re.viewports?.size ?? 0;
+        }
+      } catch { /* ignore */ }
+
+      // 统计 web worker 状态（直接 import getWebWorkerManager，生产环境也可用）
+      try {
+        const wwm = (getWebWorkerManager as any)?.();
+        if (wwm) {
+          stats.workerCount = Object.keys(wwm.workerRegistry || {}).length;
+          let pendingWorker = 0;
+          const wpmPool = wwm.workerPoolManager?.getRequestPool?.() || {};
+          Object.values(wpmPool).forEach((prioMap: any) => {
+            Object.values(prioMap || {}).forEach((arr: any) => {
+              pendingWorker += arr?.length || 0;
+            });
+          });
+          stats.pendingWorkerRequests = pendingWorker;
+        }
+      } catch { /* ignore */ }
+
+      return stats;
+    } catch (e) {
+      return { error: String(e) };
+    }
+  }
+
+  /**
    * Purges the cornerstone cache with per-entry error handling.
    * The built-in purgeCache() can fail on a single entry and stop cleanup,
    * leaving remaining volumes/images in memory.
@@ -438,10 +522,74 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
         try {
           if (!ctx || ctx.isDeleted?.()) return;
           const glRenderWindow = ctx.getOpenGLRenderWindow?.();
+
+          // 【关键修复 2026-07-27】必须在 loseContext() 之前调用 releaseGraphicsResources()！
+          //
+          // 原顺序（有内存泄漏）：
+          //   loseContext() → renderingEngine.destroy() → releaseGraphicsResources()
+          //   ↑ loseContext 后 WebGL 上下文失效，releaseGraphicsResources 中的
+          //     gl.deleteTexture() / gl.deleteBuffer() 等调用全部无效，
+          //     导致 CT(~246MB) + PT(~246MB) 的 3D 纹理无法释放！
+          //
+          // 新顺序（正确）：
+          //   releaseGraphicsResources() → loseContext()
+          //   ↑ 在 WebGL 上下文仍然有效时，先释放所有 GPU 资源：
+          //     - shaderCache（编译的着色器程序，~27.5MB compiled code）
+          //     - scalarTextures（CT+PT 的 3D 体素纹理，~492MB）
+          //     - colorTexture / opacityTexture（颜色查找表）
+          //     - VBO（顶点缓冲对象）
+          //     - textureUnitManager（纹理单元管理器）
+          //   释放完成后再 loseContext() 彻底关闭 WebGL 上下文。
+          //
+          // releaseGraphicsResources 内部调用链：
+          //   openGLRenderWindow.releaseGraphicsResources()
+          //   → 遍历 renderers → glRen.releaseGraphicsResources()
+          //   → 遍历 viewProps (actors) → volume.releaseGraphicsResources()
+          //   → mapper.releaseGraphicsResources() → scalarTextures[i].releaseGraphicsResources()
+          //   → gl.deleteTexture(model.handle)  ← 真正释放 GPU 纹理
+          if (glRenderWindow && typeof glRenderWindow.releaseGraphicsResources === 'function') {
+            try {
+              glRenderWindow.releaseGraphicsResources();
+            } catch (e) {
+              console.warn('[ViewportService] releaseGraphicsResources failed for', index, e);
+            }
+          }
+
+          // 释放 GPU 资源后，再调用 loseContext() 彻底关闭 WebGL 上下文
           const gl = glRenderWindow?.get3DContext?.() ?? glRenderWindow?.getContext?.();
           if (gl?.getExtension) {
             const loseExt = gl.getExtension('WEBGL_lose_context');
             if (loseExt) { loseExt.loseContext(); releasedCount++; }
+          }
+
+          // [2026-07-28 GPU 残留修复] 显式删除 VTK OpenGL 渲染窗口并清空 context/canvas 引用。
+          //
+          // 问题：loseContext() 只是标记上下文为 "lost"，不会立即释放 GPU 资源。
+          // GPU 驱动会等到 WebGL 上下文对象被 GC 回收后才真正释放显存。
+          // 但 VTK 的 vtkOpenGLRenderWindow 持有 model.context 和 model.canvas 引用，阻止 GC，
+          // 导致 GPU 内存残留 ~300 MB（关闭标签页后才释放）。
+          //
+          // 修复：在 loseContext() 后立即调用 glRenderWindow.delete()，
+          // 然后显式将 model.context 和 model.canvas 设为 null，解除引用链，
+          // 让 GC 可以回收 WebGL 上下文。这样 GPU 驱动能在返回查询界面后立即释放显存，
+          // 无需等标签页关闭。
+          //
+          // 验证：
+          // - 修复前：返回后 GPU 进程 1.65 GB，关闭标签页后 224 MB（差 1.4 GB）
+          // - 修复后（第1步）：返回后 GPU 进程 550 MB（Workers 终止后）
+          // - 修复后（第2步）：返回后 GPU 进程应接近 224 MB 基线
+          try {
+            if (glRenderWindow && !glRenderWindow.isDeleted?.()) {
+              glRenderWindow.delete();
+              // 显式清空 context 和 canvas 引用，打破 WebGLContext → GPU 内存的引用链
+              const glRWM = glRenderWindow as any;
+              if (glRWM?.model) {
+                glRWM.model.context = null;
+                glRWM.model.canvas = null;
+              }
+            }
+          } catch (e) {
+            console.warn('[ViewportService] glRenderWindow.delete() failed for', index, e);
           }
         } catch (e) {
           console.warn('[ViewportService] WebGL context release failed for', index, e);

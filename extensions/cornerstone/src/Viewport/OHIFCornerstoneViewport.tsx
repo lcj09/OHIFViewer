@@ -244,8 +244,36 @@ const OHIFCornerstoneViewport = React.memo(
         // disableElement() 只触发 removeWidgets() 和 ELEMENT_DISABLED 事件,
         // 不会显式释放 vtkRenderWindow / interactor / actor 等底层 C++ 对象,
         // 必须在这里手动调用 .delete() 切断 VTK 与 DOM 的联系。
+        //
+        // 【架构说明】OHIF 使用 ContextPoolRenderingEngine，renderWindow 和 interactor
+        // 是 RenderingEngine 级别的共享单例（所有 viewport 共用一个），不能在单个
+        // viewport 卸载时 delete/unbindEvents。只有 vtkRenderer 是每个 viewport 唯一的。
+        // 共享对象（renderWindow/interactor/openGLRenderWindow）的释放由
+        // vtkOffscreenMultiRenderWindow.destroy() 在 renderingEngine.destroy() 时统一处理。
+        //
+        // 【GPU 纹理释放顺序 - 2026-07-27 修复】
+        // 不能在此处删除 mapper 和 actor！原因：
+        //   1. mapper.delete() 不释放 scalarTextures 的 GPU 纹理（只注销引用计数）
+        //   2. actor.delete() 会导致 renderer.viewProps 失效
+        //   3. removeAllViewProps() 会清空 viewProps
+        //   如果在此处执行上述操作，后续 _releaseWebGLContexts() 中的
+        //   releaseGraphicsResources() 遍历 viewProps 时找不到 actor/mapper，
+        //   导致 CT(~246MB) + PT(~246MB) 的 3D 纹理无法释放！
+        //
+        // 正确顺序：
+        //   1. 此处只删除 transferFunction（独立 JS 对象，不持有 GPU 资源）
+        //   2. 保留 actor/mapper 在 renderer 中
+        //   3. _releaseWebGLContexts() → releaseGraphicsResources() 遍历 viewProps
+        //      → mapper → scalarTextures → gl.deleteTexture() 释放 GPU 纹理
+        //   4. renderingEngine.destroy() → context.delete() → destroy()
+        //      → removeAllViewProps() + renderer.delete() + renderWindow.delete()
+        //      此时 GPU 纹理已释放，可以安全删除 VTK 对象
         try {
           const csViewport = cornerstoneViewportService.getViewport?.(viewportId);
+
+          // 只释放 transferFunction（ColorTransferFunction / PiecewiseFunction）
+          // 这些是独立的 JS 对象，持有大型 RGB 查找表数组，但不持有 GPU 纹理。
+          // 可以安全删除，不影响后续 releaseGraphicsResources() 的遍历。
           const actorEntries = csViewport?.getActors?.();
           if (actorEntries?.length) {
             actorEntries.forEach(entry => {
@@ -270,18 +298,19 @@ const OHIFCornerstoneViewport = React.memo(
                     gradTF.delete();
                   }
                 }
-                // 释放 mapper (VolumeMapper 持有对 volume 的引用和 scalar data 引用)
-                const mapper = actor.getMapper?.();
-                if (mapper && typeof mapper.delete === 'function' && !mapper.isDeleted?.()) {
-                  mapper.delete();
-                }
-                // 最后释放 actor 自身
-                if (typeof actor.delete === 'function' && !actor.isDeleted?.()) {
-                  actor.delete();
-                }
+                // 【不要删除 mapper 和 actor！】
+                // mapper.delete() 不释放 scalarTextures 的 GPU 纹理，
+                // 且会导致后续 releaseGraphicsResources() 无法遍历到 mapper。
+                // mapper 和 actor 的最终释放由 renderingEngine.destroy() 处理。
               } catch { /* actor already destroyed */ }
             });
           }
+
+          // 【不要调用 removeAllViewProps()！】
+          // 需要保留 viewProps，让 _releaseWebGLContexts() 中的
+          // releaseGraphicsResources() 能遍历到 actor/mapper，释放 GPU 纹理。
+          // removeAllViewProps() 由 vtkOffscreenMultiRenderWindow.destroy() 在
+          // renderingEngine.destroy() 时统一调用。
         } catch (e) {
           console.warn('[OHIFViewport] VTK actor cleanup failed for', viewportId, e);
         }

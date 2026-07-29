@@ -150,6 +150,19 @@ export default class ToolbarService extends PubSubService {
       });
       this.unsubscriptions = [];
     }
+    // 【2026-07-28 修复】清理 _serviceSubscriptions，防止每次 mode 切换累积失效的订阅引用。
+    // registerEventForToolbarUpdate 将订阅推到 _serviceSubscriptions，但 reset() 不清理它。
+    // 虽然对应的服务 listeners 会被 ExtensionManager 统一清空（使回调失效），
+    // 但 _serviceSubscriptions 数组本身持续增长，是轻微内存泄漏。
+    if (this._serviceSubscriptions?.length) {
+      this._serviceSubscriptions.forEach(unsub => {
+        try {
+          if (unsub?.unsubscribe) unsub.unsubscribe();
+          else if (typeof unsub === 'function') unsub();
+        } catch { /* ignore */ }
+      });
+      this._serviceSubscriptions = [];
+    }
     this.reset();
   }
 

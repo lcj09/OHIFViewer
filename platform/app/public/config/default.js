@@ -26,9 +26,20 @@ window.config = {
   experimentalStudyBrowserSort: false,
   strictZSpacingForVolumeViewport: true,
   // [2026-07-08 WebGL内存优化] TMTV模式仅4个视口，减少WebGL上下文数量(默认7个)
-  webGlContextCount: 4,
-  // [2026-07-08 WebGL内存优化] 增大缓存到4GB，减少频繁淘汰
-  maxCacheSize: 4 * 1024 * 1024 * 1024,
+  // [2026-07-27 GPU显存优化] 从4降到1：每个WebGL上下文都会复制一份volume纹理(CT+PT)，
+  // 4个上下文导致GPU显存5-8GB；1个上下文所有viewport共享纹理，显存降到1.5-2GB。
+  // MIP 3D旋转是相机操作，不依赖上下文数量，功能不受影响。
+  webGlContextCount: 1,
+  // [2026-07-27 内存动态优化] 根据设备内存动态设置 maxCacheSize，适配集显电脑
+  // navigator.deviceMemory 返回设备内存(GB)，仅 Chrome 系支持；不支持时回退到 16GB 档位
+  // 策略：≤8GB 给 512MB；≤16GB 给 1.5GB；>16GB 给 2.5GB
+  maxCacheSize: (() => {
+    const deviceMemoryGB = navigator.deviceMemory || 16;
+    const GB = 1024 * 1024 * 1024;
+    if (deviceMemoryGB <= 8) return 0.5 * GB;
+    if (deviceMemoryGB <= 16) return 1.5 * GB;
+    return 2.5 * GB;
+  })(),
   groupEnabledModesFirst: true,
   allowMultiSelectExport: false,
   maxNumRequests: {

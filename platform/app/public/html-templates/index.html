@@ -45,6 +45,15 @@
     <script type="text/javascript">
       console.time('scriptToView');
       window.PUBLIC_URL = '<%= PUBLIC_URL %>';
+      // Polyfill Node.js globals for ONNX Runtime Web (ort.webgpu.min.js / ort.webgl.min.js)
+      // These files are copied to dist/ort/ by CopyWebpackPlugin and loaded in browser context,
+      // but they reference Node.js __filename which doesn't exist in browsers.
+      if (typeof __filename === 'undefined') {
+        window.__filename = '';
+      }
+      if (typeof __dirname === 'undefined') {
+        window.__dirname = '';
+      }
     </script>
     <link
       rel="manifest"
