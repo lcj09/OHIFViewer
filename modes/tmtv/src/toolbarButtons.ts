@@ -281,8 +281,8 @@ const toolbarButtons = [
     props: {
       icon: 'tool-crosshair',
       label: i18n.t('Buttons:Crosshairs'),
-      commands: setToolActiveToolbar,
-      evaluate: 'evaluate.cornerstoneTool',
+      commands: 'toggleTMTVCrosshairs',
+      evaluate: 'evaluate.action',
     },
   },
   // [2026-05-19 新增] 单切线旋转按钮 - 与十字线类似，但旋转时仅影响一条参考线对应的一个视口

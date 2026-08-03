@@ -4,8 +4,12 @@
 // 下拉菜单包含：
 //   1. 十字线 - 切换十字线参考线的可见性
 //   2. 患者信息 - 切换视口四角患者信息的可见性
+//
+// [2026-07-30 修改] 集成 TMTVCrosshairService
+//   - TMTV 布局（AXIAL/Sagittal/Coronal）使用 TMTVCrosshairService（SVG overlay）
+//   - 其他布局使用原始逻辑（Cornerstone CrosshairsTool，仅 fusion + mip toolGroup）
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import PropTypes from 'prop-types';
 import {
   Popover,
@@ -17,21 +21,87 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '@ohif/ui-next';
+import tmtvCrosshairService from '../services/TMTVCrosshairService';
 
 function OverlayMenu({ commandsManager, servicesManager, ...props }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showCrosshairs, setShowCrosshairs] = useState(true);
   const [showPatientInfo, setShowPatientInfo] = useState(true);
+  // 使用 ref 保存 showCrosshairs 的最新值，避免 useEffect 闭包问题
+  const showCrosshairsRef = useRef(true);
+  const isMountedRef = useRef(true);
+  // 保存 pending 的 setTimeout ID，用于组件卸载时清除
+  const pendingTimeoutRef = useRef<number | null>(null);
 
   const {
     toolGroupService,
     cornerstoneViewportService,
     customizationService,
     viewportGridService,
+    hangingProtocolService,
   } = servicesManager.services;
 
-  // 检查十字线工具是否在所有工具组中处于active状态
+  // 同步 showCrosshairs 到 ref
+  useEffect(() => {
+    showCrosshairsRef.current = showCrosshairs;
+  }, [showCrosshairs]);
+
+  // [2026-07-30 新增] 获取当前布局的 stage ID
+  const getCurrentStageId = useCallback(() => {
+    try {
+      const currentStage = hangingProtocolService?._getCurrentStageModel?.();
+      return currentStage?.id || '';
+    } catch (e) {
+      return '';
+    }
+  }, [hangingProtocolService]);
+
+  // [2026-07-30 新增] 判断当前是否为 TMTV 布局（AXIAL/Sagittal/Coronal）
+  const checkIsTmtvLayout = useCallback(() => {
+    const stageId = getCurrentStageId();
+    return tmtvCrosshairService.isTmtvLayout(stageId);
+  }, [getCurrentStageId]);
+
+  // [2026-07-30 新增] 注册 TMTV 布局的 viewport 到 TMTVCrosshairService
+  const registerTmtvViewports = useCallback(() => {
+    const stageId = getCurrentStageId();
+    const viewportIds = tmtvCrosshairService.getViewportIdsForStage(stageId);
+
+    // 先清空旧的注册
+    tmtvCrosshairService.clear();
+
+    if (viewportIds.length === 0) {
+      return;
+    }
+
+    // 注册每个 viewport
+    let registeredCount = 0;
+    viewportIds.forEach(vpId => {
+      try {
+        const viewport = cornerstoneViewportService.getCornerstoneViewport(vpId);
+        if (viewport) {
+          tmtvCrosshairService.addViewport(vpId, viewport);
+          registeredCount++;
+        }
+      } catch (e) {
+        console.warn(`[OverlayMenu] 注册 viewport 失败 (${vpId})`, e);
+      }
+    });
+
+    // 如果有注册成功的 viewport，恢复十字线显示状态
+    if (registeredCount > 0 && showCrosshairsRef.current) {
+      tmtvCrosshairService.setVisible(true);
+    }
+  }, [getCurrentStageId, cornerstoneViewportService]);
+
+  // 检查十字线工具是否处于 active 状态（非 TMTV 布局使用）
   const checkCrosshairsActive = useCallback(() => {
+    // TMTV 布局使用 TMTVCrosshairService 的状态
+    if (checkIsTmtvLayout()) {
+      return tmtvCrosshairService.getVisible();
+    }
+
+    // 其他布局使用 Cornerstone CrosshairsTool 的状态
     try {
       const toolGroupIds = ['fusionToolGroup', 'mipToolGroup'];
       for (const tgId of toolGroupIds) {
@@ -45,13 +115,12 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
     } catch (e) {
       return false;
     }
-  }, [toolGroupService]);
+  }, [toolGroupService, checkIsTmtvLayout]);
 
-  // 检查患者信息是否可见（通过 customizationService 的 viewportOverlay 配置）
+  // 检查患者信息是否可见
   const checkPatientInfoVisible = useCallback(() => {
     try {
       const viewportOverlay = customizationService.getCustomization('viewportOverlay');
-      // 如果 viewportOverlay 存在且未设置 hideAll，则认为可见
       if (viewportOverlay && viewportOverlay.hideAll === true) return false;
       return true;
     } catch (e) {
@@ -59,17 +128,92 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
     }
   }, [customizationService]);
 
+  // [2026-07-30 新增] 监听布局变化，自动注册/清理 viewport
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    const handleLayoutChanged = () => {
+      if (!isMountedRef.current) return;
+
+      const tmtv = checkIsTmtvLayout();
+
+      if (tmtv) {
+        // 清除之前的 pending timeout，避免重复注册
+        if (pendingTimeoutRef.current) {
+          clearTimeout(pendingTimeoutRef.current);
+        }
+        // TMTV 布局：延迟注册 viewport，等待 viewport 渲染完成
+        pendingTimeoutRef.current = window.setTimeout(() => {
+          if (!isMountedRef.current) return;
+          if (checkIsTmtvLayout()) {
+            registerTmtvViewports();
+          }
+        }, 500);
+      } else {
+        // 非 TMTV 布局：清理 TMTVCrosshairService
+        tmtvCrosshairService.clear();
+      }
+    };
+
+    const handleViewportsReady = () => {
+      if (!isMountedRef.current) return;
+      if (checkIsTmtvLayout()) {
+        registerTmtvViewports();
+      }
+    };
+
+    // 监听布局变化和 viewport 准备完成事件
+    const subscriptionLayoutChanged = viewportGridService.subscribe(
+      viewportGridService.EVENTS.LAYOUT_CHANGED,
+      handleLayoutChanged
+    );
+
+    const subscriptionViewportsReady = viewportGridService.subscribe(
+      viewportGridService.EVENTS.VIEWPORTS_READY,
+      handleViewportsReady
+    );
+
+    // 初始检查
+    handleLayoutChanged();
+
+    return () => {
+      isMountedRef.current = false;
+      // 清除 pending 的 setTimeout，防止组件卸载后回调执行
+      if (pendingTimeoutRef.current) {
+        clearTimeout(pendingTimeoutRef.current);
+        pendingTimeoutRef.current = null;
+      }
+      // subscribe() 返回 { unsubscribe: () => void } 对象
+      if (subscriptionLayoutChanged?.unsubscribe) subscriptionLayoutChanged.unsubscribe();
+      if (subscriptionViewportsReady?.unsubscribe) subscriptionViewportsReady.unsubscribe();
+      // 组件卸载时清理十字线服务
+      tmtvCrosshairService.clear();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 初始化时检查状态
   useEffect(() => {
     setShowCrosshairs(checkCrosshairsActive());
     setShowPatientInfo(checkPatientInfoVisible());
   }, [checkCrosshairsActive, checkPatientInfoVisible]);
 
-  // 切换十字线可见性
+  // [2026-07-30 修改] 切换十字线可见性
+  // TMTV 布局使用 TMTVCrosshairService（SVG overlay）
+  // 其他布局使用原始逻辑（Cornerstone CrosshairsTool）
   const handleToggleCrosshairs = () => {
     const newState = !showCrosshairs;
     setShowCrosshairs(newState);
 
+    const tmtv = checkIsTmtvLayout();
+
+    if (tmtv) {
+      // TMTV 布局：使用 TMTVCrosshairService
+      tmtvCrosshairService.setVisible(newState);
+      return;
+    }
+
+    // 其他布局：使用原始逻辑（Cornerstone CrosshairsTool）
     const toolGroupIds = ['fusionToolGroup', 'mipToolGroup'];
     toolGroupIds.forEach(tgId => {
       try {
@@ -78,13 +222,11 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
         const csToolGroup = toolGroup._toolGroup || toolGroup;
 
         if (newState) {
-          // 激活十字线
           commandsManager.runCommand('setToolActiveToolbar', {
             toolName: 'Crosshairs',
             toolGroupIds: [tgId],
           });
         } else {
-          // 停用十字线（设为 passive）
           csToolGroup.setToolPassive('Crosshairs');
         }
       } catch (e) {
@@ -111,18 +253,15 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
 
     try {
       if (newState) {
-        // 显示患者信息：移除 hideAll 设置
         customizationService.setCustomizations({
           viewportOverlay: {},
         });
       } else {
-        // 隐藏患者信息：设置 hideAll
         customizationService.setCustomizations({
           viewportOverlay: { hideAll: true },
         });
       }
 
-      // 触发所有视口重新渲染
       const viewportIds = viewportGridService.getViewportIds();
       if (viewportIds) {
         viewportIds.forEach(vpId => {

@@ -14,6 +14,8 @@ import dicomRTAnnotationExport from './utils/dicomRTAnnotationExport/RTStructure
 
 import { Enums } from '@cornerstonejs/tools';
 import { utils } from '@ohif/core';
+import tmtvCrosshairService from './services/TMTVCrosshairService';
+import { toolGroupIds } from '../../../modes/tmtv/src/initToolGroups';
 
 const { SegmentationRepresentations } = Enums;
 const { formatPN } = utils;
@@ -695,6 +697,56 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         console.warn('resetFusionAdjust: 重置微调失败', e);
       }
     },
+    // ============================================================================
+    // [2026-07-30 新增] TMTV 十字线切换命令
+    // ============================================================================
+    //
+    // 功能：在 TMTV 布局中切换 SVG 十字线的显示/隐藏
+    //
+    // 逻辑：
+    //   - 如果当前是 TMTV 布局（AXIAL/Sagittal/Coronal）：
+    //     1. 获取当前 stage ID 和对应的 viewportId 列表
+    //     2. 注册所有 viewport 到 TMTVCrosshairService
+    //     3. 切换十字线可见性（toggle）
+    //   - 如果当前不是 TMTV 布局：
+    //     执行原始的 setToolActiveToolbar 逻辑（Cornerstone CrosshairsTool）
+    //
+    // 使用场景：
+    //   工具栏的"十字线"按钮调用此命令
+    //
+    // ============================================================================
+    toggleTMTVCrosshairs: () => {
+      const stageId = hangingProtocolService?._getCurrentStageModel?.()?.id || '';
+      const isTmtv = tmtvCrosshairService.isTmtvLayout(stageId);
+
+      if (!isTmtv) {
+        // 非 TMTV 布局：使用原始 Cornerstone CrosshairsTool 逻辑
+        commandsManager.runCommand('setToolActiveToolbar', {
+          toolName: 'Crosshairs',
+          toolGroupIds: [toolGroupIds.CT, toolGroupIds.PT, toolGroupIds.Fusion, toolGroupIds.MIP],
+        });
+        return;
+      }
+
+      // TMTV 布局：使用 TMTVCrosshairService（SVG overlay）
+      const viewportIds = tmtvCrosshairService.getViewportIdsForStage(stageId);
+
+      // 注册所有 viewport（如果还没注册）
+      viewportIds.forEach(vpId => {
+        try {
+          const viewport = cornerstoneViewportService.getCornerstoneViewport(vpId);
+          if (viewport && !tmtvCrosshairService.getViewport(vpId)) {
+            tmtvCrosshairService.addViewport(vpId, viewport);
+          }
+        } catch (e) {
+          console.warn(`toggleTMTVCrosshairs: 注册 viewport 失败 (${vpId})`, e);
+        }
+      });
+
+      // 切换可见性
+      const currentlyVisible = tmtvCrosshairService.getVisible();
+      tmtvCrosshairService.setVisible(!currentlyVisible);
+    },
   };
 
   const definitions = {
@@ -739,6 +791,9 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     resetFusionAdjust: {
       commandFn: actions.resetFusionAdjust,
+    },
+    toggleTMTVCrosshairs: {
+      commandFn: actions.toggleTMTVCrosshairs,
     },
   };
 
