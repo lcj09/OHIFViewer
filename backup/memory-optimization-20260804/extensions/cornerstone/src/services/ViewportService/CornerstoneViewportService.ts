@@ -1532,51 +1532,9 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       });
     }
 
-    // [GPU内存优化] 切换序列前保存旧 actors，setVolumes 后释放其 GPU 纹理。
-    // BaseVolumeViewport.setVolumes() 会替换旧 actor 但不释放 GPU 纹理，
-    // 导致旧 CT/PT 纹理残留在 GPU 中，每次切换序列 GPU 内存累积。
-    let oldActorEntries: any[] = [];
-    try {
-      oldActorEntries = viewport.getActors?.() || [];
-    } catch { /* ignore */ }
-
     await viewport.setVolumes(volumeInputArray);
     await this._addOverlayRepresentations(overlayProcessingResults);
     viewport.render();
-
-    // setVolumes 完成后，释放旧 actor 的 GPU 纹理
-    // 纹理存储在 mapper.model 中：scalarTextures(数组)、colorTexture、opacityTexture
-    try {
-      const renderingEngine = this.renderingEngine;
-      const glRenderWindow = renderingEngine?.getContexts?.()?.[0]?.getGLRenderWindow?.();
-
-      oldActorEntries.forEach(entry => {
-        const actor = entry?.actor;
-        if (!actor) return;
-        try {
-          const mapper = actor.getMapper?.();
-          if (mapper && mapper.model) {
-            const m = mapper.model;
-            // 释放 scalarTextures 数组中的每个纹理
-            if (m.scalarTextures && Array.isArray(m.scalarTextures)) {
-              m.scalarTextures.forEach(tex => {
-                if (tex && glRenderWindow) {
-                  try { tex.releaseGraphicsResources(glRenderWindow); } catch { /* ignore */ }
-                }
-              });
-            }
-            // 释放 colorTexture
-            if (m.colorTexture && glRenderWindow) {
-              try { m.colorTexture.releaseGraphicsResources(glRenderWindow); } catch { /* ignore */ }
-            }
-            // 释放 opacityTexture
-            if (m.opacityTexture && glRenderWindow) {
-              try { m.opacityTexture.releaseGraphicsResources(glRenderWindow); } catch { /* ignore */ }
-            }
-          }
-        } catch { /* actor already destroyed */ }
-      });
-    } catch { /* cleanup failed */ }
 
     volumesProperties.forEach(({ properties, volumeId }) => {
       timeoutViewportCallback(() => {

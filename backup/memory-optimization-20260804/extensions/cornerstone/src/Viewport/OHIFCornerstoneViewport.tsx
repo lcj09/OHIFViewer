@@ -1,0 +1,605 @@
+import React, { useEffect, useRef, useCallback, useState } from 'react';
+import * as cs3DTools from '@cornerstonejs/tools';
+import { Enums, eventTarget, getEnabledElement } from '@cornerstonejs/core';
+import { MeasurementService, useViewportRef } from '@ohif/core';
+import { useViewportDialog } from '@ohif/ui-next';
+import type { Types as csTypes } from '@cornerstonejs/core';
+
+import { setEnabledElement } from '../state';
+
+import './OHIFCornerstoneViewport.css';
+import CornerstoneOverlays from './Overlays/CornerstoneOverlays';
+import CinePlayer from '../components/CinePlayer';
+import type { Types } from '@ohif/core';
+
+import OHIFViewportActionCorners from '../components/OHIFViewportActionCorners';
+import { getViewportPresentations } from '../utils/presentations/getViewportPresentations';
+import { useSynchronizersStore } from '../stores/useSynchronizersStore';
+import ActiveViewportBehavior from '../utils/ActiveViewportBehavior';
+import { WITH_NAVIGATION } from '../services/ViewportService/CornerstoneViewportService';
+
+const STACK = 'stack';
+
+// Cache for viewport dimensions, persists across component remounts
+const viewportDimensions = new Map<string, { width: number; height: number }>();
+
+/**
+ * Clears the module-level viewport dimensions cache.
+ * Called on mode exit to release references to viewport size objects that
+ * would otherwise persist across mode switches.
+ */
+export function clearViewportDimensionsCache() {
+  viewportDimensions.clear();
+}
+
+// Todo: This should be done with expose of internal API similar to react-vtkjs-viewport
+// Then we don't need to worry about the re-renders if the props change.
+const OHIFCornerstoneViewport = React.memo(
+  (
+    props: withAppTypes<{
+      viewportId: string;
+      displaySets: AppTypes.DisplaySet[];
+      viewportOptions: AppTypes.ViewportGrid.GridViewportOptions;
+      initialImageIndex: number;
+    }>
+  ) => {
+    const {
+      displaySets,
+      dataSource,
+      viewportOptions,
+      displaySetOptions,
+      servicesManager,
+      onElementEnabled,
+      // eslint-disable-next-line react/prop-types
+      onElementDisabled,
+      isJumpToMeasurementDisabled = false,
+      // Note: you SHOULD NOT use the initialImageIdOrIndex for manipulation
+      // of the imageData in the OHIFCornerstoneViewport. This prop is used
+      // to set the initial state of the viewport's first image to render
+      // eslint-disable-next-line react/prop-types
+      initialImageIndex,
+      // if the viewport is part of a hanging protocol layout
+      // we should not really rely on the old synchronizers and
+      // you see below we only rehydrate the synchronizers if the viewport
+      // is not part of the hanging protocol layout. HPs should
+      // define their own synchronizers. Since the synchronizers are
+      // viewportId dependent and
+      // eslint-disable-next-line react/prop-types
+      isHangingProtocolLayout,
+    } = props;
+    const viewportId = viewportOptions.viewportId;
+
+    if (!viewportId) {
+      throw new Error('Viewport ID is required');
+    }
+
+    // Make sure displaySetOptions has one object per displaySet
+    while (displaySetOptions.length < displaySets.length) {
+      displaySetOptions.push({});
+    }
+
+    // Since we only have support for dynamic data in volume viewports, we should
+    // handle this case here and set the viewportType to volume if any of the
+    // displaySets are dynamic volumes
+    viewportOptions.viewportType = displaySets.some(
+      ds => ds.isDynamicVolume && ds.isReconstructable
+    )
+      ? 'volume'
+      : viewportOptions.viewportType;
+
+    const [scrollbarHeight, setScrollbarHeight] = useState('100px');
+    const [enabledVPElement, setEnabledVPElement] = useState(null);
+    const elementRef = useRef() as React.MutableRefObject<HTMLDivElement>;
+    const viewportRef = useViewportRef(viewportId);
+
+    const {
+      displaySetService,
+      toolbarService,
+      toolGroupService,
+      syncGroupService,
+      cornerstoneViewportService,
+      segmentationService,
+      cornerstoneCacheService,
+      customizationService,
+      measurementService,
+    } = servicesManager.services;
+
+    const [viewportDialogState] = useViewportDialog();
+    // useCallback for scroll bar height calculation
+    const setImageScrollBarHeight = useCallback(() => {
+      const scrollbarHeight = `${elementRef.current.clientHeight - 10}px`;
+      setScrollbarHeight(scrollbarHeight);
+    }, [elementRef]);
+
+    // useCallback for onResize
+    const onResize = useCallback(
+      (entries: ResizeObserverEntry[]) => {
+        if (elementRef.current && entries?.length) {
+          const entry = entries[0];
+          const { width, height } = entry.contentRect;
+
+          const prevDimensions = viewportDimensions.get(viewportId) || { width: 0, height: 0 };
+
+          // Check if dimensions actually changed and then only resize if they have changed
+          const hasDimensionsChanged =
+            prevDimensions.width !== width || prevDimensions.height !== height;
+
+          if (width > 0 && height > 0 && hasDimensionsChanged) {
+            viewportDimensions.set(viewportId, { width, height });
+            // Perform resize operations
+            cornerstoneViewportService.resize();
+            setImageScrollBarHeight();
+          }
+        }
+      },
+      [viewportId, elementRef, cornerstoneViewportService, setImageScrollBarHeight]
+    );
+
+    useEffect(() => {
+      const element = elementRef.current;
+      if (!element) {
+        return;
+      }
+
+      const resizeObserver = new ResizeObserver(onResize);
+      resizeObserver.observe(element);
+
+      // Cleanup function
+      return () => {
+        resizeObserver.unobserve(element);
+        resizeObserver.disconnect();
+      };
+    }, [onResize]);
+
+    const cleanUpServices = useCallback(
+      viewportInfo => {
+        const renderingEngineId = viewportInfo.getRenderingEngineId();
+        const syncGroups = viewportInfo.getSyncGroups();
+
+        toolGroupService.removeViewportFromToolGroup(viewportId, renderingEngineId);
+        syncGroupService.removeViewportFromSyncGroup(viewportId, renderingEngineId, syncGroups);
+
+        segmentationService.clearSegmentationRepresentations(viewportId);
+      },
+      [viewportId, segmentationService, syncGroupService, toolGroupService]
+    );
+
+    const elementEnabledHandler = useCallback(
+      evt => {
+        // check this is this element reference and return early if doesn't match
+        if (evt.detail.element !== elementRef.current) {
+          return;
+        }
+
+        const { viewportId, element } = evt.detail;
+        const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
+
+        if (!viewportInfo) {
+          return;
+        }
+
+        setEnabledElement(viewportId, element);
+        setEnabledVPElement(element);
+
+        const renderingEngineId = viewportInfo.getRenderingEngineId();
+        const toolGroupId = viewportInfo.getToolGroupId();
+        const syncGroups = viewportInfo.getSyncGroups();
+
+        toolGroupService.addViewportToToolGroup(viewportId, renderingEngineId, toolGroupId);
+
+        syncGroupService.addViewportToSyncGroup(viewportId, renderingEngineId, syncGroups);
+
+        // we don't need reactivity here so just use state
+        const { synchronizersStore } = useSynchronizersStore.getState();
+        if (synchronizersStore?.[viewportId]?.length && !isHangingProtocolLayout) {
+          // If the viewport used to have a synchronizer, re apply it again
+          _rehydrateSynchronizers(viewportId, syncGroupService);
+        }
+
+        if (onElementEnabled && typeof onElementEnabled === 'function') {
+          onElementEnabled(evt);
+        }
+      },
+      [viewportId, onElementEnabled, toolGroupService]
+    );
+
+    // disable the element upon unmounting
+    useEffect(() => {
+      cornerstoneViewportService.enableViewport(viewportId, elementRef.current);
+
+      eventTarget.addEventListener(Enums.Events.ELEMENT_ENABLED, elementEnabledHandler);
+
+      setImageScrollBarHeight();
+
+      return () => {
+        // Always clear this viewport's entry from the module-level dimensions cache
+        viewportDimensions.delete(viewportId);
+
+        const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
+
+        // Always remove the ELEMENT_ENABLED listener, even if viewportInfo is null,
+        // to prevent event listener leaks when viewportInfo is unavailable.
+        const cleanupListener = () => {
+          eventTarget.removeEventListener(Enums.Events.ELEMENT_ENABLED, elementEnabledHandler);
+        };
+
+        if (!viewportInfo) {
+          // Expected when ModeRoute cleanup already destroyed the viewport service
+          cleanupListener();
+          return;
+        }
+
+        try {
+          cornerstoneViewportService.storePresentation({ viewportId });
+          cleanUpServices(viewportInfo);
+        } catch (e) {
+          console.warn('[OHIFViewport] cleanup failed for', viewportId, e);
+        }
+
+        if (onElementDisabled && typeof onElementDisabled === 'function') {
+          onElementDisabled(viewportInfo);
+        }
+
+        // 【关键】在 disableElement 之前手动清理 VTK 资源，不依赖 React 自动回收。
+        // disableElement() 只触发 removeWidgets() 和 ELEMENT_DISABLED 事件,
+        // 不会显式释放 vtkRenderWindow / interactor / actor 等底层 C++ 对象,
+        // 必须在这里手动调用 .delete() 切断 VTK 与 DOM 的联系。
+        //
+        // 【架构说明】OHIF 使用 ContextPoolRenderingEngine，renderWindow 和 interactor
+        // 是 RenderingEngine 级别的共享单例（所有 viewport 共用一个），不能在单个
+        // viewport 卸载时 delete/unbindEvents。只有 vtkRenderer 是每个 viewport 唯一的。
+        // 共享对象（renderWindow/interactor/openGLRenderWindow）的释放由
+        // vtkOffscreenMultiRenderWindow.destroy() 在 renderingEngine.destroy() 时统一处理。
+        //
+        // 【GPU 纹理释放顺序 - 2026-07-27 修复】
+        // 不能在此处删除 mapper 和 actor！原因：
+        //   1. mapper.delete() 不释放 scalarTextures 的 GPU 纹理（只注销引用计数）
+        //   2. actor.delete() 会导致 renderer.viewProps 失效
+        //   3. removeAllViewProps() 会清空 viewProps
+        //   如果在此处执行上述操作，后续 _releaseWebGLContexts() 中的
+        //   releaseGraphicsResources() 遍历 viewProps 时找不到 actor/mapper，
+        //   导致 CT(~246MB) + PT(~246MB) 的 3D 纹理无法释放！
+        //
+        // 正确顺序：
+        //   1. 此处只删除 transferFunction（独立 JS 对象，不持有 GPU 资源）
+        //   2. 保留 actor/mapper 在 renderer 中
+        //   3. _releaseWebGLContexts() → releaseGraphicsResources() 遍历 viewProps
+        //      → mapper → scalarTextures → gl.deleteTexture() 释放 GPU 纹理
+        //   4. renderingEngine.destroy() → context.delete() → destroy()
+        //      → removeAllViewProps() + renderer.delete() + renderWindow.delete()
+        //      此时 GPU 纹理已释放，可以安全删除 VTK 对象
+        try {
+          const csViewport = cornerstoneViewportService.getViewport?.(viewportId);
+
+          // 只释放 transferFunction（ColorTransferFunction / PiecewiseFunction）
+          // 这些是独立的 JS 对象，持有大型 RGB 查找表数组，但不持有 GPU 纹理。
+          // 可以安全删除，不影响后续 releaseGraphicsResources() 的遍历。
+          const actorEntries = csViewport?.getActors?.();
+          if (actorEntries?.length) {
+            actorEntries.forEach(entry => {
+              const actor = entry?.actor;
+              if (!actor) return;
+              try {
+                const property = actor.getProperty?.();
+                if (property) {
+                  // 释放 ColorTransferFunction (RGB 查找表, 持有大型数组)
+                  const rgbTF = property.getRGBTransferFunction?.(0);
+                  if (rgbTF && typeof rgbTF.delete === 'function' && !rgbTF.isDeleted?.()) {
+                    rgbTF.delete();
+                  }
+                  // 释放 PiecewiseFunction (标量不透明度)
+                  const opacityTF = property.getScalarOpacity?.(0);
+                  if (opacityTF && typeof opacityTF.delete === 'function' && !opacityTF.isDeleted?.()) {
+                    opacityTF.delete();
+                  }
+                  // 释放 PiecewiseFunction (梯度不透明度)
+                  const gradTF = property.getGradientOpacity?.(0);
+                  if (gradTF && typeof gradTF.delete === 'function' && !gradTF.isDeleted?.()) {
+                    gradTF.delete();
+                  }
+                }
+                // 【不要删除 mapper 和 actor！】
+                // mapper.delete() 不释放 scalarTextures 的 GPU 纹理，
+                // 且会导致后续 releaseGraphicsResources() 无法遍历到 mapper。
+                // mapper 和 actor 的最终释放由 renderingEngine.destroy() 处理。
+              } catch { /* actor already destroyed */ }
+            });
+          }
+
+          // 【不要调用 removeAllViewProps()！】
+          // 需要保留 viewProps，让 _releaseWebGLContexts() 中的
+          // releaseGraphicsResources() 能遍历到 actor/mapper，释放 GPU 纹理。
+          // removeAllViewProps() 由 vtkOffscreenMultiRenderWindow.destroy() 在
+          // renderingEngine.destroy() 时统一调用。
+        } catch (e) {
+          console.warn('[OHIFViewport] VTK actor cleanup failed for', viewportId, e);
+        }
+
+        try {
+          cornerstoneViewportService.disableElement(viewportId);
+        } catch (e) {
+          // Fallback: dispatch ELEMENT_DISABLED so removeEnabledElement removes DOM listeners
+          try {
+            const element = elementRef.current;
+            if (element) {
+              const eventDetail = { element, viewportId, renderingEngineId: 'ohif-rendering-engine' };
+              eventTarget.dispatchEvent(new CustomEvent(Enums.Events.ELEMENT_DISABLED, { detail: eventDetail }));
+            }
+          } catch (e2) {
+            console.warn('[OHIFViewport] fallback also failed for', viewportId, e2);
+          }
+        }
+        viewportRef.unregister();
+
+        cleanupListener();
+
+        // Force-null the element ref to break any remaining references from
+        // closures or external caches to the DOM element. Without this, the
+        // DOM node can be retained by ResizeObserver callbacks or other
+        // module-level state even after the component unmounts.
+        if (elementRef) {
+          elementRef.current = null;
+        }
+      };
+    }, []);
+
+    // subscribe to displaySet metadata invalidation (updates)
+    // Currently, if the metadata changes we need to re-render the display set
+    // for it to take effect in the viewport. As we deal with scaling in the loading,
+    // we need to remove the old volume from the cache, and let the
+    // viewport to re-add it which will use the new metadata. Otherwise, the
+    // viewport will use the cached volume and the new metadata will not be used.
+    // Note: this approach does not actually end of sending network requests
+    // and it uses the network cache
+    useEffect(() => {
+      const { unsubscribe } = displaySetService.subscribe(
+        displaySetService.EVENTS.DISPLAY_SET_SERIES_METADATA_INVALIDATED,
+        async ({
+          displaySetInstanceUID: invalidatedDisplaySetInstanceUID,
+          invalidateData,
+        }: Types.DisplaySetSeriesMetadataInvalidatedEvent) => {
+          if (!invalidateData) {
+            return;
+          }
+
+          const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
+
+          if (viewportInfo.hasDisplaySet(invalidatedDisplaySetInstanceUID)) {
+            const viewportData = viewportInfo.getViewportData();
+            const newViewportData = await cornerstoneCacheService.invalidateViewportData(
+              viewportData,
+              invalidatedDisplaySetInstanceUID,
+              dataSource,
+              displaySetService
+            );
+
+            const keepCamera = true;
+            cornerstoneViewportService.updateViewport(viewportId, newViewportData, keepCamera);
+          }
+        }
+      );
+      return () => {
+        unsubscribe();
+      };
+    }, [viewportId]);
+
+    useEffect(() => {
+      // handle the default viewportType to be stack
+      if (!viewportOptions.viewportType) {
+        viewportOptions.viewportType = STACK;
+      }
+
+      const loadViewportData = async () => {
+        const viewportData = await cornerstoneCacheService.createViewportData(
+          displaySets,
+          viewportOptions,
+          dataSource,
+          initialImageIndex
+        );
+
+        const presentations = getViewportPresentations(viewportId, viewportOptions);
+
+        // Note: This is a hack to get the grid to re-render the OHIFCornerstoneViewport component
+        // Used for segmentation hydration right now, since the logic to decide whether
+        // a viewport needs to render a segmentation lives inside the CornerstoneViewportService
+        // so we need to re-render (force update via change of the needsRerendering) so that React
+        // does the diffing and decides we should render this again (although the id and element has not changed)
+        // so that the CornerstoneViewportService can decide whether to render the segmentation or not. Not that we reached here we can turn it off.
+        if (viewportOptions.needsRerendering) {
+          viewportOptions.needsRerendering = false;
+        }
+
+        cornerstoneViewportService.setViewportData(
+          viewportId,
+          viewportData,
+          viewportOptions,
+          displaySetOptions,
+          presentations
+        );
+      };
+
+      loadViewportData();
+    }, [viewportOptions, displaySets, dataSource]);
+
+    const Notification = customizationService.getCustomization('ui.notificationComponent');
+
+    return (
+
+      <React.Fragment>
+        <div className="viewport-wrapper">
+          <div
+            className="cornerstone-viewport-element"
+            style={{ height: '100%', width: '100%' }}
+            onContextMenu={e => e.preventDefault()}
+            onMouseDown={e => e.preventDefault()}
+            data-viewportid={viewportId}
+            ref={el => {
+              elementRef.current = el;
+              if (el) {
+                viewportRef.register(el);
+              }
+            }}
+          ></div>
+          <CornerstoneOverlays
+            viewportId={viewportId}
+            toolBarService={toolbarService}
+            element={elementRef.current}
+            scrollbarHeight={scrollbarHeight}
+            servicesManager={servicesManager}
+          />
+          <CinePlayer
+            enabledVPElement={enabledVPElement}
+            viewportId={viewportId}
+            servicesManager={servicesManager}
+          />
+          <ActiveViewportBehavior
+            viewportId={viewportId}
+            servicesManager={servicesManager}
+          />
+        </div>
+        {/* top offset of 24px to account for ViewportActionCorners. */}
+        <div className="absolute top-[24px] w-full">
+          {viewportDialogState.viewportId === viewportId && (
+            <Notification
+              id="viewport-notification"
+              message={viewportDialogState.message}
+              type={viewportDialogState.type}
+              actions={viewportDialogState.actions}
+              onSubmit={viewportDialogState.onSubmit}
+              onOutsideClick={viewportDialogState.onOutsideClick}
+              onKeyPress={viewportDialogState.onKeyPress}
+            />
+          )}
+        </div>
+        {/* The OHIFViewportActionCorners follows the viewport in the DOM so that it is naturally at a higher z-index.*/}
+        <OHIFViewportActionCorners viewportId={viewportId} />
+      </React.Fragment>
+    );
+  },
+  areEqual
+);
+
+function _rehydrateSynchronizers(viewportId: string, syncGroupService: any) {
+  const { synchronizersStore } = useSynchronizersStore.getState();
+  const synchronizers = synchronizersStore[viewportId];
+
+  if (!synchronizers) {
+    return;
+  }
+
+  synchronizers.forEach(synchronizerObj => {
+    if (!synchronizerObj.id) {
+      return;
+    }
+
+    const { id, sourceViewports, targetViewports } = synchronizerObj;
+
+    const synchronizer = syncGroupService.getSynchronizer(id);
+
+    if (!synchronizer) {
+      return;
+    }
+
+    const sourceViewportInfo = sourceViewports.find(
+      sourceViewport => sourceViewport.viewportId === viewportId
+    );
+
+    const targetViewportInfo = targetViewports.find(
+      targetViewport => targetViewport.viewportId === viewportId
+    );
+
+    const isSourceViewportInSynchronizer = synchronizer
+      .getSourceViewports()
+      .find(sourceViewport => sourceViewport.viewportId === viewportId);
+
+    const isTargetViewportInSynchronizer = synchronizer
+      .getTargetViewports()
+      .find(targetViewport => targetViewport.viewportId === viewportId);
+
+    // if the viewport was previously a source viewport, add it again
+    if (sourceViewportInfo && !isSourceViewportInSynchronizer) {
+      synchronizer.addSource({
+        viewportId: sourceViewportInfo.viewportId,
+        renderingEngineId: sourceViewportInfo.renderingEngineId,
+      });
+    }
+
+    // if the viewport was previously a target viewport, add it again
+    if (targetViewportInfo && !isTargetViewportInSynchronizer) {
+      synchronizer.addTarget({
+        viewportId: targetViewportInfo.viewportId,
+        renderingEngineId: targetViewportInfo.renderingEngineId,
+      });
+    }
+  });
+}
+
+// Component displayName
+OHIFCornerstoneViewport.displayName = 'OHIFCornerstoneViewport';
+
+function areEqual(prevProps, nextProps) {
+  if (nextProps.needsRerendering) {
+    return false;
+  }
+
+  if (prevProps.displaySets.length !== nextProps.displaySets.length) {
+    return false;
+  }
+
+  if (prevProps.viewportOptions.orientation !== nextProps.viewportOptions.orientation) {
+    return false;
+  }
+
+  if (prevProps.viewportOptions.toolGroupId !== nextProps.viewportOptions.toolGroupId) {
+    return false;
+  }
+
+  if (
+    nextProps.viewportOptions.viewportType &&
+    prevProps.viewportOptions.viewportType !== nextProps.viewportOptions.viewportType
+  ) {
+    return false;
+  }
+
+  if (nextProps.viewportOptions.needsRerendering) {
+    return false;
+  }
+
+  const prevDisplaySets = prevProps.displaySets;
+  const nextDisplaySets = nextProps.displaySets;
+
+  if (prevDisplaySets.length !== nextDisplaySets.length) {
+    return false;
+  }
+
+  for (let i = 0; i < prevDisplaySets.length; i++) {
+    const prevDisplaySet = prevDisplaySets[i];
+
+    const foundDisplaySet = nextDisplaySets.find(
+      nextDisplaySet =>
+        nextDisplaySet.displaySetInstanceUID === prevDisplaySet.displaySetInstanceUID
+    );
+
+    if (!foundDisplaySet) {
+      return false;
+    }
+
+    // check they contain the same image
+    if (foundDisplaySet.images?.length !== prevDisplaySet.images?.length) {
+      return false;
+    }
+
+    // check if their imageIds are the same
+    if (foundDisplaySet.images?.length) {
+      for (let j = 0; j < foundDisplaySet.images.length; j++) {
+        if (foundDisplaySet.images[j].imageId !== prevDisplaySet.images[j].imageId) {
+          return false;
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+export default OHIFCornerstoneViewport;

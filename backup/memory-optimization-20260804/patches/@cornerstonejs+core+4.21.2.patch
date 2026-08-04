@@ -1,0 +1,73 @@
+diff --git a/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkOffscreenMultiRenderWindow.js b/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkOffscreenMultiRenderWindow.js
+index bbaf2ed..e8f9a2b 100644
+--- a/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkOffscreenMultiRenderWindow.js
++++ b/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkOffscreenMultiRenderWindow.js
+@@ -27,8 +27,62 @@ function vtkOffscreenMultiRenderWindow(publicAPI, model) {
+         model.rendererMap[id] = renderer;
+     };
+     publicAPI.destroy = () => {
+-        const rwi = model.renderWindow.getInteractor();
+-        rwi.delete();
++        // [VTK内存泄漏修复] 按正确顺序显式释放所有 VTK C++ 底层对象。
++        // 每步都包在 try/catch 中并检查 isDeleted()，确保某步失败不阻断后续清理。
++        //
++        // 销毁顺序（不可调换）：
++        // 1. interactor.delete() — 最先执行，停止 RAF 渲染循环 + 解绑 DOM 事件
++        // 2. releaseGraphicsResources() — 释放 shader cache、texture、VBO 等 GPU 资源
++        // 3. 删除 renderers — VTK C++ 对象不会自动回收，必须显式 delete
++        // 4. renderWindow.delete() — 最后删除渲染窗口
++        // 5. 清空 canvas 引用 — 打破 canvas → WebGLContext → GPU 内存的引用链
++
++        // 1. 删除 interactor（直接访问 model.interactor，不依赖 renderWindow）
++        try {
++            if (model.interactor && !model.interactor.isDeleted?.()) {
++                model.interactor.delete();
++            }
++        } catch (e) { /* ignore */ }
++
++        // 2. 释放 OpenGL 图形资源（shader cache、texture unit manager、cached resources）
++        // vtkOpenGLRenderWindow.delete() 只调用 deleteGLContext() 和 setContainer()，
++        // 不会释放图形资源，导致 shader/texture 泄漏。
++        try {
++            const glRW = model.openGLRenderWindow;
++            if (glRW && !glRW.isDeleted() && glRW.releaseGraphicsResources) {
++                glRW.releaseGraphicsResources();
++            }
++        } catch (e) { /* ignore */ }
++
++        // 3. 删除 rendererMap 中所有残留的 renderer。
++        // RenderingEngine.destroy() 会先调用 removeRenderer() 移除每个 viewport 的 renderer，
++        // 但任何未匹配 removeRenderer 的 renderer 会在此处被清理。
++        try {
++            const rendererIds = Object.keys(model.rendererMap || {});
++            rendererIds.forEach(id => {
++                const renderer = model.rendererMap[id];
++                if (renderer && !renderer.isDeleted()) {
++                    renderer.delete();
++                }
++                delete model.rendererMap[id];
++            });
++        } catch (e) { /* ignore */ }
++
++        // 4. 删除 vtkRenderWindow。VTK 的默认 delete() 不会级联到关联对象，
++        // 不显式 delete 会导致 vtkRenderWindow 实例（及其内部 model 对象
++        // 持有的 renderers、views 等引用）泄漏。
++        try {
++            if (model.renderWindow && !model.renderWindow.isDeleted()) {
++                model.renderWindow.delete();
++            }
++        } catch (e) { /* ignore */ }
++
++        // 5. 【2026-07-28 GPU 残留修复】显式清空 canvas 引用，打破 canvas → WebGLContext → GPU 内存的引用链。
++        // loseContext() 只标记上下文为 lost，GPU 驱动要等 WebGL 上下文对象被 GC 才释放显存。
++        // 但 model.openGLRenderWindow.model.canvas 持有 canvas 引用，阻止 GC，
++        // 导致 GPU 内存残留 ~300 MB（关闭标签页后才释放）。
++        // 设为 null 后，canvas 可被 GC，WebGL 上下文随之回收，GPU 驱动立即释放显存。
++        try {
++            if (model.openGLRenderWindow?.model?.canvas) {
++                model.openGLRenderWindow.model.canvas = null;
++            }
++        } catch (e) { /* ignore */ }
+     };
+     publicAPI.removeRenderer = (id) => {
+         const renderer = publicAPI.getRenderer(id);
