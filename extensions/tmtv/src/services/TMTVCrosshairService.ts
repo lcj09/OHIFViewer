@@ -1,13 +1,15 @@
 // [2026-07-30 新增] TMTV 十字线服务
+// [2026-08-05 新增] 第二阶段：点击定位（位置同步）
 //
 // 独立于 Cornerstone CrosshairsTool，使用 SVG overlay 绘制十字线。
 // 不依赖任何 ToolGroup，直接管理 viewport 上的 SVG 层。
 //
-// 第一版功能（仅显示）：
+// 已实现功能：
 //   - visible: 控制十字线显隐
 //   - worldPosition: 十字线在世界坐标系中的位置
 //   - viewports: 注册的 viewport 列表
 //   - SVG overlay 绘制横竖两条参考线
+//   - 点击定位：点击任意 viewport，四个 viewport 的十字线同步移动到同一解剖位置
 //
 // 暂不实现：
 //   ❌ 鼠标拖动
@@ -19,15 +21,22 @@
 // 架构：
 //   TMTVCrosshairService
 //     |
-//     +-- ctAXIAL (SVG overlay)
-//     +-- ptAXIAL (SVG overlay)
-//     +-- fusionAXIAL (SVG overlay)
-//     +-- mipSagittal (SVG overlay)
+//     +-- ctAXIAL (SVG overlay + mousedown handler)
+//     +-- ptAXIAL (SVG overlay + mousedown handler)
+//     +-- fusionAXIAL (SVG overlay + mousedown handler)
+//     +-- mipSagittal (SVG overlay + mousedown handler)
 //
 // 每个 viewport.element 上添加一个绝对定位的 SVG 层：
 //   viewport.element
 //     |-- canvas (Cornerstone 渲染)
 //     +-- svg (十字线 overlay, pointer-events: none)
+//
+// 点击定位流程：
+//   用户点击 viewport → mousedown 事件
+//   → 获取 canvas 坐标 (clientX/Y - rect.left/top)
+//   → canvasToWorld() 转换为世界坐标
+//   → setPosition(worldPoint) 更新全局位置
+//   → render() 重绘所有 viewport 的十字线
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const CROSSHAIR_COLOR = 'rgb(0, 200, 0)';
@@ -67,6 +76,8 @@ class TMTVCrosshairService {
   private vLines = new Map<string, SVGLineElement>(); // viewportId -> 竖线元素
   private resizeObservers = new Map<string, ResizeObserver>();
   private cameraModifiedHandlers = new Map<string, (evt: any) => void>();
+  // [2026-08-05 新增] 存储 mousedown 事件处理器，用于点击定位和清理
+  private mouseDownHandlers = new Map<string, (evt: MouseEvent) => void>();
 
   /**
    * 判断指定的 stage ID 是否为 TMTV 布局
@@ -153,6 +164,7 @@ class TMTVCrosshairService {
     this.vLines.clear();
     this.resizeObservers.clear();
     this.cameraModifiedHandlers.clear();
+    this.mouseDownHandlers.clear();
   }
 
   /**
@@ -250,6 +262,58 @@ class TMTVCrosshairService {
   }
 
   /**
+   * [2026-08-05 新增] 处理鼠标点击事件，实现十字线位置同步
+   *
+   * 功能：点击任意 viewport 的图像位置，所有 viewport 的十字线同步移动到同一解剖位置
+   *
+   * 转换流程：
+   *   鼠标屏幕坐标 (evt.clientX/Y)
+   *   → canvas 坐标 (clientX/Y - rect.left/top)
+   *   → 世界坐标 (viewport.canvasToWorld)
+   *   → setPosition 更新全局位置 → render 重绘所有 viewport
+   *
+   * 边界条件处理：
+   *   - 十字线未显示时不处理点击
+   *   - 仅处理左键点击 (evt.button === 0)
+   *   - viewport 或 canvas 为空时跳过
+   *   - 世界坐标非有限数时跳过
+   *   - 异常时打印警告日志，不中断后续处理
+   */
+  private handleMouseDown(viewportId: string, viewport: any, evt: MouseEvent): void {
+    // 十字线未显示时不处理点击
+    if (!this.visible) return;
+
+    // 仅处理左键点击
+    if (evt.button !== 0) return;
+
+    try {
+      const canvas = viewport.canvas;
+      if (!canvas) return;
+
+      // 获取鼠标在 canvas 中的坐标
+      const rect = canvas.getBoundingClientRect();
+      const canvasPoint: [number, number] = [
+        evt.clientX - rect.left,
+        evt.clientY - rect.top,
+      ];
+
+      // canvas 坐标转世界坐标
+      const worldPoint = viewport.canvasToWorld(canvasPoint);
+      if (!worldPoint ||
+        !Number.isFinite(worldPoint[0]) ||
+        !Number.isFinite(worldPoint[1]) ||
+        !Number.isFinite(worldPoint[2])) {
+        return;
+      }
+
+      // 更新全局位置并重绘所有 viewport
+      this.setPosition(worldPoint);
+    } catch (e) {
+      console.warn(`[TMTVCrosshairService] handleMouseDown 失败 (${viewportId})`, e);
+    }
+  }
+
+  /**
    * 在 viewport.element 上创建 SVG overlay 层
    */
   private _createSvgLayer(viewportId: string, viewport: any): void {
@@ -308,6 +372,23 @@ class TMTVCrosshairService {
       // 如果无法监听相机事件，十字线仍可显示，只是不会跟随相机移动
       console.debug(`[TMTVCrosshairService] 无法监听 CAMERA_MODIFIED (${viewportId})`, e);
     }
+
+    // [2026-08-05 新增] 注册 mousedown 事件，实现点击定位
+    // 点击任意 viewport 时，十字线同步移动到点击位置对应的世界坐标
+    // 使用 this.viewports.get(viewportId) 获取当前 viewport 实例，
+    // 而非闭包捕获的 viewport 参数，防止 viewport 被替换后使用过期引用
+    try {
+      const mouseDownHandler = (evt: MouseEvent) => {
+        const vp = this.viewports.get(viewportId);
+        if (vp) {
+          this.handleMouseDown(viewportId, vp, evt);
+        }
+      };
+      element.addEventListener('mousedown', mouseDownHandler);
+      this.mouseDownHandlers.set(viewportId, mouseDownHandler);
+    } catch (e) {
+      console.debug(`[TMTVCrosshairService] 无法注册 mousedown 事件 (${viewportId})`, e);
+    }
   }
 
   /**
@@ -315,7 +396,7 @@ class TMTVCrosshairService {
    */
   private _removeSvgLayer(viewportId: string): void {
     // [Lessons Learned] 每个清理步骤独立 try-catch，避免单步异常中断后续清理。
-    // 清理顺序：ResizeObserver → CAMERA_MODIFIED 监听 → SVG 元素 → Map 引用
+    // 清理顺序：ResizeObserver → CAMERA_MODIFIED 监听 → mousedown 监听 → SVG 元素 → Map 引用
 
     // 1. 移除 ResizeObserver
     try {
@@ -343,7 +424,20 @@ class TMTVCrosshairService {
       // ignore
     }
 
-    // 3. 移除 SVG 元素（连同其中的横竖线子节点）
+    // 3. [2026-08-05 新增] 移除 mousedown 监听
+    //    同样使用 this.elements 中的创建时引用，与 CAMERA_MODIFIED 清理保持一致
+    try {
+      const handler = this.mouseDownHandlers.get(viewportId);
+      const element = this.elements.get(viewportId);
+      if (handler && element) {
+        element.removeEventListener('mousedown', handler);
+      }
+      this.mouseDownHandlers.delete(viewportId);
+    } catch (e) {
+      // ignore
+    }
+
+    // 4. 移除 SVG 元素（连同其中的横竖线子节点）
     try {
       const svg = this.svgLayers.get(viewportId);
       if (svg && svg.parentNode) {
@@ -353,7 +447,7 @@ class TMTVCrosshairService {
       // ignore
     }
 
-    // 4. 清理所有相关 Map 引用，防止内存泄漏
+    // 5. 清理所有相关 Map 引用，防止内存泄漏
     this.svgLayers.delete(viewportId);
     this.elements.delete(viewportId);
     this.hLines.delete(viewportId);
