@@ -1,5 +1,6 @@
 // [2026-07-30 新增] TMTV 十字线服务
 // [2026-08-05 新增] 第二阶段：点击定位（位置同步）
+// [2026-08-05 新增] 第三阶段：十字线拖动（Crosshair Drag）
 //
 // 独立于 Cornerstone CrosshairsTool，使用 SVG overlay 绘制十字线。
 // 不依赖任何 ToolGroup，直接管理 viewport 上的 SVG 层。
@@ -10,9 +11,9 @@
 //   - viewports: 注册的 viewport 列表
 //   - SVG overlay 绘制横竖两条参考线
 //   - 点击定位：点击任意 viewport，四个 viewport 的十字线同步移动到同一解剖位置
+//   - 十字线拖动：按住十字线中心拖动，所有 viewport 同步移动
 //
 // 暂不实现：
-//   ❌ 鼠标拖动
 //   ❌ slice 同步
 //   ❌ rotation
 //   ❌ reference line
@@ -31,18 +32,23 @@
 //     |-- canvas (Cornerstone 渲染)
 //     +-- svg (十字线 overlay, pointer-events: none)
 //
-// 点击定位流程：
-//   用户点击 viewport → mousedown 事件
-//   → 获取 canvas 坐标 (clientX/Y - rect.left/top)
-//   → canvasToWorld() 转换为世界坐标
-//   → setPosition(worldPoint) 更新全局位置
-//   → render() 重绘所有 viewport 的十字线
+// 点击/拖动流程：
+//   mousedown 事件
+//   → 判断是否点中十字线中心（距离 < DRAG_HIT_THRESHOLD）
+//     → 命中：进入拖动模式，document 监听 mousemove/mouseup
+//       → mousemove: canvasToWorld → setPosition → render
+//       → mouseup: 结束拖动，移除 document 监听
+//     → 未命中：Phase 2 点击定位，十字线跳到点击位置
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const CROSSHAIR_COLOR = 'rgb(0, 200, 0)';
 const CROSSHAIR_LINE_WIDTH = 1;
+// [2026-08-05] 十字线中心空白半径（像素）：中心两侧各留此长度的间隙，形成空心中心
+const CROSSHAIR_CENTER_GAP = 12;
 // cornerstone3D 相机变化事件常量（对应 Enums.Events.CAMERA_MODIFIED）
 const CAMERA_MODIFIED_EVENT = 'CORNERSTONE_CAMERA_MODIFIED';
+// [2026-08-05 第三阶段] 拖动命中阈值（像素）：鼠标距十字线中心小于此值时认为抓到了十字线
+const DRAG_HIT_THRESHOLD = 10;
 
 // 支持的 TMTV 布局 stage ID
 const TMTV_STAGE_IDS = new Set([
@@ -70,14 +76,24 @@ class TMTVCrosshairService {
   // [Lessons Learned] 保存创建时的 element 引用，用于准确移除 CAMERA_MODIFIED 监听器。
   // Cornerstone 可能在后续替换 viewport.element，若用当前 element 移除监听器会失败，导致内存泄漏。
   private elements = new Map<string, HTMLElement>(); // viewportId -> 创建时的 element 引用
-  // [Lessons Learned] 横竖线元素一次性创建并复用，后续重绘仅更新 x1/y1/x2/y2 属性，
+  // [Lessons Learned] 线段元素一次性创建并复用，后续重绘仅更新 x1/y1/x2/y2 属性，
   // 避免每次 render 频繁创建/销毁 DOM 节点。
-  private hLines = new Map<string, SVGLineElement>(); // viewportId -> 横线元素
-  private vLines = new Map<string, SVGLineElement>(); // viewportId -> 竖线元素
+  // [2026-08-05] 十字线中心为空心，每条线拆成两段，共4段
+  private hLineLefts = new Map<string, SVGLineElement>(); // viewportId -> 横线左段
+  private hLineRights = new Map<string, SVGLineElement>(); // viewportId -> 横线右段
+  private vLineTops = new Map<string, SVGLineElement>(); // viewportId -> 竖线上段
+  private vLineBottoms = new Map<string, SVGLineElement>(); // viewportId -> 竖线下段
   private resizeObservers = new Map<string, ResizeObserver>();
   private cameraModifiedHandlers = new Map<string, (evt: any) => void>();
   // [2026-08-05 新增] 存储 mousedown 事件处理器，用于点击定位和清理
   private mouseDownHandlers = new Map<string, (evt: MouseEvent) => void>();
+
+  // [2026-08-05 第三阶段] 拖动状态
+  // 拖动期间 mousemove/mouseup 监听在 document 上，确保鼠标移出 viewport 仍能跟踪
+  private dragging = false;
+  private activeViewport: string | null = null;
+  private documentMouseMoveHandler: ((evt: MouseEvent) => void) | null = null;
+  private documentMouseUpHandler: ((evt: MouseEvent) => void) | null = null;
 
   /**
    * 判断指定的 stage ID 是否为 TMTV 布局
@@ -151,8 +167,13 @@ class TMTVCrosshairService {
    * 布局切换时需保留这些状态，使十字线在切换后自动恢复显示，
    * 与原生 CrosshairsTool 在布局切换时保持激活状态的行为一致。
    * 退出模式时请调用 reset() 完全重置状态。
+   *
+   * [2026-08-05 第三阶段] 清理前先结束拖动，移除 document 上的 mousemove/mouseup 监听
    */
   clear(): void {
+    // [第三阶段] 先结束拖动，移除 document 监听，防止清理后回调执行引发错误
+    this._endDrag();
+
     Array.from(this.viewports.keys()).forEach(viewportId => {
       this.removeViewport(viewportId);
     });
@@ -160,8 +181,10 @@ class TMTVCrosshairService {
     this.viewports.clear();
     this.svgLayers.clear();
     this.elements.clear();
-    this.hLines.clear();
-    this.vLines.clear();
+    this.hLineLefts.clear();
+    this.hLineRights.clear();
+    this.vLineTops.clear();
+    this.vLineBottoms.clear();
     this.resizeObservers.clear();
     this.cameraModifiedHandlers.clear();
     this.mouseDownHandlers.clear();
@@ -262,35 +285,140 @@ class TMTVCrosshairService {
   }
 
   /**
-   * [2026-08-05 新增] 处理鼠标点击事件，实现十字线位置同步
+   * [2026-08-05 新增, 2026-08-05 第三阶段更新] 处理鼠标按下事件
    *
-   * 功能：点击任意 viewport 的图像位置，所有 viewport 的十字线同步移动到同一解剖位置
-   *
-   * 转换流程：
-   *   鼠标屏幕坐标 (evt.clientX/Y)
-   *   → canvas 坐标 (clientX/Y - rect.left/top)
-   *   → 世界坐标 (viewport.canvasToWorld)
-   *   → setPosition 更新全局位置 → render 重绘所有 viewport
+   * 功能：根据点击位置决定行为
+   *   - 点击十字线中心附近（距离 < DRAG_HIT_THRESHOLD）→ 进入拖动模式
+   *   - 点击其他位置 → Phase 2 点击定位，十字线跳到点击位置
    *
    * 边界条件处理：
-   *   - 十字线未显示时不处理点击
-   *   - 仅处理左键点击 (evt.button === 0)
+   *   - 十字线未显示时不处理
+   *   - 仅处理左键 (evt.button === 0)
+   *   - 上一次拖动的 mouseup 丢失时自动恢复（避免状态卡死）
    *   - viewport 或 canvas 为空时跳过
-   *   - 世界坐标非有限数时跳过
    *   - 异常时打印警告日志，不中断后续处理
    */
   private handleMouseDown(viewportId: string, viewport: any, evt: MouseEvent): void {
-    // 十字线未显示时不处理点击
+    // 十字线未显示时不处理
     if (!this.visible) return;
 
-    // 仅处理左键点击
+    // 仅处理左键
     if (evt.button !== 0) return;
+
+    // [边界处理] 如果 dragging 仍为 true，说明上一次 mouseup 丢失
+    // （如鼠标移出浏览器窗口），先结束上一次拖动，避免状态卡死
+    if (this.dragging) {
+      this._endDrag();
+    }
 
     try {
       const canvas = viewport.canvas;
       if (!canvas) return;
 
       // 获取鼠标在 canvas 中的坐标
+      const rect = canvas.getBoundingClientRect();
+      const canvasPoint: [number, number] = [
+        evt.clientX - rect.left,
+        evt.clientY - rect.top,
+      ];
+
+      // [第三阶段] 判断是否点中十字线中心
+      if (this.worldPosition) {
+        try {
+          const crosshairCanvas = viewport.worldToCanvas(this.worldPosition);
+          if (crosshairCanvas &&
+            Number.isFinite(crosshairCanvas[0]) &&
+            Number.isFinite(crosshairCanvas[1])) {
+            const dx = canvasPoint[0] - crosshairCanvas[0];
+            const dy = canvasPoint[1] - crosshairCanvas[1];
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance <= DRAG_HIT_THRESHOLD) {
+              // 命中十字线中心 → 进入拖动模式
+              this._startDrag(viewportId, evt);
+              return;
+            }
+          }
+        } catch (e) {
+          // worldToCanvas 失败时退化为点击定位
+        }
+      }
+
+      // 未命中十字线中心 → Phase 2 点击定位
+      const worldPoint = viewport.canvasToWorld(canvasPoint);
+      if (!worldPoint ||
+        !Number.isFinite(worldPoint[0]) ||
+        !Number.isFinite(worldPoint[1]) ||
+        !Number.isFinite(worldPoint[2])) {
+        return;
+      }
+
+      this.setPosition(worldPoint);
+    } catch (e) {
+      console.warn(`[TMTVCrosshairService] handleMouseDown 失败 (${viewportId})`, e);
+    }
+  }
+
+  /**
+   * [2026-08-05 第三阶段新增] 开始拖动
+   *
+   * 功能：设置拖动状态，在 document 上注册 mousemove/mouseup 监听
+   *
+   * 设计要点：
+   *   - mousemove/mouseup 监听在 document 而非 element 上，
+   *     确保鼠标移出 viewport 后拖动仍能继续
+   *   - evt.preventDefault() 阻止默认行为（文本选中等）
+   *   - 处理器引用保存在实例字段，供 _endDrag 移除
+   */
+  private _startDrag(viewportId: string, evt: MouseEvent): void {
+    this.dragging = true;
+    this.activeViewport = viewportId;
+
+    // 阻止默认行为，防止拖动时选中文本或触发其他浏览器行为
+    try {
+      evt.preventDefault();
+    } catch (e) {
+      // ignore
+    }
+
+    // 在 document 上注册 mousemove/mouseup，确保拖动跟踪不中断
+    this.documentMouseMoveHandler = (moveEvt: MouseEvent) => {
+      this._handleDragMove(moveEvt);
+    };
+    this.documentMouseUpHandler = (upEvt: MouseEvent) => {
+      this._handleDragEnd(upEvt);
+    };
+
+    document.addEventListener('mousemove', this.documentMouseMoveHandler);
+    document.addEventListener('mouseup', this.documentMouseUpHandler);
+  }
+
+  /**
+   * [2026-08-05 第三阶段新增] 处理拖动中的鼠标移动
+   *
+   * 功能：将鼠标 canvas 坐标转为世界坐标，更新十字线位置
+   *
+   * 边界条件处理：
+   *   - 非拖动状态或无 activeViewport 时跳过
+   *   - viewport 已被销毁时结束拖动
+   *   - canvas 为空时跳过
+   *   - 世界坐标非有限数时跳过（不更新位置）
+   *   - 异常时打印警告日志
+   */
+  private _handleDragMove(evt: MouseEvent): void {
+    if (!this.dragging || !this.activeViewport) return;
+
+    const viewport = this.viewports.get(this.activeViewport);
+    if (!viewport) {
+      // activeViewport 已被销毁，结束拖动
+      this._endDrag();
+      return;
+    }
+
+    try {
+      const canvas = viewport.canvas;
+      if (!canvas) return;
+
       const rect = canvas.getBoundingClientRect();
       const canvasPoint: [number, number] = [
         evt.clientX - rect.left,
@@ -309,7 +437,45 @@ class TMTVCrosshairService {
       // 更新全局位置并重绘所有 viewport
       this.setPosition(worldPoint);
     } catch (e) {
-      console.warn(`[TMTVCrosshairService] handleMouseDown 失败 (${viewportId})`, e);
+      console.warn(`[TMTVCrosshairService] _handleDragMove 失败 (${this.activeViewport})`, e);
+    }
+  }
+
+  /**
+   * [2026-08-05 第三阶段新增] 处理拖动结束（mouseup）
+   *
+   * 功能：重置拖动状态，移除 document 上的 mousemove/mouseup 监听
+   */
+  private _handleDragEnd(_evt: MouseEvent): void {
+    this._endDrag();
+  }
+
+  /**
+   * [2026-08-05 第三阶段新增] 结束拖动，清理 document 监听
+   *
+   * 功能：重置 dragging/activeViewport，移除 document 事件监听
+   *
+   * 调用场景：
+   *   1. 正常 mouseup 结束拖动
+   *   2. activeViewport 被销毁时中断拖动
+   *   3. clear()/reset() 清理时
+   *   4. _removeSvgLayer 移除 active viewport 时
+   *
+   * 内存安全：
+   *   - 移除 document 监听后立即置 null，释放闭包引用
+   *   - 即使多次调用也安全（检查 null）
+   */
+  private _endDrag(): void {
+    this.dragging = false;
+    this.activeViewport = null;
+
+    if (this.documentMouseMoveHandler) {
+      document.removeEventListener('mousemove', this.documentMouseMoveHandler);
+      this.documentMouseMoveHandler = null;
+    }
+    if (this.documentMouseUpHandler) {
+      document.removeEventListener('mouseup', this.documentMouseUpHandler);
+      this.documentMouseUpHandler = null;
     }
   }
 
@@ -340,19 +506,20 @@ class TMTVCrosshairService {
     // Cornerstone 可能在后续替换 viewport.element，移除监听器时必须用此引用。
     this.elements.set(viewportId, element);
 
-    // [Lessons Learned] 一次性创建横竖线元素，后续重绘仅更新 x1/y1/x2/y2 属性，
+    // [Lessons Learned] 一次性创建线段元素，后续重绘仅更新 x1/y1/x2/y2 属性，
     // 避免每次 render 频繁创建/销毁 DOM 节点。
-    const hLine = document.createElementNS(SVG_NS, 'line') as SVGLineElement;
-    hLine.setAttribute('stroke', CROSSHAIR_COLOR);
-    hLine.setAttribute('stroke-width', String(CROSSHAIR_LINE_WIDTH));
-    svg.appendChild(hLine);
-    this.hLines.set(viewportId, hLine);
-
-    const vLine = document.createElementNS(SVG_NS, 'line') as SVGLineElement;
-    vLine.setAttribute('stroke', CROSSHAIR_COLOR);
-    vLine.setAttribute('stroke-width', String(CROSSHAIR_LINE_WIDTH));
-    svg.appendChild(vLine);
-    this.vLines.set(viewportId, vLine);
+    // [2026-08-05] 十字线中心空心，每条线拆成两段，共4段
+    const createLine = (): SVGLineElement => {
+      const line = document.createElementNS(SVG_NS, 'line') as SVGLineElement;
+      line.setAttribute('stroke', CROSSHAIR_COLOR);
+      line.setAttribute('stroke-width', String(CROSSHAIR_LINE_WIDTH));
+      svg.appendChild(line);
+      return line;
+    };
+    this.hLineLefts.set(viewportId, createLine());
+    this.hLineRights.set(viewportId, createLine());
+    this.vLineTops.set(viewportId, createLine());
+    this.vLineBottoms.set(viewportId, createLine());
 
     // 监听 canvas 尺寸变化，重绘十字线
     const resizeObserver = new ResizeObserver(() => {
@@ -396,7 +563,13 @@ class TMTVCrosshairService {
    */
   private _removeSvgLayer(viewportId: string): void {
     // [Lessons Learned] 每个清理步骤独立 try-catch，避免单步异常中断后续清理。
-    // 清理顺序：ResizeObserver → CAMERA_MODIFIED 监听 → mousedown 监听 → SVG 元素 → Map 引用
+    // 清理顺序：结束拖动(若active) → ResizeObserver → CAMERA_MODIFIED 监听 → mousedown 监听 → SVG 元素 → Map 引用
+
+    // 0. [第三阶段] 如果正在拖动此 viewport，先结束拖动
+    //    防止 document 上的 mousemove/mouseup 回调访问已销毁的 viewport
+    if (this.dragging && this.activeViewport === viewportId) {
+      this._endDrag();
+    }
 
     // 1. 移除 ResizeObserver
     try {
@@ -450,13 +623,22 @@ class TMTVCrosshairService {
     // 5. 清理所有相关 Map 引用，防止内存泄漏
     this.svgLayers.delete(viewportId);
     this.elements.delete(viewportId);
-    this.hLines.delete(viewportId);
-    this.vLines.delete(viewportId);
+    this.hLineLefts.delete(viewportId);
+    this.hLineRights.delete(viewportId);
+    this.vLineTops.delete(viewportId);
+    this.vLineBottoms.delete(viewportId);
   }
 
   /**
-   * 在 SVG 上绘制十字线（横线 + 竖线）
-   * [Lessons Learned] 复用 _createSvgLayer 中一次性创建的横竖线元素，
+   * [2026-08-05 修改] 在 SVG 上绘制十字线（4段，中心空心）
+   *
+   * 线段布局（中心留 CROSSHAIR_CENTER_GAP 间隙）：
+   *   横线左段: (0, y)          → (x-gap, y)
+   *   横线右段: (x+gap, y)      → (width, y)
+   *   竖线上段: (x, 0)          → (x, y-gap)
+   *   竖线下段: (x, y+gap)      → (x, height)
+   *
+   * [Lessons Learned] 复用 _createSvgLayer 中一次性创建的线段元素，
    * 此处仅更新 x1/y1/x2/y2 属性，避免频繁 DOM 节点创建/销毁。
    */
   private _drawCrosshair(
@@ -472,23 +654,50 @@ class TMTVCrosshairService {
 
     const x = canvasPoint[0];
     const y = canvasPoint[1];
+    const gap = CROSSHAIR_CENTER_GAP;
+    const xLeft = String(Math.max(0, x - gap));
+    const xRight = String(x + gap);
+    const yTop = String(Math.max(0, y - gap));
+    const yBottom = String(y + gap);
+    const sY = String(y);
+    const sX = String(x);
+    const sWidth = String(width);
+    const sHeight = String(height);
 
-    // 横线（贯穿整个视口宽度）—— 复用已创建元素，仅更新坐标
-    const hLine = this.hLines.get(viewportId);
-    if (hLine) {
-      hLine.setAttribute('x1', '0');
-      hLine.setAttribute('y1', String(y));
-      hLine.setAttribute('x2', String(width));
-      hLine.setAttribute('y2', String(y));
+    // 横线左段: (0, y) → (x-gap, y)
+    const hLeft = this.hLineLefts.get(viewportId);
+    if (hLeft) {
+      hLeft.setAttribute('x1', '0');
+      hLeft.setAttribute('y1', sY);
+      hLeft.setAttribute('x2', xLeft);
+      hLeft.setAttribute('y2', sY);
     }
 
-    // 竖线（贯穿整个视口高度）—— 复用已创建元素，仅更新坐标
-    const vLine = this.vLines.get(viewportId);
-    if (vLine) {
-      vLine.setAttribute('x1', String(x));
-      vLine.setAttribute('y1', '0');
-      vLine.setAttribute('x2', String(x));
-      vLine.setAttribute('y2', String(height));
+    // 横线右段: (x+gap, y) → (width, y)
+    const hRight = this.hLineRights.get(viewportId);
+    if (hRight) {
+      hRight.setAttribute('x1', xRight);
+      hRight.setAttribute('y1', sY);
+      hRight.setAttribute('x2', sWidth);
+      hRight.setAttribute('y2', sY);
+    }
+
+    // 竖线上段: (x, 0) → (x, y-gap)
+    const vTop = this.vLineTops.get(viewportId);
+    if (vTop) {
+      vTop.setAttribute('x1', sX);
+      vTop.setAttribute('y1', '0');
+      vTop.setAttribute('x2', sX);
+      vTop.setAttribute('y2', yTop);
+    }
+
+    // 竖线下段: (x, y+gap) → (x, height)
+    const vBottom = this.vLineBottoms.get(viewportId);
+    if (vBottom) {
+      vBottom.setAttribute('x1', sX);
+      vBottom.setAttribute('y1', yBottom);
+      vBottom.setAttribute('x2', sX);
+      vBottom.setAttribute('y2', sHeight);
     }
   }
 }
