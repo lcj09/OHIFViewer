@@ -43,10 +43,14 @@ const TMTV_STAGE_IDS = new Set([
 ]);
 
 // 每个 TMTV 布局对应的 viewportId 列表
+// 注意：viewportId 字符串必须与 hpViewports.ts 中的实际值完全一致（区分大小写）
+//   - mipSAGITTAL 常量的 viewportId 为 'mipSagittal'（非 'mipSAGITTAL'）
+//   - mipCORONAL 常量的 viewportId 为 'mipCoronal'（非 'mipCORONAL'）
+//   - fusionCORONAL 常量的 viewportId 为 'fusionCoronal'（非 'fusionCORONAL'）
 const TMTV_VIEWPORT_IDS_BY_STAGE: Record<string, string[]> = {
   '2x3-layout': ['ctAXIAL', 'ptAXIAL', 'fusionAXIAL', 'mipSagittal'],
-  '2x4-layout': ['ctSAGITTAL', 'ptSAGITTAL', 'fusionSAGITTAL', 'mipSAGITTAL'],
-  'coronal-mip-layout': ['ctCORONAL', 'ptCORONAL', 'fusionCORONAL', 'mipCORONAL'],
+  '2x4-layout': ['ctSAGITTAL', 'ptSAGITTAL', 'fusionSAGITTAL', 'mipSagittal'],
+  'coronal-mip-layout': ['ctCORONAL', 'ptCORONAL', 'fusionCoronal', 'mipCoronal'],
 };
 
 class TMTVCrosshairService {
@@ -54,6 +58,13 @@ class TMTVCrosshairService {
   private worldPosition: [number, number, number] | null = null;
   private viewports = new Map<string, any>(); // viewportId -> viewport instance
   private svgLayers = new Map<string, SVGSVGElement>(); // viewportId -> SVG element
+  // [Lessons Learned] 保存创建时的 element 引用，用于准确移除 CAMERA_MODIFIED 监听器。
+  // Cornerstone 可能在后续替换 viewport.element，若用当前 element 移除监听器会失败，导致内存泄漏。
+  private elements = new Map<string, HTMLElement>(); // viewportId -> 创建时的 element 引用
+  // [Lessons Learned] 横竖线元素一次性创建并复用，后续重绘仅更新 x1/y1/x2/y2 属性，
+  // 避免每次 render 频繁创建/销毁 DOM 节点。
+  private hLines = new Map<string, SVGLineElement>(); // viewportId -> 横线元素
+  private vLines = new Map<string, SVGLineElement>(); // viewportId -> 竖线元素
   private resizeObservers = new Map<string, ResizeObserver>();
   private cameraModifiedHandlers = new Map<string, (evt: any) => void>();
 
@@ -124,6 +135,11 @@ class TMTVCrosshairService {
   /**
    * 移除所有 viewport，清理所有资源
    * 确保所有 Map 被清空，防止残留引用导致内存泄漏
+   *
+   * [2026-08-04] 不重置 visible 和 worldPosition：
+   * 布局切换时需保留这些状态，使十字线在切换后自动恢复显示，
+   * 与原生 CrosshairsTool 在布局切换时保持激活状态的行为一致。
+   * 退出模式时请调用 reset() 完全重置状态。
    */
   clear(): void {
     Array.from(this.viewports.keys()).forEach(viewportId => {
@@ -132,8 +148,19 @@ class TMTVCrosshairService {
     // 确保所有 Map 被清空（removeViewport 已逐个 delete，但兜底清空）
     this.viewports.clear();
     this.svgLayers.clear();
+    this.elements.clear();
+    this.hLines.clear();
+    this.vLines.clear();
     this.resizeObservers.clear();
     this.cameraModifiedHandlers.clear();
+  }
+
+  /**
+   * 完全重置状态（包括 visible 和 worldPosition）
+   * 用于退出 TMTV 模式时清理，确保下次进入时为初始状态
+   */
+  reset(): void {
+    this.clear();
     this.worldPosition = null;
     this.visible = false;
   }
@@ -214,7 +241,7 @@ class TMTVCrosshairService {
         }
 
         svg.style.display = '';
-        this._drawCrosshair(svg, canvasPoint, width, height);
+        this._drawCrosshair(viewportId, svg, canvasPoint, width, height);
       } catch (e) {
         // viewport 可能已销毁，静默忽略
         svg.style.display = 'none';
@@ -245,6 +272,23 @@ class TMTVCrosshairService {
 
     element.appendChild(svg);
     this.svgLayers.set(viewportId, svg);
+    // [Lessons Learned] 保存创建时的 element 引用。
+    // Cornerstone 可能在后续替换 viewport.element，移除监听器时必须用此引用。
+    this.elements.set(viewportId, element);
+
+    // [Lessons Learned] 一次性创建横竖线元素，后续重绘仅更新 x1/y1/x2/y2 属性，
+    // 避免每次 render 频繁创建/销毁 DOM 节点。
+    const hLine = document.createElementNS(SVG_NS, 'line') as SVGLineElement;
+    hLine.setAttribute('stroke', CROSSHAIR_COLOR);
+    hLine.setAttribute('stroke-width', String(CROSSHAIR_LINE_WIDTH));
+    svg.appendChild(hLine);
+    this.hLines.set(viewportId, hLine);
+
+    const vLine = document.createElementNS(SVG_NS, 'line') as SVGLineElement;
+    vLine.setAttribute('stroke', CROSSHAIR_COLOR);
+    vLine.setAttribute('stroke-width', String(CROSSHAIR_LINE_WIDTH));
+    svg.appendChild(vLine);
+    this.vLines.set(viewportId, vLine);
 
     // 监听 canvas 尺寸变化，重绘十字线
     const resizeObserver = new ResizeObserver(() => {
@@ -270,47 +314,64 @@ class TMTVCrosshairService {
    * 移除 SVG overlay 层和相关监听
    */
   private _removeSvgLayer(viewportId: string): void {
-    // 移除 ResizeObserver
-    const observer = this.resizeObservers.get(viewportId);
-    if (observer) {
-      observer.disconnect();
-      this.resizeObservers.delete(viewportId);
+    // [Lessons Learned] 每个清理步骤独立 try-catch，避免单步异常中断后续清理。
+    // 清理顺序：ResizeObserver → CAMERA_MODIFIED 监听 → SVG 元素 → Map 引用
+
+    // 1. 移除 ResizeObserver
+    try {
+      const observer = this.resizeObservers.get(viewportId);
+      if (observer) {
+        observer.disconnect();
+        this.resizeObservers.delete(viewportId);
+      }
+    } catch (e) {
+      // ignore
     }
 
-    // 移除 CAMERA_MODIFIED 监听
-    const handler = this.cameraModifiedHandlers.get(viewportId);
-    const viewport = this.viewports.get(viewportId);
-    if (handler && viewport?.element) {
-      try {
-        viewport.element.removeEventListener(CAMERA_MODIFIED_EVENT, handler);
-      } catch (e) {
-        // ignore
+    // 2. 移除 CAMERA_MODIFIED 监听
+    //    [Lessons Learned] 必须使用创建时的 element 引用（this.elements），
+    //    而非当前 viewport.element。Cornerstone 可能在后续替换 viewport.element，
+    //    用新引用调用 removeEventListener 会失败，导致旧监听器残留引发内存泄漏。
+    try {
+      const handler = this.cameraModifiedHandlers.get(viewportId);
+      const element = this.elements.get(viewportId);
+      if (handler && element) {
+        element.removeEventListener(CAMERA_MODIFIED_EVENT, handler);
       }
       this.cameraModifiedHandlers.delete(viewportId);
+    } catch (e) {
+      // ignore
     }
 
-    // 移除 SVG 元素
-    const svg = this.svgLayers.get(viewportId);
-    if (svg && svg.parentNode) {
-      svg.parentNode.removeChild(svg);
+    // 3. 移除 SVG 元素（连同其中的横竖线子节点）
+    try {
+      const svg = this.svgLayers.get(viewportId);
+      if (svg && svg.parentNode) {
+        svg.parentNode.removeChild(svg);
+      }
+    } catch (e) {
+      // ignore
     }
+
+    // 4. 清理所有相关 Map 引用，防止内存泄漏
     this.svgLayers.delete(viewportId);
+    this.elements.delete(viewportId);
+    this.hLines.delete(viewportId);
+    this.vLines.delete(viewportId);
   }
 
   /**
    * 在 SVG 上绘制十字线（横线 + 竖线）
+   * [Lessons Learned] 复用 _createSvgLayer 中一次性创建的横竖线元素，
+   * 此处仅更新 x1/y1/x2/y2 属性，避免频繁 DOM 节点创建/销毁。
    */
   private _drawCrosshair(
+    viewportId: string,
     svg: SVGSVGElement,
     canvasPoint: [number, number],
     width: number,
     height: number
   ): void {
-    // 清空 SVG
-    while (svg.firstChild) {
-      svg.removeChild(svg.firstChild);
-    }
-
     svg.setAttribute('width', String(width));
     svg.setAttribute('height', String(height));
     svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
@@ -318,25 +379,23 @@ class TMTVCrosshairService {
     const x = canvasPoint[0];
     const y = canvasPoint[1];
 
-    // 横线（贯穿整个视口宽度）
-    const hLine = document.createElementNS(SVG_NS, 'line');
-    hLine.setAttribute('x1', '0');
-    hLine.setAttribute('y1', String(y));
-    hLine.setAttribute('x2', String(width));
-    hLine.setAttribute('y2', String(y));
-    hLine.setAttribute('stroke', CROSSHAIR_COLOR);
-    hLine.setAttribute('stroke-width', String(CROSSHAIR_LINE_WIDTH));
-    svg.appendChild(hLine);
+    // 横线（贯穿整个视口宽度）—— 复用已创建元素，仅更新坐标
+    const hLine = this.hLines.get(viewportId);
+    if (hLine) {
+      hLine.setAttribute('x1', '0');
+      hLine.setAttribute('y1', String(y));
+      hLine.setAttribute('x2', String(width));
+      hLine.setAttribute('y2', String(y));
+    }
 
-    // 竖线（贯穿整个视口高度）
-    const vLine = document.createElementNS(SVG_NS, 'line');
-    vLine.setAttribute('x1', String(x));
-    vLine.setAttribute('y1', '0');
-    vLine.setAttribute('x2', String(x));
-    vLine.setAttribute('y2', String(height));
-    vLine.setAttribute('stroke', CROSSHAIR_COLOR);
-    vLine.setAttribute('stroke-width', String(CROSSHAIR_LINE_WIDTH));
-    svg.appendChild(vLine);
+    // 竖线（贯穿整个视口高度）—— 复用已创建元素，仅更新坐标
+    const vLine = this.vLines.get(viewportId);
+    if (vLine) {
+      vLine.setAttribute('x1', String(x));
+      vLine.setAttribute('y1', '0');
+      vLine.setAttribute('x2', String(x));
+      vLine.setAttribute('y2', String(height));
+    }
   }
 }
 

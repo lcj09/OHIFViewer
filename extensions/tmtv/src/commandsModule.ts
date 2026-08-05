@@ -36,6 +36,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     toolGroupService,
     cornerstoneViewportService,
     segmentationService,
+    toolbarService,
   } = servicesManager.services;
 
   const utilityModule = extensionManager.getModuleEntry(
@@ -698,54 +699,169 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       }
     },
     // ============================================================================
-    // [2026-07-30 新增] TMTV 十字线切换命令
+    // [2026-08-04 新增] 设置原生 CrosshairsTool 的可见性
     // ============================================================================
     //
-    // 功能：在 TMTV 布局中切换 SVG 十字线的显示/隐藏
+    // 功能：在所有 TMTV 工具组中激活/停用 Cornerstone CrosshairsTool
     //
-    // 逻辑：
-    //   - 如果当前是 TMTV 布局（AXIAL/Sagittal/Coronal）：
-    //     1. 获取当前 stage ID 和对应的 viewportId 列表
-    //     2. 注册所有 viewport 到 TMTVCrosshairService
-    //     3. 切换十字线可见性（toggle）
-    //   - 如果当前不是 TMTV 布局：
-    //     执行原始的 setToolActiveToolbar 逻辑（Cornerstone CrosshairsTool）
+    // 参数：
+    //   visible - true: 激活 CrosshairsTool（setToolActive，显示十字线）
+    //             false: 停用 CrosshairsTool（setToolDisabled，隐藏十字线）
     //
     // 使用场景：
-    //   工具栏的"十字线"按钮调用此命令
+    //   1. toggleTMTVCrosshairs 命令在非 TMTV 布局中切换原生十字线
+    //   2. handleLayoutChanged 在布局切换时恢复/停用原生十字线
+    //
+    // 注意：
+    //   - 使用 setToolDisabled 而非 setToolPassive，确保十字线完全隐藏
+    //     （Passive 模式下十字线 annotation 仍会渲染）
+    //   - 覆盖所有四个工具组（CT/PT/Fusion/MIP），确保切换布局后一致
+    //
+    // ============================================================================
+    setNativeCrosshairsVisibility: ({ visible }: { visible: boolean }) => {
+      const tgIds = [toolGroupIds.CT, toolGroupIds.PT, toolGroupIds.Fusion, toolGroupIds.MIP];
+      tgIds.forEach(tgId => {
+        try {
+          const toolGroup = toolGroupService.getToolGroup(tgId);
+          if (!toolGroup) return;
+          const csToolGroup = (toolGroup as any)._toolGroup || toolGroup;
+          if (visible) {
+            commandsManager.runCommand('setToolActiveToolbar', {
+              toolName: 'Crosshairs',
+              toolGroupIds: [tgId],
+            });
+          } else {
+            csToolGroup.setToolDisabled('Crosshairs');
+          }
+        } catch (e) {
+          console.warn(`setNativeCrosshairsVisibility: 切换失败 (${tgId})`, e);
+        }
+      });
+
+      // 触发所有视口重新渲染，确保十字线立即显示/隐藏
+      try {
+        const vpIds = viewportGridService.getViewportIds();
+        if (vpIds) {
+          vpIds.forEach(vpId => {
+            const vp = cornerstoneViewportService.getCornerstoneViewport(vpId);
+            if (vp) vp.render();
+          });
+        }
+      } catch (e) {
+        // ignore
+      }
+    },
+    // ============================================================================
+    // [2026-08-05 新增] 停用所有工具组中当前激活的主工具
+    // ============================================================================
+    //
+    // 功能：遍历所有 TMTV 工具组，将当前激活的左键主工具设为 Passive 或 Disabled
+    //
+    // 使用场景：
+    //   toggleTMTVCrosshairs 在 TMTV 布局下激活十字线时调用，
+    //   确保十字线按钮与其他工具按钮双向互斥：
+    //   - 激活十字线 → 停用其他工具（本函数）
+    //   - 激活其他工具 → 停用十字线（handlePrimaryToolActivated）
+    //
+    // 注意：
+    //   - 仅停用非 Crosshairs 工具（Crosshairs 由 setNativeCrosshairsVisibility 单独管理）
+    //   - 根据 disableOnPassive 配置决定使用 setToolDisabled 或 setToolPassive
+    //   - setToolPassive/setToolDisabled 不触发 TOOL_ACTIVATED 事件，
+    //     不会引发 handlePrimaryToolActivated 的级联调用
+    //
+    // ============================================================================
+    deactivateActivePrimaryTools: () => {
+      const tgIds = [toolGroupIds.CT, toolGroupIds.PT, toolGroupIds.Fusion, toolGroupIds.MIP];
+      tgIds.forEach(tgId => {
+        try {
+          const toolGroup = toolGroupService.getToolGroup(tgId);
+          if (!toolGroup) return;
+          const csToolGroup = (toolGroup as any)._toolGroup || toolGroup;
+          const activeToolName = csToolGroup.getActivePrimaryMouseButtonTool();
+          if (activeToolName && activeToolName !== 'Crosshairs') {
+            const activeToolOptions = csToolGroup.getToolConfiguration(activeToolName);
+            if (activeToolOptions?.disableOnPassive) {
+              csToolGroup.setToolDisabled(activeToolName);
+            } else {
+              csToolGroup.setToolPassive(activeToolName);
+            }
+          }
+        } catch (e) {
+          console.warn(`deactivateActivePrimaryTools: 停用失败 (${tgId})`, e);
+        }
+      });
+    },
+    // ============================================================================
+    // [2026-07-30 新增, 2026-08-04 重写, 2026-08-05 双向互斥] TMTV 十字线切换命令
+    // ============================================================================
+    //
+    // 功能：切换十字线显示/隐藏，TMTV 和非 TMTV 布局统一使用
+    //       tmtvCrosshairService.visible 作为唯一状态源
+    //
+    // 核心设计：
+    //   tmtvCrosshairService.visible 是两套十字线系统的统一状态：
+    //   - TMTV 布局：visible 控制 SVG overlay 的显隐
+    //   - 非 TMTV 布局：visible 控制 Cornerstone CrosshairsTool 的激活/停用
+    //
+    // 双向互斥（2026-08-05 新增）：
+    //   - 激活十字线时停用其他工具（TMTV: deactivateActivePrimaryTools; 非TMTV: setToolActiveToolbar 自动停用）
+    //   - 激活其他工具时停用十字线（OverlayMenu 的 handlePrimaryToolActivated）
+    //
+    // 切换逻辑：
+    //   1. 取反 visible 状态
+    //   2. 根据当前布局类型应用到对应的十字线系统：
+    //      - TMTV：setVisible 触发 SVG 重绘 + 停用原生 CrosshairsTool + 停用其他工具
+    //      - 非 TMTV：setNativeCrosshairsVisibility 激活/停用 CrosshairsTool（自动停用/恢复其他工具）
+    //   3. 刷新工具栏按钮状态
     //
     // ============================================================================
     toggleTMTVCrosshairs: () => {
       const stageId = hangingProtocolService?._getCurrentStageModel?.()?.id || '';
       const isTmtv = tmtvCrosshairService.isTmtvLayout(stageId);
 
-      if (!isTmtv) {
-        // 非 TMTV 布局：使用原始 Cornerstone CrosshairsTool 逻辑
-        commandsManager.runCommand('setToolActiveToolbar', {
-          toolName: 'Crosshairs',
-          toolGroupIds: [toolGroupIds.CT, toolGroupIds.PT, toolGroupIds.Fusion, toolGroupIds.MIP],
+      // 统一状态：切换 visible
+      const newVisible = !tmtvCrosshairService.getVisible();
+
+      if (isTmtv) {
+        // TMTV 布局：确保 viewport 已注册到 TMTVCrosshairService
+        const viewportIds = tmtvCrosshairService.getViewportIdsForStage(stageId);
+        viewportIds.forEach(vpId => {
+          try {
+            const viewport = cornerstoneViewportService.getCornerstoneViewport(vpId);
+            if (viewport && !tmtvCrosshairService.getViewport(vpId)) {
+              tmtvCrosshairService.addViewport(vpId, viewport);
+            }
+          } catch (e) {
+            console.warn(`toggleTMTVCrosshairs: 注册 viewport 失败 (${vpId})`, e);
+          }
         });
-        return;
+
+        // setVisible 设置 visible 状态并触发 SVG 重绘
+        tmtvCrosshairService.setVisible(newVisible);
+
+        // 停用原生 CrosshairsTool，避免两套十字线系统同时显示
+        actions.setNativeCrosshairsVisibility({ visible: false });
+
+        if (newVisible) {
+          // [2026-08-05 双向互斥] 激活十字线时停用其他工具，
+          // 使其他工具按钮（WindowLevel/Pan/Zoom 等）显示为非激活状态。
+          // 非 TMTV 布局不需要此步骤，因为 setToolActiveToolbar 会自动停用前一个工具。
+          actions.deactivateActivePrimaryTools();
+        }
+      } else {
+        // 非 TMTV 布局：设置统一状态（render 是 no-op，因为无 SVG viewport 注册）
+        tmtvCrosshairService.setVisible(newVisible);
+
+        // 根据新状态激活/停用原生 CrosshairsTool
+        // setToolActiveToolbar 会自动停用前一个激活的工具，实现互斥
+        actions.setNativeCrosshairsVisibility({ visible: newVisible });
       }
 
-      // TMTV 布局：使用 TMTVCrosshairService（SVG overlay）
-      const viewportIds = tmtvCrosshairService.getViewportIdsForStage(stageId);
-
-      // 注册所有 viewport（如果还没注册）
-      viewportIds.forEach(vpId => {
-        try {
-          const viewport = cornerstoneViewportService.getCornerstoneViewport(vpId);
-          if (viewport && !tmtvCrosshairService.getViewport(vpId)) {
-            tmtvCrosshairService.addViewport(vpId, viewport);
-          }
-        } catch (e) {
-          console.warn(`toggleTMTVCrosshairs: 注册 viewport 失败 (${vpId})`, e);
-        }
-      });
-
-      // 切换可见性
-      const currentlyVisible = tmtvCrosshairService.getVisible();
-      tmtvCrosshairService.setVisible(!currentlyVisible);
+      // 刷新工具栏状态，使 Crosshairs 按钮的 isActive 更新（蓝色背景）
+      // evaluate.tmtvCrosshair 依赖 tmtvCrosshairService.getVisible()
+      // 必须传 viewportId，否则其他按钮（如 WindowLevel）的 evaluator 会丢失 isActive
+      const { activeViewportId: activeVpId } = viewportGridService.getState();
+      toolbarService.refreshToolbarState({ viewportId: activeVpId });
     },
   };
 
@@ -794,6 +910,9 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     toggleTMTVCrosshairs: {
       commandFn: actions.toggleTMTVCrosshairs,
+    },
+    setNativeCrosshairsVisibility: {
+      commandFn: actions.setNativeCrosshairsVisibility,
     },
   };
 

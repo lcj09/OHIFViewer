@@ -5,10 +5,12 @@ import SaveMenu from './Toolbar/SaveMenu';
 import OverlayMenu from './Toolbar/OverlayMenu';
 import ColormapMenu from './Toolbar/ColormapMenu';
 import SuvThresholdMenu from './Toolbar/SuvThresholdMenu';
+import tmtvCrosshairService from './services/TMTVCrosshairService';
 
 // 2026-04-28 - TMTV专用toolbar模块
 // 注意：必须使用工厂函数模式，接收 commandsManager 和 servicesManager
 export default function getToolbarModule({ commandsManager, servicesManager }) {
+
   return [
     {
       name: 'tmtv.RectangleROIThresholdOptions',
@@ -48,6 +50,25 @@ export default function getToolbarModule({ commandsManager, servicesManager }) {
       name: 'ohif.suvThresholdMenu',
       defaultComponent: props =>
         SuvThresholdMenu({ ...props, commandsManager, servicesManager }),
+    },
+    // [2026-08-04 新增, 2026-08-04 简化] TMTV十字线按钮的 evaluate 函数
+    // 统一使用 tmtvCrosshairService.getVisible() 作为唯一状态源，
+    // 不再区分 TMTV/非 TMTV 布局，因为 toggleTMTVCrosshairs 命令
+    // 已统一管理两套十字线系统的状态：
+    //   - TMTV 布局：visible 控制 SVG overlay
+    //   - 非 TMTV 布局：visible 控制 Cornerstone CrosshairsTool
+    {
+      name: 'evaluate.tmtvCrosshair',
+      evaluate: () => {
+        try {
+          return {
+            disabled: false,
+            isActive: tmtvCrosshairService.getVisible(),
+          };
+        } catch (e) {
+          return { disabled: false };
+        }
+      },
     },
   ];
 }

@@ -282,7 +282,10 @@ const toolbarButtons = [
       icon: 'tool-crosshair',
       label: i18n.t('Buttons:Crosshairs'),
       commands: 'toggleTMTVCrosshairs',
-      evaluate: 'evaluate.action',
+      // [2026-08-04] 使用自定义 evaluator，在 TMTV 布局时基于 tmtvCrosshairService.getVisible()
+      // 决定 isActive（蓝色背景），在非 TMTV 布局时回退到标准 toolGroup 检查。
+      // 原 evaluate.action 不返回 isActive，导致按钮永远不显示蓝色激活态。
+      evaluate: 'evaluate.tmtvCrosshair',
     },
   },
   // [2026-05-19 新增] 单切线旋转按钮 - 与十字线类似，但旋转时仅影响一条参考线对应的一个视口

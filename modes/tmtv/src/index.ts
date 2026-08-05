@@ -42,6 +42,9 @@ const unsubscriptions = [];
 // causes "Cannot read properties of undefined (reading 'samplesPerPixel')" errors.
 // Delay the clear so in-flight requests can complete. Cancelled in onModeEnter.
 let metadataClearTimer: ReturnType<typeof setTimeout> | null = null;
+// [内存排查] 跟踪 PROTOCOL_CHANGED 回调中的 resize setTimeout。
+// 原代码未跟踪此 timer，mode exit 后 200ms 内回调可能在已销毁的 service 上执行。
+let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 
 function modeFactory({ modeConfiguration }) {
   return {
@@ -60,6 +63,11 @@ function modeFactory({ modeConfiguration }) {
       if (metadataClearTimer) {
         clearTimeout(metadataClearTimer);
         metadataClearTimer = null;
+      }
+      // [内存排查] 取消上一次 mode exit 前可能 pending 的 resize timer
+      if (resizeTimer) {
+        clearTimeout(resizeTimer);
+        resizeTimer = null;
       }
 
       const {
@@ -108,11 +116,14 @@ function modeFactory({ modeConfiguration }) {
       unsubscriptions.push(unsubscribe);
 
       // [2026-07-06] 监听布局切换事件，延迟resize确保视口尺寸正确更新，避免图像变形
+      // [内存排查] 跟踪 resize timer，在 onModeExit 中清除，避免回调在 service 销毁后执行
       const { unsubscribe: protocolUnsubscribe } = hangingProtocolService.subscribe(
         hangingProtocolService.EVENTS.PROTOCOL_CHANGED,
         () => {
-          setTimeout(() => {
+          if (resizeTimer) clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(() => {
             cornerstoneViewportService.resize();
+            resizeTimer = null;
           }, 200);
         }
       );
@@ -338,6 +349,11 @@ function modeFactory({ modeConfiguration }) {
       syncGroupService.destroy();
       segmentationService.destroy();
       cornerstoneViewportService.destroy();
+      // [内存排查] 清除 pending 的 resize timer，避免回调在 cornerstoneViewportService 销毁后执行
+      if (resizeTimer) {
+        clearTimeout(resizeTimer);
+        resizeTimer = null;
+      }
       // Delay DicomMetadataStore.clear() to allow in-flight image load requests to complete.
       // wadors/wadouri loaders have cancelFn=undefined, so HTTP requests already sent cannot
       // be cancelled. They need metadata available when createImage calls getImageFrame.

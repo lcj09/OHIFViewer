@@ -6,8 +6,12 @@
 //   2. 患者信息 - 切换视口四角患者信息的可见性
 //
 // [2026-07-30 修改] 集成 TMTVCrosshairService
+// [2026-08-04 重构] 统一状态管理
+//   - tmtvCrosshairService.visible 作为两套十字线系统的唯一状态源
 //   - TMTV 布局（AXIAL/Sagittal/Coronal）使用 TMTVCrosshairService（SVG overlay）
-//   - 其他布局使用原始逻辑（Cornerstone CrosshairsTool，仅 fusion + mip toolGroup）
+//   - 非 TMTV 布局使用 Cornerstone CrosshairsTool（setToolActive/setToolDisabled）
+//   - 布局切换时 visible 状态保持不变，自动恢复对应系统的十字线
+//   - 所有切换逻辑统一委托给 toggleTMTVCrosshairs 命令
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import PropTypes from 'prop-types';
@@ -39,6 +43,7 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
     customizationService,
     viewportGridService,
     hangingProtocolService,
+    toolbarService,
   } = servicesManager.services;
 
   // 同步 showCrosshairs 到 ref
@@ -88,34 +93,33 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
       }
     });
 
-    // 如果有注册成功的 viewport，恢复十字线显示状态
-    if (registeredCount > 0 && showCrosshairsRef.current) {
-      tmtvCrosshairService.setVisible(true);
-    }
-  }, [getCurrentStageId, cornerstoneViewportService]);
-
-  // 检查十字线工具是否处于 active 状态（非 TMTV 布局使用）
-  const checkCrosshairsActive = useCallback(() => {
-    // TMTV 布局使用 TMTVCrosshairService 的状态
-    if (checkIsTmtvLayout()) {
-      return tmtvCrosshairService.getVisible();
-    }
-
-    // 其他布局使用 Cornerstone CrosshairsTool 的状态
-    try {
-      const toolGroupIds = ['fusionToolGroup', 'mipToolGroup'];
-      for (const tgId of toolGroupIds) {
-        const toolGroup = toolGroupService.getToolGroup(tgId);
-        if (!toolGroup) continue;
-        const csToolGroup = toolGroup._toolGroup || toolGroup;
-        const activeTool = csToolGroup.getActivePrimaryMouseButtonTool();
-        if (activeTool === 'Crosshairs') return true;
+    // [2026-08-04] 布局切换后恢复十字线显示
+    // 检查 tmtvCrosshairService.getVisible() 而非 showCrosshairsRef.current，
+    // 因为用户可能通过标准 Crosshairs 按钮激活（不经过 OverlayMenu 的 state）。
+    // clear() 不再重置 visible，所以布局切换后 visible 状态被保留。
+    if (registeredCount > 0) {
+      const isVisible = tmtvCrosshairService.getVisible();
+      if (isVisible) {
+        // setVisible(true) 会调用 render()，在新 viewport 上绘制十字线
+        tmtvCrosshairService.setVisible(true);
       }
-      return false;
-    } catch (e) {
-      return false;
+      // 刷新工具栏，同步 Crosshairs 按钮的蓝色背景
+      const { activeViewportId } = viewportGridService.getState();
+      toolbarService.refreshToolbarState({ viewportId: activeViewportId });
+      // 同步 OverlayMenu 的 showCrosshairs 状态
+      if (showCrosshairsRef.current !== isVisible) {
+        setShowCrosshairs(isVisible);
+      }
     }
-  }, [toolGroupService, checkIsTmtvLayout]);
+  }, [getCurrentStageId, cornerstoneViewportService, viewportGridService, toolbarService]);
+
+  // [2026-08-04 简化] 检查十字线是否处于激活状态
+  // 统一使用 tmtvCrosshairService.getVisible() 作为唯一状态源，
+  // 不再区分 TMTV/非 TMTV 布局，因为 toggleTMTVCrosshairs 命令
+  // 已统一管理两套十字线系统的状态。
+  const checkCrosshairsActive = useCallback(() => {
+    return tmtvCrosshairService.getVisible();
+  }, []);
 
   // 检查患者信息是否可见
   const checkPatientInfoVisible = useCallback(() => {
@@ -138,6 +142,14 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
       const tmtv = checkIsTmtvLayout();
 
       if (tmtv) {
+        // [内存排查] 立即清理旧的十字线 SVG 状态，释放对已销毁 viewport 的引用。
+        // clear() 不重置 visible，保留状态以便切换布局后自动恢复十字线。
+        tmtvCrosshairService.clear();
+
+        // [2026-08-04] 停用原生 CrosshairsTool，避免两套十字线系统同时显示。
+        // TMTV 布局使用 SVG overlay，不需要 Cornerstone CrosshairsTool。
+        commandsManager.runCommand('setNativeCrosshairsVisibility', { visible: false });
+
         // 清除之前的 pending timeout，避免重复注册
         if (pendingTimeoutRef.current) {
           clearTimeout(pendingTimeoutRef.current);
@@ -150,8 +162,23 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
           }
         }, 500);
       } else {
-        // 非 TMTV 布局：清理 TMTVCrosshairService
+        // [2026-08-04] 非 TMTV 布局：清理 SVG 层但保留 visible 状态
+        // 使用 clear() 而非 reset()，使 visible 状态在布局切换后保持，
+        // 这样切换到非 TMTV 布局时原生 CrosshairsTool 能根据 visible 自动恢复。
         tmtvCrosshairService.clear();
+
+        // 根据保留的 visible 状态恢复原生 CrosshairsTool
+        const isVisible = tmtvCrosshairService.getVisible();
+        commandsManager.runCommand('setNativeCrosshairsVisibility', { visible: isVisible });
+
+        // 同步 OverlayMenu 的 showCrosshairs 状态
+        if (showCrosshairsRef.current !== isVisible) {
+          setShowCrosshairs(isVisible);
+        }
+
+        // 刷新工具栏，同步 Crosshairs 按钮的蓝色背景
+        const { activeViewportId } = viewportGridService.getState();
+        toolbarService.refreshToolbarState({ viewportId: activeViewportId });
       }
     };
 
@@ -159,6 +186,39 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
       if (!isMountedRef.current) return;
       if (checkIsTmtvLayout()) {
         registerTmtvViewports();
+      }
+    };
+
+    // [2026-08-05 新增] 工具互斥：当激活非 Crosshairs 工具时，自动停用十字线
+    // 监听 toolGroupService 的 PRIMARY_TOOL_ACTIVATED 事件，
+    // 当任何非 Crosshairs 工具被激活为左键主工具时，停用十字线。
+    // 这使得十字线按钮与其他工具按钮（WindowLevel/Pan/Zoom/Length 等）互斥。
+    //
+    // 事件流程：
+    //   用户点击工具按钮 → setToolActiveToolbar → toolGroup.setToolActive
+    //   → Cornerstone3D 触发 TOOL_ACTIVATED → toolGroupService 触发 PRIMARY_TOOL_ACTIVATED
+    //   → 本处理器停用十字线 → recordInteraction 调用 refreshToolbarState
+    //   → Crosshairs 按钮的 evaluate.tmtvCrosshair 返回 isActive: false
+    //
+    // 注意：Crosshairs 工具自身的激活不会触发停用（toolName === 'Crosshairs' 时跳过），
+    // 这允许非 TMTV 布局通过 setNativeCrosshairsVisibility 激活原生 CrosshairsTool。
+    const handlePrimaryToolActivated = (callbackProps: { toolName: string }) => {
+      if (!isMountedRef.current) return;
+      const { toolName } = callbackProps;
+      if (toolName !== 'Crosshairs' && tmtvCrosshairService.getVisible()) {
+        // 停用十字线：setVisible(false) 会隐藏 SVG overlay（TMTV 布局）
+        // 并设置 visible = false（统一状态）
+        // 非 TMTV 布局下原生 CrosshairsTool 已被 setToolActive 自动停用
+        tmtvCrosshairService.setVisible(false);
+
+        // 同步 OverlayMenu 的 showCrosshairs 状态
+        if (showCrosshairsRef.current) {
+          setShowCrosshairs(false);
+        }
+
+        // 刷新工具栏，同步 Crosshairs 按钮的蓝色背景
+        const { activeViewportId } = viewportGridService.getState();
+        toolbarService.refreshToolbarState({ viewportId: activeViewportId });
       }
     };
 
@@ -171,6 +231,12 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
     const subscriptionViewportsReady = viewportGridService.subscribe(
       viewportGridService.EVENTS.VIEWPORTS_READY,
       handleViewportsReady
+    );
+
+    // 监听工具激活事件（互斥逻辑）
+    const subscriptionPrimaryToolActivated = toolGroupService.subscribe(
+      toolGroupService.EVENTS.PRIMARY_TOOL_ACTIVATED,
+      handlePrimaryToolActivated
     );
 
     // 初始检查
@@ -186,8 +252,9 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
       // subscribe() 返回 { unsubscribe: () => void } 对象
       if (subscriptionLayoutChanged?.unsubscribe) subscriptionLayoutChanged.unsubscribe();
       if (subscriptionViewportsReady?.unsubscribe) subscriptionViewportsReady.unsubscribe();
-      // 组件卸载时清理十字线服务
-      tmtvCrosshairService.clear();
+      if (subscriptionPrimaryToolActivated?.unsubscribe) subscriptionPrimaryToolActivated.unsubscribe();
+      // 组件卸载时完全重置十字线服务（包括 visible 状态）
+      tmtvCrosshairService.reset();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -198,52 +265,42 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
     setShowPatientInfo(checkPatientInfoVisible());
   }, [checkCrosshairsActive, checkPatientInfoVisible]);
 
-  // [2026-07-30 修改] 切换十字线可见性
-  // TMTV 布局使用 TMTVCrosshairService（SVG overlay）
-  // 其他布局使用原始逻辑（Cornerstone CrosshairsTool）
-  const handleToggleCrosshairs = () => {
-    const newState = !showCrosshairs;
-    setShowCrosshairs(newState);
-
-    const tmtv = checkIsTmtvLayout();
-
-    if (tmtv) {
-      // TMTV 布局：使用 TMTVCrosshairService
-      tmtvCrosshairService.setVisible(newState);
-      return;
-    }
-
-    // 其他布局：使用原始逻辑（Cornerstone CrosshairsTool）
-    const toolGroupIds = ['fusionToolGroup', 'mipToolGroup'];
-    toolGroupIds.forEach(tgId => {
-      try {
-        const toolGroup = toolGroupService.getToolGroup(tgId);
-        if (!toolGroup) return;
-        const csToolGroup = toolGroup._toolGroup || toolGroup;
-
-        if (newState) {
-          commandsManager.runCommand('setToolActiveToolbar', {
-            toolName: 'Crosshairs',
-            toolGroupIds: [tgId],
-          });
-        } else {
-          csToolGroup.setToolPassive('Crosshairs');
+  // [2026-08-04 新增] 订阅工具栏状态变化，同步 showCrosshairs
+  // 当用户通过工具栏的 Crosshairs 按钮（非 OverlayMenu 下拉菜单）切换十字线时，
+  // toggleTMTVCrosshairs 命令会刷新工具栏状态，触发 TOOL_BAR_STATE_MODIFIED 事件。
+  // 此订阅确保 OverlayMenu 的 showCrosshairs 状态与统一状态源保持同步，
+  // 使覆盖层按钮的蓝色背景和下拉菜单的勾选状态正确反映当前十字线状态。
+  useEffect(() => {
+    const subscription = toolbarService.subscribe(
+      toolbarService.EVENTS.TOOL_BAR_STATE_MODIFIED,
+      () => {
+        if (!isMountedRef.current) return;
+        const isVisible = tmtvCrosshairService.getVisible();
+        if (showCrosshairsRef.current !== isVisible) {
+          setShowCrosshairs(isVisible);
         }
-      } catch (e) {
-        console.warn(`OverlayMenu: 切换十字线失败 (${tgId})`, e);
       }
-    });
+    );
 
-    // 触发所有视口重新渲染
-    try {
-      const viewportIds = viewportGridService.getViewportIds();
-      if (viewportIds) {
-        viewportIds.forEach(vpId => {
-          const viewport = cornerstoneViewportService.getCornerstoneViewport(vpId);
-          if (viewport) viewport.render();
-        });
-      }
-    } catch (e) {}
+    return () => {
+      if (subscription?.unsubscribe) subscription.unsubscribe();
+    };
+  }, [toolbarService]);
+
+  // [2026-08-04 简化] 切换十字线可见性
+  // 统一委托给 toggleTMTVCrosshairs 命令处理，该命令内部会：
+  //   1. 切换 tmtvCrosshairService.visible（统一状态源）
+  //   2. TMTV 布局：重绘 SVG overlay + 停用原生 CrosshairsTool
+  //   3. 非 TMTV 布局：激活/停用原生 CrosshairsTool
+  //   4. 刷新工具栏按钮状态
+  const handleToggleCrosshairs = () => {
+    commandsManager.runCommand('toggleTMTVCrosshairs');
+
+    // 同步 OverlayMenu 的 showCrosshairs 状态
+    const isVisible = tmtvCrosshairService.getVisible();
+    if (showCrosshairsRef.current !== isVisible) {
+      setShowCrosshairs(isVisible);
+    }
   };
 
   // 切换患者信息可见性
@@ -284,7 +341,11 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={`inline-flex h-10 w-10 items-center justify-center rounded-lg text-foreground/80 hover:bg-background hover:text-highlight`}
+                  className={`inline-flex h-10 w-10 items-center justify-center rounded-lg ${
+                    showCrosshairs
+                      ? 'bg-highlight text-background hover:!bg-highlight/80'
+                      : 'bg-transparent text-foreground/80 hover:bg-background hover:text-highlight'
+                  }`}
                   aria-label="覆盖层"
                 >
                   <Icons.ByName name="EyeVisible" className="h-7 w-7" />
@@ -312,7 +373,7 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
             <Button
               variant="ghost"
               className={`flex h-8 w-full items-center justify-start px-2 py-1 text-sm hover:bg-primary-dark ${
-                showCrosshairs ? 'text-common-bright' : 'text-gray-400'
+                showCrosshairs ? 'text-highlight' : 'text-gray-400'
               }`}
               onClick={handleToggleCrosshairs}
               onPointerDown={e => e.stopPropagation()}
@@ -327,7 +388,7 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
             <Button
               variant="ghost"
               className={`flex h-8 w-full items-center justify-start px-2 py-1 text-sm hover:bg-primary-dark ${
-                showPatientInfo ? 'text-common-bright' : 'text-gray-400'
+                showPatientInfo ? 'text-highlight' : 'text-gray-400'
               }`}
               onClick={handleTogglePatientInfo}
               onPointerDown={e => e.stopPropagation()}
