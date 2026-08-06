@@ -2179,12 +2179,38 @@ function commandsModule({
         return;
       }
 
+      // [2026-08-06] 根据同步设置决定是否禁用 cameraPosition 同步组
+      // customizationService.syncSettings.orientationSync:
+      //   true（默认）→ 同步方位切换到同组其他视口
+      //   false       → 只切换当前视口，不同步
+      let disabledSynchronizers = [];
+      try {
+        const syncSettings = customizationService.getCustomization('syncSettings');
+        const orientationSyncEnabled = syncSettings?.orientationSync !== false; // 默认 true
+
+        if (!orientationSyncEnabled) {
+          const syncs = syncGroupService.getSynchronizersForViewport(viewportId);
+          disabledSynchronizers = syncs.filter(s => {
+            const type = syncGroupService.getSynchronizerType(s);
+            return type && type.toLowerCase() === 'cameraposition';
+          });
+          disabledSynchronizers.forEach(s => s.setEnabled(false));
+        }
+      } catch (e) {
+        console.warn('setViewportOrientation: 检查同步设置失败', e);
+      }
+
       viewport.setOrientation(orientation);
       viewport.render();
 
       // update the orientation in the viewport info
       const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
       viewportInfo.setOrientation(orientation);
+
+      // [2026-08-06] 恢复同步组
+      disabledSynchronizers.forEach(s => {
+        try { s.setEnabled(true); } catch { /* ignore */ }
+      });
     },
     /**
      * Toggles the horizontal flip state of the viewport.

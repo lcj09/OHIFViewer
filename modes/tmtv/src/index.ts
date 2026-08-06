@@ -163,6 +163,7 @@ function modeFactory({ modeConfiguration }) {
         'SuvThreshold',       // [2026-07-08 新增] SUV阈值菜单（设置PET窗位）
         'TrackballRotate',    // [2026-05-11 新增] 3D旋转（仅MIP视口可用）
         'TmtvLayout',         // [2026-04-28] TMTV布局选择器 (2x1/1x2/MPR等)
+        'SyncMenu',           // [2026-08-06 新增] 同步设置菜单（控制方位切换是否同步到其他视口）
         'Probe',              // [2026-04-29] 探针功能 (独立于测量区域)
       ]);
 

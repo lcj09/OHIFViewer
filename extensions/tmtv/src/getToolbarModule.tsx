@@ -3,6 +3,7 @@ import TmtvLayoutSelector from './Toolbar/TmtvLayoutSelector';
 import FusionAdjustMenu from './Toolbar/FusionAdjustMenu';
 import SaveMenu from './Toolbar/SaveMenu';
 import OverlayMenu from './Toolbar/OverlayMenu';
+import SyncMenu from './Toolbar/SyncMenu';
 import ColormapMenu from './Toolbar/ColormapMenu';
 import SuvThresholdMenu from './Toolbar/SuvThresholdMenu';
 import tmtvCrosshairService from './services/TMTVCrosshairService';
@@ -39,6 +40,12 @@ export default function getToolbarModule({ commandsManager, servicesManager }) {
       name: 'ohif.overlayMenu',
       defaultComponent: props =>
         OverlayMenu({ ...props, commandsManager, servicesManager }),
+    },
+    // [2026-08-06 新增] 同步设置菜单 - 控制方位切换是否同步
+    {
+      name: 'ohif.syncMenu',
+      defaultComponent: props =>
+        SyncMenu({ ...props, servicesManager }),
     },
     // [2026-07-06 新增] 伪彩色菜单 - 切换PT volume的colormap
     {

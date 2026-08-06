@@ -196,6 +196,7 @@ import {
 } from './Sources/Helpers';
 import Link from './Sources/Link';
 import IconColorLUT from './Sources/IconColorLUT';
+import IconSync from './Sources/IconSync'; // [2026-08-06 新增] 同步图标
 import CTAAA from '../../../assets/images/CT-AAA.png';
 import CTAAA2 from '../../../assets/images/CT-AAA2.png';
 import CTAir from '../../../assets/images/CT-Air.png';
@@ -672,6 +673,7 @@ export const Icons = {
   'icon-tool-shape': (props: IconProps) => ToolShape(props),
   link: (props: IconProps) => Link(props),
   'icon-color-lut': (props: IconProps) => IconColorLUT(props),
+  'icon-sync': (props: IconProps) => IconSync(props),
   'icon-link': (props: IconProps) => Link(props),
   'icon-clear': (props: IconProps) => Clear(props),
   'icon-search': (props: IconProps) => Search(props),

@@ -328,6 +328,17 @@ const toolbarButtons = [
       evaluate: 'evaluate.action',
     },
   },
+  // [2026-08-06 新增] 同步设置菜单按钮 - 控制方位切换是否同步到其他视口
+  {
+    id: 'SyncMenu',
+    uiType: 'ohif.syncMenu',
+    props: {
+      icon: 'icon-sync',
+      label: '同步',
+      tooltip: '同步设置',
+      evaluate: 'evaluate.action',
+    },
+  },
   // [2026-07-06 新增] 伪彩色菜单按钮 - 切换PT volume的伪彩色映射
   {
     id: 'Colormap',
