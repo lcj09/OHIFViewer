@@ -1,6 +1,7 @@
 // [2026-07-30 新增] TMTV 十字线服务
 // [2026-08-05 新增] 第二阶段：点击定位（位置同步）
 // [2026-08-05 新增] 第三阶段：十字线拖动（Crosshair Drag）
+// [2026-08-05 新增] 第四阶段：双切线旋转（Crosshair Rotation）
 //
 // 独立于 Cornerstone CrosshairsTool，使用 SVG overlay 绘制十字线。
 // 不依赖任何 ToolGroup，直接管理 viewport 上的 SVG 层。
@@ -9,44 +10,52 @@
 //   - visible: 控制十字线显隐
 //   - worldPosition: 十字线在世界坐标系中的位置
 //   - viewports: 注册的 viewport 列表
-//   - SVG overlay 绘制横竖两条参考线
+//   - SVG overlay 绘制横竖两条参考线（中心空心）
 //   - 点击定位：点击任意 viewport，四个 viewport 的十字线同步移动到同一解剖位置
 //   - 十字线拖动：按住十字线中心拖动，所有 viewport 同步移动
+//   - 双切线旋转：旋转十字线方向，CT/PET/Fusion 同步旋转，MIP 不参与
 //
-// 暂不实现：
-//   ❌ slice 同步
-//   ❌ rotation
-//   ❌ reference line
-//   ❌ annotation
+// 十字线状态（TMTVCrosshairState）：
+//   - visible: 可见性
+//   - worldPosition: 世界坐标位置（点击/拖动改变）
+//   - viewPlaneNormal: 当前平面法向量
+//   - viewUp: 平面内上方向（旋转改变）
+//   - rotationAngle: 累计旋转角度（度，用于 SVG 绘制）
+//
+// 旋转设计：
+//   - 只旋转 CT/PET/Fusion，MIP 保持自己的投影规则
+//   - 旋转只改变 viewUp（绕 viewPlaneNormal 旋转），不改变 worldPosition
+//   - 旋转通过 viewport.setCamera({ viewUp }) 应用到非 MIP viewport
+//   - SVG 十字线方向随旋转角度同步绘制
 //
 // 架构：
 //   TMTVCrosshairService
 //     |
-//     +-- ctAXIAL (SVG overlay + mousedown handler)
-//     +-- ptAXIAL (SVG overlay + mousedown handler)
-//     +-- fusionAXIAL (SVG overlay + mousedown handler)
-//     +-- mipSagittal (SVG overlay + mousedown handler)
+//     +-- ctAXIAL (SVG overlay + mousedown handler + camera sync)
+//     +-- ptAXIAL (SVG overlay + mousedown handler + camera sync)
+//     +-- fusionAXIAL (SVG overlay + mousedown handler + camera sync)
+//     +-- mipSagittal (SVG overlay + mousedown handler, NO rotation)
 //
 // 每个 viewport.element 上添加一个绝对定位的 SVG 层：
 //   viewport.element
 //     |-- canvas (Cornerstone 渲染)
 //     +-- svg (十字线 overlay, pointer-events: none)
-//
-// 点击/拖动流程：
-//   mousedown 事件
-//   → 判断是否点中十字线中心（距离 < DRAG_HIT_THRESHOLD）
-//     → 命中：进入拖动模式，document 监听 mousemove/mouseup
-//       → mousemove: canvasToWorld → setPosition → render
-//       → mouseup: 结束拖动，移除 document 监听
-//     → 未命中：Phase 2 点击定位，十字线跳到点击位置
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const CROSSHAIR_COLOR = 'rgb(0, 200, 0)';
 const CROSSHAIR_LINE_WIDTH = 1;
 // [2026-08-05] 十字线中心空白半径（像素）：中心两侧各留此长度的间隙，形成空心中心
 const CROSSHAIR_CENTER_GAP = 12;
+// [2026-08-05 第四阶段] 旋转相关常量
+const ROTATION_LINE_HIT_THRESHOLD = 8; // 鼠标到十字线的距离阈值（像素），在此范围内可触发旋转
+const HANDLE_DISTANCE = 50; // 旋转手柄距十字线中心的距离（像素）
+const HANDLE_RADIUS = 4; // 旋转手柄圆点半径（像素）
 // cornerstone3D 相机变化事件常量（对应 Enums.Events.CAMERA_MODIFIED）
 const CAMERA_MODIFIED_EVENT = 'CORNERSTONE_CAMERA_MODIFIED';
+// cornerstone3D 图像渲染完成事件常量（对应 Enums.Events.IMAGE_RENDERED）
+// [2026-08-05] 作为 CAMERA_MODIFIED 的补充保障：任何渲染完成后重绘十字线，
+// 防止边缘场景（如 volume 加载完成、方向切换重建）下 CAMERA_MODIFIED 未触发导致十字线丢失
+const IMAGE_RENDERED_EVENT = 'CORNERSTONE_IMAGE_RENDERED';
 // [2026-08-05 第三阶段] 拖动命中阈值（像素）：鼠标距十字线中心小于此值时认为抓到了十字线
 const DRAG_HIT_THRESHOLD = 10;
 
@@ -71,6 +80,10 @@ const TMTV_VIEWPORT_IDS_BY_STAGE: Record<string, string[]> = {
 class TMTVCrosshairService {
   private visible = false;
   private worldPosition: [number, number, number] | null = null;
+  // [2026-08-05 第四阶段] 旋转状态：只改变方向，不改变位置
+  private viewPlaneNormal: [number, number, number] | null = null;
+  private viewUp: [number, number, number] | null = null;
+  private rotationAngle = 0; // 累计旋转角度（度），用于 SVG 十字线方向绘制
   private viewports = new Map<string, any>(); // viewportId -> viewport instance
   private svgLayers = new Map<string, SVGSVGElement>(); // viewportId -> SVG element
   // [Lessons Learned] 保存创建时的 element 引用，用于准确移除 CAMERA_MODIFIED 监听器。
@@ -84,7 +97,8 @@ class TMTVCrosshairService {
   private vLineTops = new Map<string, SVGLineElement>(); // viewportId -> 竖线上段
   private vLineBottoms = new Map<string, SVGLineElement>(); // viewportId -> 竖线下段
   private resizeObservers = new Map<string, ResizeObserver>();
-  private cameraModifiedHandlers = new Map<string, (evt: any) => void>();
+  // [2026-08-05] 存储 CAMERA_MODIFIED + IMAGE_RENDERED 事件的 handler（共用同一个 handler）
+  private renderEventHandlers = new Map<string, (evt: any) => void>();
   // [2026-08-05 新增] 存储 mousedown 事件处理器，用于点击定位和清理
   private mouseDownHandlers = new Map<string, (evt: MouseEvent) => void>();
 
@@ -94,6 +108,14 @@ class TMTVCrosshairService {
   private activeViewport: string | null = null;
   private documentMouseMoveHandler: ((evt: MouseEvent) => void) | null = null;
   private documentMouseUpHandler: ((evt: MouseEvent) => void) | null = null;
+
+  // [2026-08-05 第四阶段] 旋转状态
+  // 旋转与拖动共用 documentMouseMoveHandler/documentMouseUpHandler（互斥，不会同时进行）
+  private rotating = false;
+  private rotationStartAngle = 0;
+  private rotationActiveViewport: string | null = null;
+  // 旋转手柄 SVG 圆点（每个 viewport 4个，位于线段两端）
+  private handles = new Map<string, SVGCircleElement[]>();
 
   /**
    * 判断指定的 stage ID 是否为 TMTV 布局
@@ -107,6 +129,40 @@ class TMTVCrosshairService {
    */
   getViewportIdsForStage(stageId: string): string[] {
     return TMTV_VIEWPORT_IDS_BY_STAGE[stageId] || [];
+  }
+
+  /**
+   * [2026-08-05 第四阶段] 判断 viewport 是否为 MIP（不参与旋转）
+   * MIP viewportId 以 'mip' 开头（mipSagittal / mipCoronal）
+   */
+  private _isMipViewport(viewportId: string): boolean {
+    return viewportId.startsWith('mip');
+  }
+
+  /**
+   * [2026-08-05 第四阶段] 从 viewport camera 初始化方向状态
+   * 仅在 viewPlaneNormal/viewUp 未初始化时执行（取第一个非 MIP viewport 的方向）
+   */
+  private _initOrientationFromViewport(viewport: any): void {
+    if (this.viewPlaneNormal && this.viewUp) return;
+    try {
+      const camera = viewport.getCamera?.();
+      if (camera?.viewPlaneNormal && camera?.viewUp) {
+        this.viewPlaneNormal = [
+          camera.viewPlaneNormal[0],
+          camera.viewPlaneNormal[1],
+          camera.viewPlaneNormal[2],
+        ];
+        this.viewUp = [
+          camera.viewUp[0],
+          camera.viewUp[1],
+          camera.viewUp[2],
+        ];
+        this.rotationAngle = 0;
+      }
+    } catch (e) {
+      // ignore
+    }
   }
 
   /**
@@ -148,6 +204,13 @@ class TMTVCrosshairService {
       }
     }
 
+    // [2026-08-05 第四阶段] 初始化方向状态（从第一个非 MIP viewport）
+    if (!this._isMipViewport(viewportId)) {
+      this._initOrientationFromViewport(viewport);
+      // [2026-08-05] 同方位图像不改变 camera，不需要应用 viewUp 到新 viewport
+      // 旋转只改变 SVG 十字线方向，图像本身不旋转
+    }
+
     this.render();
   }
 
@@ -169,10 +232,17 @@ class TMTVCrosshairService {
    * 退出模式时请调用 reset() 完全重置状态。
    *
    * [2026-08-05 第三阶段] 清理前先结束拖动，移除 document 上的 mousemove/mouseup 监听
+   *
+   * [2026-08-05 第四阶段] 重置方向状态（viewPlaneNormal/viewUp/rotationAngle）：
+   * 布局切换时 viewPlaneNormal 会变化（AXIAL→Sagittal→Coronal），
+   * 旧的 viewUp 和 rotationAngle 不适用于新布局，必须重置后由
+   * addViewport 重新从新 viewport 的 camera 初始化。
    */
   clear(): void {
     // [第三阶段] 先结束拖动，移除 document 监听，防止清理后回调执行引发错误
     this._endDrag();
+    // [第四阶段] 结束旋转，移除 document 监听
+    this._endRotation();
 
     Array.from(this.viewports.keys()).forEach(viewportId => {
       this.removeViewport(viewportId);
@@ -186,12 +256,17 @@ class TMTVCrosshairService {
     this.vLineTops.clear();
     this.vLineBottoms.clear();
     this.resizeObservers.clear();
-    this.cameraModifiedHandlers.clear();
+    this.renderEventHandlers.clear();
     this.mouseDownHandlers.clear();
+    this.handles.clear();
+    // [第四阶段] 重置方向状态，布局切换后由 addViewport 重新初始化
+    this.viewPlaneNormal = null;
+    this.viewUp = null;
+    this.rotationAngle = 0;
   }
 
   /**
-   * 完全重置状态（包括 visible 和 worldPosition）
+   * 完全重置状态（包括 visible、worldPosition 和旋转状态）
    * 用于退出 TMTV 模式时清理，确保下次进入时为初始状态
    */
   reset(): void {
@@ -232,6 +307,134 @@ class TMTVCrosshairService {
    */
   getPosition(): [number, number, number] | null {
     return this.worldPosition;
+  }
+
+  /**
+   * [2026-08-05 第四阶段] 获取累计旋转角度（度）
+   * 用于调试和测试
+   */
+  getRotationAngle(): number {
+    return this.rotationAngle;
+  }
+
+  /**
+   * [2026-08-05 第四阶段 Phase 4.1] 旋转十字线（测试函数）
+   *
+   * 功能：将十字线旋转指定角度，CT/PET/Fusion 同步旋转，MIP 不参与
+   *
+   * 参数：
+   *   deltaDegrees - 旋转角度增量（度），正数逆时针，负数顺时针
+   *
+   * 流程：
+   *   1. 将 viewUp 绕 viewPlaneNormal 旋转 deltaDegrees（Rodrigues 公式）
+   *   2. 累加 rotationAngle（用于 SVG 十字线方向绘制）
+   *   3. [2026-08-05 修改] 同方位图像不改变 camera，只旋转 SVG 十字线
+   *   4. 重绘十字线（render 中根据 rotationAngle 旋转线段）
+   *
+   * 边界条件：
+   *   - viewPlaneNormal/viewUp 未初始化时不执行
+   *   - 异常时打印警告日志
+   *
+   * 设计说明：
+   *   同方位图像（如 AXIAL 布局下 CT/PET/Fusion 均为轴向）旋转时，
+   *   只旋转十字线 SVG 线条作为参考方向，不调用 setCamera 改变图像方向。
+   *   相当于同步一个参考线位置，图像本身不旋转。
+   */
+  rotateCrosshair(deltaDegrees: number): void {
+    if (!this.viewPlaneNormal || !this.viewUp) {
+      console.warn('[TMTVCrosshairService] rotateCrosshair: 方向状态未初始化');
+      return;
+    }
+
+    try {
+      const deltaRad = (deltaDegrees * Math.PI) / 180;
+
+      // 更新 viewUp（绕 viewPlaneNormal 旋转，保留状态供后续阶段使用）
+      this.viewUp = this._rotateVectorAroundAxis(
+        this.viewUp,
+        this.viewPlaneNormal,
+        deltaRad
+      );
+
+      // 累加旋转角度（用于 SVG 绘制）
+      this.rotationAngle += deltaDegrees;
+
+      // [2026-08-05] 同方位图像：只旋转十字线 SVG，不改变 camera
+      // CT/PET/Fusion 在同一平面时，旋转只改变十字线方向，
+      // 不需要 setCamera，图像本身不旋转
+      // this._applyOrientationToViewports();
+
+      // 重绘十字线（SVG 线段方向随 rotationAngle 旋转）
+      this.render();
+    } catch (e) {
+      console.warn('[TMTVCrosshairService] rotateCrosshair 失败', e);
+    }
+  }
+
+  /**
+   * [2026-08-05 第四阶段] Rodrigues 旋转公式
+   * 将向量 v 绕单位轴 axis 旋转 angleRad 弧度
+   *
+   * 公式: v' = v*cos(θ) + (k × v)*sin(θ) + k*(k·v)*(1-cos(θ))
+   *   其中 k 为归一化的 axis
+   */
+  private _rotateVectorAroundAxis(
+    v: [number, number, number],
+    axis: [number, number, number],
+    angleRad: number
+  ): [number, number, number] {
+    // 归一化轴向量
+    const len = Math.sqrt(
+      axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]
+    );
+    if (len === 0) return [v[0], v[1], v[2]];
+    const k = [axis[0] / len, axis[1] / len, axis[2] / len];
+
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+
+    // k × v (叉积)
+    const cross = [
+      k[1] * v[2] - k[2] * v[1],
+      k[2] * v[0] - k[0] * v[2],
+      k[0] * v[1] - k[1] * v[0],
+    ];
+
+    // k · v (点积)
+    const dot = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+
+    // Rodrigues 公式
+    return [
+      v[0] * cos + cross[0] * sin + k[0] * dot * (1 - cos),
+      v[1] * cos + cross[1] * sin + k[1] * dot * (1 - cos),
+      v[2] * cos + cross[2] * sin + k[2] * dot * (1 - cos),
+    ];
+  }
+
+  /**
+   * [2026-08-05 第四阶段] 应用当前方向状态到所有非 MIP viewport
+   *
+   * 功能：将 viewUp（和 viewPlaneNormal）应用到 CT/PET/Fusion viewport
+   *       MIP viewport 跳过，保持自己的投影规则
+   *
+   * 边界条件：
+   *   - viewUp/viewPlaneNormal 为空时跳过
+   *   - 单个 viewport 失败不影响其他
+   *   - viewport 可能已销毁，try-catch 静默处理
+   */
+  private _applyOrientationToViewports(): void {
+    if (!this.viewUp) return;
+
+    this.viewports.forEach((viewport, viewportId) => {
+      // MIP 不参与旋转
+      if (this._isMipViewport(viewportId)) return;
+
+      try {
+        viewport.setCamera({ viewUp: this.viewUp! });
+      } catch (e) {
+        // viewport 可能已销毁，静默忽略
+      }
+    });
   }
 
   /**
@@ -285,16 +488,17 @@ class TMTVCrosshairService {
   }
 
   /**
-   * [2026-08-05 新增, 2026-08-05 第三阶段更新] 处理鼠标按下事件
+   * [2026-08-05 新增, 第三/四阶段更新] 处理鼠标按下事件
    *
    * 功能：根据点击位置决定行为
-   *   - 点击十字线中心附近（距离 < DRAG_HIT_THRESHOLD）→ 进入拖动模式
+   *   - 点击十字线中心附近（距离 < DRAG_HIT_THRESHOLD）→ 进入拖动模式（Phase 3）
+   *   - 点击十字线线段（距离线 < ROTATION_LINE_HIT_THRESHOLD，非 MIP）→ 进入旋转模式（Phase 4）
    *   - 点击其他位置 → Phase 2 点击定位，十字线跳到点击位置
    *
    * 边界条件处理：
    *   - 十字线未显示时不处理
    *   - 仅处理左键 (evt.button === 0)
-   *   - 上一次拖动的 mouseup 丢失时自动恢复（避免状态卡死）
+   *   - 上一次拖动/旋转的 mouseup 丢失时自动恢复（避免状态卡死）
    *   - viewport 或 canvas 为空时跳过
    *   - 异常时打印警告日志，不中断后续处理
    */
@@ -305,10 +509,13 @@ class TMTVCrosshairService {
     // 仅处理左键
     if (evt.button !== 0) return;
 
-    // [边界处理] 如果 dragging 仍为 true，说明上一次 mouseup 丢失
-    // （如鼠标移出浏览器窗口），先结束上一次拖动，避免状态卡死
+    // [边界处理] 如果 dragging/rotating 仍为 true，说明上一次 mouseup 丢失
+    // （如鼠标移出浏览器窗口），先结束上一次操作，避免状态卡死
     if (this.dragging) {
       this._endDrag();
+    }
+    if (this.rotating) {
+      this._endRotation();
     }
 
     try {
@@ -337,6 +544,19 @@ class TMTVCrosshairService {
               // 命中十字线中心 → 进入拖动模式
               this._startDrag(viewportId, evt);
               return;
+            }
+
+            // [第四阶段] 检查是否点中十字线线段 → 进入旋转模式
+            // MIP viewport 不支持旋转
+            if (!this._isMipViewport(viewportId)) {
+              const isOnLine = this._isPointOnCrosshairLine(
+                canvasPoint,
+                crosshairCanvas
+              );
+              if (isOnLine) {
+                this._startRotation(viewportId, canvasPoint, crosshairCanvas);
+                return;
+              }
             }
           }
         } catch (e) {
@@ -479,6 +699,185 @@ class TMTVCrosshairService {
     }
   }
 
+  // ============ [2026-08-05 第四阶段 Phase 4.2] 旋转交互 ============
+
+  /**
+   * [2026-08-05 第四阶段] 判断鼠标是否在十字线线段上（用于旋转命中检测）
+   *
+   * 计算鼠标到两条十字线的距离，任一距离 ≤ ROTATION_LINE_HIT_THRESHOLD 即命中
+   * 排除中心空白区域（CROSSHAIR_CENTER_GAP 内），该区域由拖动处理
+   *
+   * 距离公式（点到直线）：对于过中心 C、方向 d 的直线，距离 = |(P-C) × d|
+   */
+  private _isPointOnCrosshairLine(
+    canvasPoint: [number, number],
+    crosshairCenter: [number, number]
+  ): boolean {
+    const px = canvasPoint[0] - crosshairCenter[0];
+    const py = canvasPoint[1] - crosshairCenter[1];
+
+    // 排除中心空白区域
+    const distToCenter = Math.sqrt(px * px + py * py);
+    if (distToCenter < CROSSHAIR_CENTER_GAP) return false;
+
+    const angleRad = (this.rotationAngle * Math.PI) / 180;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+
+    // 线段1方向 d1 = (cos, sin)，距离 = |px*sin - py*cos|
+    const dist1 = Math.abs(px * sin - py * cos);
+    // 线段2方向 d2 = (-sin, cos)，距离 = |px*cos + py*sin|
+    const dist2 = Math.abs(px * cos + py * sin);
+
+    return (
+      dist1 <= ROTATION_LINE_HIT_THRESHOLD ||
+      dist2 <= ROTATION_LINE_HIT_THRESHOLD
+    );
+  }
+
+  /**
+   * [2026-08-05 第四阶段] 开始旋转
+   *
+   * 功能：记录起始角度，在 document 上注册 mousemove/mouseup 监听
+   * 与拖动共用 documentMouseMoveHandler/documentMouseUpHandler（互斥）
+   */
+  private _startRotation(
+    viewportId: string,
+    canvasPoint: [number, number],
+    crosshairCenter: [number, number]
+  ): void {
+    this.rotating = true;
+    this.rotationActiveViewport = viewportId;
+
+    // [2026-08-05] 旋转开始时手柄变为实心圆
+    this._setHandlesSolid(viewportId, true);
+
+    // 记录鼠标相对十字线中心的角度作为起始角度
+    this.rotationStartAngle = Math.atan2(
+      canvasPoint[1] - crosshairCenter[1],
+      canvasPoint[0] - crosshairCenter[0]
+    );
+
+    // 在 document 上注册 mousemove/mouseup（与拖动共用 handler 字段）
+    this.documentMouseMoveHandler = (moveEvt: MouseEvent) => {
+      this._handleRotateMove(moveEvt);
+    };
+    this.documentMouseUpHandler = (upEvt: MouseEvent) => {
+      this._handleRotateEnd(upEvt);
+    };
+
+    document.addEventListener('mousemove', this.documentMouseMoveHandler);
+    document.addEventListener('mouseup', this.documentMouseUpHandler);
+  }
+
+  /**
+   * [2026-08-05 第四阶段] 处理旋转中的鼠标移动
+   *
+   * 功能：计算鼠标角度变化量 delta，调用 rotateCrosshair 旋转十字线
+   *
+   * 角度计算：
+   *   currentAngle = atan2(mouse.y - center.y, mouse.x - center.x)
+   *   delta = currentAngle - startAngle（处理 ±π 跳变）
+   *   rotateCrosshair(delta * 180/π)
+   *   startAngle = currentAngle（为下次移动准备）
+   */
+  private _handleRotateMove(evt: MouseEvent): void {
+    if (!this.rotating || !this.rotationActiveViewport) return;
+
+    const viewport = this.viewports.get(this.rotationActiveViewport);
+    if (!viewport || !this.worldPosition) {
+      this._endRotation();
+      return;
+    }
+
+    try {
+      const canvas = viewport.canvas;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const mx = evt.clientX - rect.left;
+      const my = evt.clientY - rect.top;
+
+      const center = viewport.worldToCanvas(this.worldPosition);
+      if (!center || !Number.isFinite(center[0]) || !Number.isFinite(center[1])) {
+        return;
+      }
+
+      const currentAngle = Math.atan2(my - center[1], mx - center[0]);
+      let delta = currentAngle - this.rotationStartAngle;
+
+      // 处理角度跳变（如从 -π 到 π）
+      if (delta > Math.PI) delta -= 2 * Math.PI;
+      if (delta < -Math.PI) delta += 2 * Math.PI;
+
+      // 转为度数并旋转
+      const deltaDegrees = (delta * 180) / Math.PI;
+      this.rotateCrosshair(deltaDegrees);
+
+      // 更新起始角度
+      this.rotationStartAngle = currentAngle;
+    } catch (e) {
+      // viewport 可能已销毁
+      this._endRotation();
+    }
+  }
+
+  /**
+   * [2026-08-05 第四阶段] 处理旋转结束（mouseup）
+   */
+  private _handleRotateEnd(_evt: MouseEvent): void {
+    this._endRotation();
+  }
+
+  /**
+   * [2026-08-05 第四阶段] 结束旋转，清理 document 监听
+   *
+   * 调用场景：
+   *   1. 正常 mouseup 结束旋转
+   *   2. activeViewport 被销毁时中断旋转
+   *   3. clear()/reset() 清理时
+   *   4. handleMouseDown 卡死恢复
+   */
+  private _endRotation(): void {
+    // [2026-08-05] 旋转结束时手柄恢复空心圆
+    if (this.rotationActiveViewport) {
+      this._setHandlesSolid(this.rotationActiveViewport, false);
+    }
+
+    this.rotating = false;
+    this.rotationActiveViewport = null;
+    this.rotationStartAngle = 0;
+
+    // 移除 document 监听（与拖动共用 handler 字段，null 检查确保安全）
+    if (this.documentMouseMoveHandler) {
+      document.removeEventListener('mousemove', this.documentMouseMoveHandler);
+      this.documentMouseMoveHandler = null;
+    }
+    if (this.documentMouseUpHandler) {
+      document.removeEventListener('mouseup', this.documentMouseUpHandler);
+      this.documentMouseUpHandler = null;
+    }
+  }
+
+  /**
+   * [2026-08-05 第四阶段] 设置手柄样式：空心圆 / 实心圆
+   *
+   * @param viewportId - viewport ID
+   * @param solid - true=实心圆（旋转中），false=空心圆（默认）
+   */
+  private _setHandlesSolid(viewportId: string, solid: boolean): void {
+    const handleArr = this.handles.get(viewportId);
+    if (!handleArr) return;
+    const fill = solid ? CROSSHAIR_COLOR : 'none';
+    handleArr.forEach(h => {
+      try {
+        h.setAttribute('fill', fill);
+      } catch (e) {
+        // ignore
+      }
+    });
+  }
+
   /**
    * 在 viewport.element 上创建 SVG overlay 层
    */
@@ -521,6 +920,26 @@ class TMTVCrosshairService {
     this.vLineTops.set(viewportId, createLine());
     this.vLineBottoms.set(viewportId, createLine());
 
+    // [2026-08-05 第四阶段] 创建旋转手柄（4个圆点，位于线段上距中心 HANDLE_DISTANCE 处）
+    // 仅非 MIP viewport 显示（MIP 不支持旋转）
+    // [2026-08-05] 默认空心圆，旋转时变为实心圆（与原系统 CrosshairsTool 一致）
+    const createHandle = (): SVGCircleElement => {
+      const circle = document.createElementNS(SVG_NS, 'circle') as SVGCircleElement;
+      circle.setAttribute('r', String(HANDLE_RADIUS));
+      circle.setAttribute('fill', 'none'); // 空心
+      circle.setAttribute('stroke', CROSSHAIR_COLOR); // 绿色边框
+      circle.setAttribute('stroke-width', '1.5');
+      circle.style.display = 'none'; // 默认隐藏，在 _drawCrosshair 中根据 viewport 类型显示
+      svg.appendChild(circle);
+      return circle;
+    };
+    this.handles.set(viewportId, [
+      createHandle(), // 线段1 正方向端
+      createHandle(), // 线段1 负方向端
+      createHandle(), // 线段2 正方向端
+      createHandle(), // 线段2 负方向端
+    ]);
+
     // 监听 canvas 尺寸变化，重绘十字线
     const resizeObserver = new ResizeObserver(() => {
       this.render();
@@ -528,16 +947,20 @@ class TMTVCrosshairService {
     resizeObserver.observe(element);
     this.resizeObservers.set(viewportId, resizeObserver);
 
-    // 监听相机变化（滚动、缩放、平移时重绘十字线）
+    // [2026-08-05] 监听相机变化 + 图像渲染完成，重绘十字线
+    // - CAMERA_MODIFIED: 滚轮切片变化、缩放、平移时触发
+    // - IMAGE_RENDERED: 任何渲染完成后触发（volume 加载、方向切换重建等边缘场景的补充保障）
+    // 两个事件共用同一个 handler，render() 是幂等的，重复调用无副作用
     try {
       const handler = () => {
         this.render();
       };
       element.addEventListener(CAMERA_MODIFIED_EVENT, handler);
-      this.cameraModifiedHandlers.set(viewportId, handler);
+      element.addEventListener(IMAGE_RENDERED_EVENT, handler);
+      this.renderEventHandlers.set(viewportId, handler);
     } catch (e) {
-      // 如果无法监听相机事件，十字线仍可显示，只是不会跟随相机移动
-      console.debug(`[TMTVCrosshairService] 无法监听 CAMERA_MODIFIED (${viewportId})`, e);
+      // 如果无法监听事件，十字线仍可显示，只是不会跟随相机/渲染变化
+      console.debug(`[TMTVCrosshairService] 无法监听渲染事件 (${viewportId})`, e);
     }
 
     // [2026-08-05 新增] 注册 mousedown 事件，实现点击定位
@@ -563,12 +986,16 @@ class TMTVCrosshairService {
    */
   private _removeSvgLayer(viewportId: string): void {
     // [Lessons Learned] 每个清理步骤独立 try-catch，避免单步异常中断后续清理。
-    // 清理顺序：结束拖动(若active) → ResizeObserver → CAMERA_MODIFIED 监听 → mousedown 监听 → SVG 元素 → Map 引用
+    // 清理顺序：结束拖动/旋转(若active) → ResizeObserver → CAMERA_MODIFIED 监听 → mousedown 监听 → SVG 元素 → Map 引用
 
     // 0. [第三阶段] 如果正在拖动此 viewport，先结束拖动
     //    防止 document 上的 mousemove/mouseup 回调访问已销毁的 viewport
     if (this.dragging && this.activeViewport === viewportId) {
       this._endDrag();
+    }
+    // [第四阶段] 如果正在旋转此 viewport，先结束旋转
+    if (this.rotating && this.rotationActiveViewport === viewportId) {
+      this._endRotation();
     }
 
     // 1. 移除 ResizeObserver
@@ -582,17 +1009,19 @@ class TMTVCrosshairService {
       // ignore
     }
 
-    // 2. 移除 CAMERA_MODIFIED 监听
+    // 2. 移除 CAMERA_MODIFIED + IMAGE_RENDERED 监听
     //    [Lessons Learned] 必须使用创建时的 element 引用（this.elements），
     //    而非当前 viewport.element。Cornerstone 可能在后续替换 viewport.element，
     //    用新引用调用 removeEventListener 会失败，导致旧监听器残留引发内存泄漏。
+    //    两个事件共用同一个 handler，需分别 removeEventListener
     try {
-      const handler = this.cameraModifiedHandlers.get(viewportId);
+      const handler = this.renderEventHandlers.get(viewportId);
       const element = this.elements.get(viewportId);
       if (handler && element) {
         element.removeEventListener(CAMERA_MODIFIED_EVENT, handler);
+        element.removeEventListener(IMAGE_RENDERED_EVENT, handler);
       }
-      this.cameraModifiedHandlers.delete(viewportId);
+      this.renderEventHandlers.delete(viewportId);
     } catch (e) {
       // ignore
     }
@@ -627,16 +1056,25 @@ class TMTVCrosshairService {
     this.hLineRights.delete(viewportId);
     this.vLineTops.delete(viewportId);
     this.vLineBottoms.delete(viewportId);
+    this.handles.delete(viewportId);
   }
 
   /**
-   * [2026-08-05 修改] 在 SVG 上绘制十字线（4段，中心空心）
+   * [2026-08-05 修改, 第四阶段更新] 在 SVG 上绘制十字线（4段，中心空心，支持旋转）
    *
-   * 线段布局（中心留 CROSSHAIR_CENTER_GAP 间隙）：
-   *   横线左段: (0, y)          → (x-gap, y)
-   *   横线右段: (x+gap, y)      → (width, y)
-   *   竖线上段: (x, 0)          → (x, y-gap)
-   *   竖线下段: (x, y+gap)      → (x, height)
+   * 线段布局（中心留 CROSSHAIR_CENTER_GAP 间隙，方向随 rotationAngle 旋转）：
+   *   旋转角度 θ 时，方向向量：
+   *     d1 = (cos θ, sin θ)     — 第一条线方向
+   *     d2 = (-sin θ, cos θ)    — 第二条线方向（垂直于 d1）
+   *
+   *   线段1左段: center - L*d1  →  center - gap*d1
+   *   线段1右段: center + gap*d1 →  center + L*d1
+   *   线段2上段: center - L*d2  →  center - gap*d2
+   *   线段2下段: center + gap*d2 →  center + L*d2
+   *
+   *   其中 L = 半对角线长度，确保任意旋转角度下线段都能贯穿视口
+   *
+   * MIP viewport 不旋转（angle = 0），保持水平/垂直
    *
    * [Lessons Learned] 复用 _createSvgLayer 中一次性创建的线段元素，
    * 此处仅更新 x1/y1/x2/y2 属性，避免频繁 DOM 节点创建/销毁。
@@ -652,52 +1090,87 @@ class TMTVCrosshairService {
     svg.setAttribute('height', String(height));
     svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
 
-    const x = canvasPoint[0];
-    const y = canvasPoint[1];
+    const cx = canvasPoint[0];
+    const cy = canvasPoint[1];
     const gap = CROSSHAIR_CENTER_GAP;
-    const xLeft = String(Math.max(0, x - gap));
-    const xRight = String(x + gap);
-    const yTop = String(Math.max(0, y - gap));
-    const yBottom = String(y + gap);
-    const sY = String(y);
-    const sX = String(x);
-    const sWidth = String(width);
-    const sHeight = String(height);
 
-    // 横线左段: (0, y) → (x-gap, y)
+    // 旋转角度：非 MIP viewport 使用累计旋转角度，MIP 保持 0
+    const angleDeg = this._isMipViewport(viewportId) ? 0 : this.rotationAngle;
+    const angleRad = (angleDeg * Math.PI) / 180;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+
+    // 半对角线长度：确保任意旋转角度下线段都能贯穿视口
+    const L = Math.sqrt(width * width + height * height);
+
+    // 方向向量
+    // d1 = (cos, sin)  — 第一条线方向
+    // d2 = (-sin, cos) — 第二条线方向（垂直于 d1）
+    // 线段1 左段: center - L*d1 → center - gap*d1
     const hLeft = this.hLineLefts.get(viewportId);
     if (hLeft) {
-      hLeft.setAttribute('x1', '0');
-      hLeft.setAttribute('y1', sY);
-      hLeft.setAttribute('x2', xLeft);
-      hLeft.setAttribute('y2', sY);
+      hLeft.setAttribute('x1', String(cx - L * cos));
+      hLeft.setAttribute('y1', String(cy - L * sin));
+      hLeft.setAttribute('x2', String(cx - gap * cos));
+      hLeft.setAttribute('y2', String(cy - gap * sin));
     }
 
-    // 横线右段: (x+gap, y) → (width, y)
+    // 线段1 右段: center + gap*d1 → center + L*d1
     const hRight = this.hLineRights.get(viewportId);
     if (hRight) {
-      hRight.setAttribute('x1', xRight);
-      hRight.setAttribute('y1', sY);
-      hRight.setAttribute('x2', sWidth);
-      hRight.setAttribute('y2', sY);
+      hRight.setAttribute('x1', String(cx + gap * cos));
+      hRight.setAttribute('y1', String(cy + gap * sin));
+      hRight.setAttribute('x2', String(cx + L * cos));
+      hRight.setAttribute('y2', String(cy + L * sin));
     }
 
-    // 竖线上段: (x, 0) → (x, y-gap)
+    // 线段2 上段: center - L*d2 → center - gap*d2
+    // d2 = (-sin, cos)，所以 -L*d2 = (L*sin, -L*cos)
     const vTop = this.vLineTops.get(viewportId);
     if (vTop) {
-      vTop.setAttribute('x1', sX);
-      vTop.setAttribute('y1', '0');
-      vTop.setAttribute('x2', sX);
-      vTop.setAttribute('y2', yTop);
+      vTop.setAttribute('x1', String(cx + L * sin));
+      vTop.setAttribute('y1', String(cy - L * cos));
+      vTop.setAttribute('x2', String(cx + gap * sin));
+      vTop.setAttribute('y2', String(cy - gap * cos));
     }
 
-    // 竖线下段: (x, y+gap) → (x, height)
+    // 线段2 下段: center + gap*d2 → center + L*d2
+    // d2 = (-sin, cos)，所以 +L*d2 = (-L*sin, L*cos)
     const vBottom = this.vLineBottoms.get(viewportId);
     if (vBottom) {
-      vBottom.setAttribute('x1', sX);
-      vBottom.setAttribute('y1', yBottom);
-      vBottom.setAttribute('x2', sX);
-      vBottom.setAttribute('y2', sHeight);
+      vBottom.setAttribute('x1', String(cx - gap * sin));
+      vBottom.setAttribute('y1', String(cy + gap * cos));
+      vBottom.setAttribute('x2', String(cx - L * sin));
+      vBottom.setAttribute('y2', String(cy + L * cos));
+    }
+
+    // [2026-08-05 第四阶段] 定位旋转手柄（4个圆点）
+    // 仅非 MIP viewport 显示手柄（MIP 不支持旋转）
+    const handleArr = this.handles.get(viewportId);
+    if (handleArr && handleArr.length === 4) {
+      const showHandles = !this._isMipViewport(viewportId);
+      const hd = HANDLE_DISTANCE;
+      const display = showHandles ? '' : 'none';
+
+      // 手柄0: 线段1 正方向端 (center + hd*d1)
+      handleArr[0].setAttribute('cx', String(cx + hd * cos));
+      handleArr[0].setAttribute('cy', String(cy + hd * sin));
+      handleArr[0].style.display = display;
+
+      // 手柄1: 线段1 负方向端 (center - hd*d1)
+      handleArr[1].setAttribute('cx', String(cx - hd * cos));
+      handleArr[1].setAttribute('cy', String(cy - hd * sin));
+      handleArr[1].style.display = display;
+
+      // 手柄2: 线段2 正方向端 (center + hd*d2 = center + hd*(-sin, cos))
+      handleArr[2].setAttribute('cx', String(cx - hd * sin));
+      handleArr[2].setAttribute('cy', String(cy + hd * cos));
+      handleArr[2].style.display = display;
+
+      // 手柄3: 线段2 负方向端 (center - hd*d2 = center + hd*(sin, -cos))
+      handleArr[3].setAttribute('cx', String(cx + hd * sin));
+      handleArr[3].setAttribute('cy', String(cy - hd * cos));
+      handleArr[3].style.display = display;
     }
   }
 }
@@ -706,3 +1179,12 @@ class TMTVCrosshairService {
 const tmtvCrosshairService = new TMTVCrosshairService();
 export default tmtvCrosshairService;
 export { TMTVCrosshairService };
+
+// [2026-08-05 第四阶段测试] 暴露到 window 方便控制台调试
+// 测试方法：
+//   window.__tmtvCrosshairService.rotateCrosshair(15)  // 旋转 15°
+//   window.__tmtvCrosshairService.rotateCrosshair(-15) // 反向旋转 15°
+//   window.__tmtvCrosshairService.getRotationAngle()   // 查看当前角度
+if (typeof window !== 'undefined') {
+  (window as any).__tmtvCrosshairService = tmtvCrosshairService;
+}

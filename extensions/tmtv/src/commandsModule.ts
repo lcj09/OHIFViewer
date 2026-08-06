@@ -863,6 +863,13 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       const { activeViewportId: activeVpId } = viewportGridService.getState();
       toolbarService.refreshToolbarState({ viewportId: activeVpId });
     },
+
+    // [2026-08-05 第四阶段 Phase 4.1] 旋转十字线（测试函数）
+    // 调用 tmtvCrosshairService.rotateCrosshair 旋转指定角度
+    // CT/PET/Fusion 同步旋转，MIP 不参与
+    rotateCrosshair: ({ degrees }: { degrees: number }) => {
+      tmtvCrosshairService.rotateCrosshair(degrees);
+    },
   };
 
   const definitions = {
@@ -913,6 +920,9 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     setNativeCrosshairsVisibility: {
       commandFn: actions.setNativeCrosshairsVisibility,
+    },
+    rotateCrosshair: {
+      commandFn: actions.rotateCrosshair,
     },
   };
 
