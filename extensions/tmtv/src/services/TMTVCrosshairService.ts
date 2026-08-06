@@ -117,6 +117,15 @@ class TMTVCrosshairService {
   // 旋转手柄 SVG 圆点（每个 viewport 4个，位于线段两端）
   private handles = new Map<string, SVGCircleElement[]>();
 
+  // [2026-08-06 第五阶段] 单切线旋转状态
+  // 与双切线旋转（rotationAngle）独立，每根线可单独旋转
+  private mode: 'normal' | 'singleLineRotate' = 'normal';
+  private singleLineHorizontalAngle = 0; // 横线旋转角度（度）
+  private singleLineVerticalAngle = 0;   // 竖线旋转角度（度）
+  private singleLineRotating = false;
+  private singleLineActiveLine: 'horizontal' | 'vertical' | null = null;
+  private singleLineActiveViewport: string | null = null;
+
   /**
    * 判断指定的 stage ID 是否为 TMTV 布局
    */
@@ -241,8 +250,10 @@ class TMTVCrosshairService {
   clear(): void {
     // [第三阶段] 先结束拖动，移除 document 监听，防止清理后回调执行引发错误
     this._endDrag();
-    // [第四阶段] 结束旋转，移除 document 监听
+    // [第四阶段] 结束双切线旋转
     this._endRotation();
+    // [第五阶段] 结束单切线旋转
+    this._endSingleLineRotation();
 
     Array.from(this.viewports.keys()).forEach(viewportId => {
       this.removeViewport(viewportId);
@@ -273,6 +284,10 @@ class TMTVCrosshairService {
     this.clear();
     this.worldPosition = null;
     this.visible = false;
+    // [第五阶段] 重置单切线状态
+    this.mode = 'normal';
+    this.singleLineHorizontalAngle = 0;
+    this.singleLineVerticalAngle = 0;
   }
 
   /**
@@ -280,6 +295,21 @@ class TMTVCrosshairService {
    */
   setVisible(value: boolean): void {
     this.visible = value;
+    this.render();
+  }
+
+  /**
+   * [2026-08-06 第五阶段] 设置十字线模式
+   * 'normal' → 双切线旋转（两根线一起旋转）
+   * 'singleLineRotate' → 单切线旋转（每根线独立旋转）
+   */
+  setMode(mode: 'normal' | 'singleLineRotate'): void {
+    this.mode = mode;
+    // 切换到非单切线模式时重置单切线角度
+    if (mode !== 'singleLineRotate') {
+      this.singleLineHorizontalAngle = 0;
+      this.singleLineVerticalAngle = 0;
+    }
     this.render();
   }
 
@@ -517,6 +547,9 @@ class TMTVCrosshairService {
     if (this.rotating) {
       this._endRotation();
     }
+    if (this.singleLineRotating) {
+      this._endSingleLineRotation();
+    }
 
     try {
       const canvas = viewport.canvas;
@@ -546,16 +579,26 @@ class TMTVCrosshairService {
               return;
             }
 
-            // [第四阶段] 检查是否点中十字线线段 → 进入旋转模式
+            // [第四/五阶段] 检查是否点中十字线线段 → 进入旋转模式
             // MIP viewport 不支持旋转
             if (!this._isMipViewport(viewportId)) {
-              const isOnLine = this._isPointOnCrosshairLine(
-                canvasPoint,
-                crosshairCanvas
-              );
-              if (isOnLine) {
-                this._startRotation(viewportId, canvasPoint, crosshairCanvas);
-                return;
+              if (this.mode === 'singleLineRotate') {
+                // [第五阶段] 单切线模式：判断点击了哪根线，独立旋转
+                const line = this._hitTestSingleLine(canvasPoint, crosshairCanvas);
+                if (line) {
+                  this._startSingleLineRotation(viewportId, crosshairCanvas, line);
+                  return;
+                }
+              } else {
+                // [第四阶段] 双切线模式：点击任意线段都旋转两根线
+                const isOnLine = this._isPointOnCrosshairLine(
+                  canvasPoint,
+                  crosshairCanvas
+                );
+                if (isOnLine) {
+                  this._startRotation(viewportId, canvasPoint, crosshairCanvas);
+                  return;
+                }
               }
             }
           }
@@ -878,6 +921,145 @@ class TMTVCrosshairService {
     });
   }
 
+  // ============ [2026-08-06 第五阶段] 单切线旋转 ============
+
+  /**
+   * [2026-08-06 第五阶段] 单切线模式：判断点击了哪根线
+   *
+   * 计算鼠标到横线和竖线的距离，返回较近且在阈值内的线
+   * 排除中心空白区域（由拖动处理）
+   *
+   * 横线方向 d1 = (cos(hAngle), sin(hAngle))
+   * 竖线方向 d2 = (-sin(vAngle), cos(vAngle))
+   */
+  private _hitTestSingleLine(
+    canvasPoint: [number, number],
+    crosshairCenter: [number, number]
+  ): 'horizontal' | 'vertical' | null {
+    const px = canvasPoint[0] - crosshairCenter[0];
+    const py = canvasPoint[1] - crosshairCenter[1];
+
+    // 排除中心空白区域
+    if (Math.sqrt(px * px + py * py) < CROSSHAIR_CENTER_GAP) return null;
+
+    // 横线距离：d1 = (cos(h), sin(h))，距离 = |px*sin(h) - py*cos(h)|
+    const hRad = (this.singleLineHorizontalAngle * Math.PI) / 180;
+    const distH = Math.abs(px * Math.sin(hRad) - py * Math.cos(hRad));
+
+    // 竖线距离：d2 = (-sin(v), cos(v))，距离 = |px*cos(v) + py*sin(v)|
+    const vRad = (this.singleLineVerticalAngle * Math.PI) / 180;
+    const distV = Math.abs(px * Math.cos(vRad) + py * Math.sin(vRad));
+
+    if (distH <= ROTATION_LINE_HIT_THRESHOLD && distH <= distV) return 'horizontal';
+    if (distV <= ROTATION_LINE_HIT_THRESHOLD) return 'vertical';
+    return null;
+  }
+
+  /**
+   * [2026-08-06 第五阶段] 开始单切线旋转
+   */
+  private _startSingleLineRotation(
+    viewportId: string,
+    crosshairCenter: [number, number],
+    line: 'horizontal' | 'vertical'
+  ): void {
+    this.singleLineRotating = true;
+    this.singleLineActiveViewport = viewportId;
+    this.singleLineActiveLine = line;
+
+    // 手柄变实心
+    this._setHandlesSolid(viewportId, true);
+
+    // 在 document 上注册 mousemove/mouseup
+    this.documentMouseMoveHandler = (evt: MouseEvent) => {
+      this._handleSingleLineRotateMove(evt, crosshairCenter);
+    };
+    this.documentMouseUpHandler = (evt: MouseEvent) => {
+      this._handleSingleLineRotateEnd(evt);
+    };
+
+    document.addEventListener('mousemove', this.documentMouseMoveHandler);
+    document.addEventListener('mouseup', this.documentMouseUpHandler);
+  }
+
+  /**
+   * [2026-08-06 第五阶段] 处理单切线旋转中的鼠标移动
+   *
+   * 角度计算：
+   *   angle = atan2(mouse.y - center.y, mouse.x - center.x)
+   *   横线（默认水平 = 0°）：horizontalAngle = angle（度）
+   *   竖线（默认垂直 = 90°）：verticalAngle = angle - 90°（度）
+   */
+  private _handleSingleLineRotateMove(
+    evt: MouseEvent,
+    crosshairCenter: [number, number]
+  ): void {
+    if (!this.singleLineRotating || !this.singleLineActiveViewport) return;
+
+    const viewport = this.viewports.get(this.singleLineActiveViewport);
+    if (!viewport || !this.worldPosition) {
+      this._endSingleLineRotation();
+      return;
+    }
+
+    try {
+      const canvas = viewport.canvas;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const mx = evt.clientX - rect.left;
+      const my = evt.clientY - rect.top;
+
+      // 使用当前的 worldToCanvas 结果（viewport 可能滚动/缩放）
+      const center = viewport.worldToCanvas(this.worldPosition);
+      if (!center || !Number.isFinite(center[0]) || !Number.isFinite(center[1])) {
+        return;
+      }
+
+      const angleRad = Math.atan2(my - center[1], mx - center[0]);
+      const angleDeg = (angleRad * 180) / Math.PI;
+
+      if (this.singleLineActiveLine === 'horizontal') {
+        this.singleLineHorizontalAngle = angleDeg;
+      } else {
+        this.singleLineVerticalAngle = angleDeg - 90;
+      }
+
+      this.render();
+    } catch (e) {
+      this._endSingleLineRotation();
+    }
+  }
+
+  /**
+   * [2026-08-06 第五阶段] 处理单切线旋转结束
+   */
+  private _handleSingleLineRotateEnd(_evt: MouseEvent): void {
+    this._endSingleLineRotation();
+  }
+
+  /**
+   * [2026-08-06 第五阶段] 结束单切线旋转，清理 document 监听
+   */
+  private _endSingleLineRotation(): void {
+    if (this.singleLineActiveViewport) {
+      this._setHandlesSolid(this.singleLineActiveViewport, false);
+    }
+
+    this.singleLineRotating = false;
+    this.singleLineActiveViewport = null;
+    this.singleLineActiveLine = null;
+
+    if (this.documentMouseMoveHandler) {
+      document.removeEventListener('mousemove', this.documentMouseMoveHandler);
+      this.documentMouseMoveHandler = null;
+    }
+    if (this.documentMouseUpHandler) {
+      document.removeEventListener('mouseup', this.documentMouseUpHandler);
+      this.documentMouseUpHandler = null;
+    }
+  }
+
   /**
    * 在 viewport.element 上创建 SVG overlay 层
    */
@@ -993,9 +1175,13 @@ class TMTVCrosshairService {
     if (this.dragging && this.activeViewport === viewportId) {
       this._endDrag();
     }
-    // [第四阶段] 如果正在旋转此 viewport，先结束旋转
+    // [第四阶段] 如果正在双切线旋转此 viewport，先结束旋转
     if (this.rotating && this.rotationActiveViewport === viewportId) {
       this._endRotation();
+    }
+    // [第五阶段] 如果正在单切线旋转此 viewport，先结束旋转
+    if (this.singleLineRotating && this.singleLineActiveViewport === viewportId) {
+      this._endSingleLineRotation();
     }
 
     // 1. 移除 ResizeObserver
@@ -1060,24 +1246,23 @@ class TMTVCrosshairService {
   }
 
   /**
-   * [2026-08-05 修改, 第四阶段更新] 在 SVG 上绘制十字线（4段，中心空心，支持旋转）
+   * [2026-08-05 修改, 第四/五阶段更新] 在 SVG 上绘制十字线（4段，中心空心，支持旋转）
    *
-   * 线段布局（中心留 CROSSHAIR_CENTER_GAP 间隙，方向随 rotationAngle 旋转）：
-   *   旋转角度 θ 时，方向向量：
-   *     d1 = (cos θ, sin θ)     — 第一条线方向
-   *     d2 = (-sin θ, cos θ)    — 第二条线方向（垂直于 d1）
+   * [第四阶段] 双切线模式：两根线一起旋转（rotationAngle）
+   *   d1 = (cos θ, sin θ)     — 横线方向
+   *   d2 = (-sin θ, cos θ)    — 竖线方向（垂直于 d1）
    *
+   * [第五阶段] 单切线模式：两根线各自独立旋转
+   *   d1 = (cos(hAngle), sin(hAngle))       — 横线方向
+   *   d2 = (-sin(vAngle), cos(vAngle))      — 竖线方向（独立于横线）
+   *
+   * 线段布局（中心留 CROSSHAIR_CENTER_GAP 间隙）：
    *   线段1左段: center - L*d1  →  center - gap*d1
    *   线段1右段: center + gap*d1 →  center + L*d1
    *   线段2上段: center - L*d2  →  center - gap*d2
    *   线段2下段: center + gap*d2 →  center + L*d2
    *
-   *   其中 L = 半对角线长度，确保任意旋转角度下线段都能贯穿视口
-   *
    * MIP viewport 不旋转（angle = 0），保持水平/垂直
-   *
-   * [Lessons Learned] 复用 _createSvgLayer 中一次性创建的线段元素，
-   * 此处仅更新 x1/y1/x2/y2 属性，避免频繁 DOM 节点创建/销毁。
    */
   private _drawCrosshair(
     viewportId: string,
@@ -1094,82 +1279,93 @@ class TMTVCrosshairService {
     const cy = canvasPoint[1];
     const gap = CROSSHAIR_CENTER_GAP;
 
-    // 旋转角度：非 MIP viewport 使用累计旋转角度，MIP 保持 0
-    const angleDeg = this._isMipViewport(viewportId) ? 0 : this.rotationAngle;
-    const angleRad = (angleDeg * Math.PI) / 180;
-    const cos = Math.cos(angleRad);
-    const sin = Math.sin(angleRad);
+    // 方向向量计算
+    // d1 = (d1Cos, d1Sin) — 横线方向
+    // d2 = (-d2Sin, d2Cos) — 竖线方向
+    const isMip = this._isMipViewport(viewportId);
+    let d1Cos: number, d1Sin: number, d2Sin: number, d2Cos: number;
+
+    if (this.mode === 'singleLineRotate' && !isMip) {
+      // [第五阶段] 单切线模式：横线和竖线各自独立旋转
+      const hRad = (this.singleLineHorizontalAngle * Math.PI) / 180;
+      const vRad = (this.singleLineVerticalAngle * Math.PI) / 180;
+      d1Cos = Math.cos(hRad); d1Sin = Math.sin(hRad);
+      d2Sin = Math.sin(vRad); d2Cos = Math.cos(vRad);
+    } else {
+      // [第四阶段] 双切线模式或 MIP：两根线一起旋转（MIP 不旋转）
+      const angleDeg = isMip ? 0 : this.rotationAngle;
+      const angleRad = (angleDeg * Math.PI) / 180;
+      d1Cos = Math.cos(angleRad); d1Sin = Math.sin(angleRad);
+      d2Sin = Math.sin(angleRad); d2Cos = Math.cos(angleRad);
+    }
 
     // 半对角线长度：确保任意旋转角度下线段都能贯穿视口
     const L = Math.sqrt(width * width + height * height);
 
-    // 方向向量
-    // d1 = (cos, sin)  — 第一条线方向
-    // d2 = (-sin, cos) — 第二条线方向（垂直于 d1）
-    // 线段1 左段: center - L*d1 → center - gap*d1
+    // 横线 左段: center - L*d1 → center - gap*d1
     const hLeft = this.hLineLefts.get(viewportId);
     if (hLeft) {
-      hLeft.setAttribute('x1', String(cx - L * cos));
-      hLeft.setAttribute('y1', String(cy - L * sin));
-      hLeft.setAttribute('x2', String(cx - gap * cos));
-      hLeft.setAttribute('y2', String(cy - gap * sin));
+      hLeft.setAttribute('x1', String(cx - L * d1Cos));
+      hLeft.setAttribute('y1', String(cy - L * d1Sin));
+      hLeft.setAttribute('x2', String(cx - gap * d1Cos));
+      hLeft.setAttribute('y2', String(cy - gap * d1Sin));
     }
 
-    // 线段1 右段: center + gap*d1 → center + L*d1
+    // 横线 右段: center + gap*d1 → center + L*d1
     const hRight = this.hLineRights.get(viewportId);
     if (hRight) {
-      hRight.setAttribute('x1', String(cx + gap * cos));
-      hRight.setAttribute('y1', String(cy + gap * sin));
-      hRight.setAttribute('x2', String(cx + L * cos));
-      hRight.setAttribute('y2', String(cy + L * sin));
+      hRight.setAttribute('x1', String(cx + gap * d1Cos));
+      hRight.setAttribute('y1', String(cy + gap * d1Sin));
+      hRight.setAttribute('x2', String(cx + L * d1Cos));
+      hRight.setAttribute('y2', String(cy + L * d1Sin));
     }
 
-    // 线段2 上段: center - L*d2 → center - gap*d2
-    // d2 = (-sin, cos)，所以 -L*d2 = (L*sin, -L*cos)
+    // 竖线 上段: center - L*d2 → center - gap*d2
+    // d2 = (-d2Sin, d2Cos)，所以 -L*d2 = (L*d2Sin, -L*d2Cos)
     const vTop = this.vLineTops.get(viewportId);
     if (vTop) {
-      vTop.setAttribute('x1', String(cx + L * sin));
-      vTop.setAttribute('y1', String(cy - L * cos));
-      vTop.setAttribute('x2', String(cx + gap * sin));
-      vTop.setAttribute('y2', String(cy - gap * cos));
+      vTop.setAttribute('x1', String(cx + L * d2Sin));
+      vTop.setAttribute('y1', String(cy - L * d2Cos));
+      vTop.setAttribute('x2', String(cx + gap * d2Sin));
+      vTop.setAttribute('y2', String(cy - gap * d2Cos));
     }
 
-    // 线段2 下段: center + gap*d2 → center + L*d2
-    // d2 = (-sin, cos)，所以 +L*d2 = (-L*sin, L*cos)
+    // 竖线 下段: center + gap*d2 → center + L*d2
+    // d2 = (-d2Sin, d2Cos)，所以 +L*d2 = (-L*d2Sin, L*d2Cos)
     const vBottom = this.vLineBottoms.get(viewportId);
     if (vBottom) {
-      vBottom.setAttribute('x1', String(cx - gap * sin));
-      vBottom.setAttribute('y1', String(cy + gap * cos));
-      vBottom.setAttribute('x2', String(cx - L * sin));
-      vBottom.setAttribute('y2', String(cy + L * cos));
+      vBottom.setAttribute('x1', String(cx - gap * d2Sin));
+      vBottom.setAttribute('y1', String(cy + gap * d2Cos));
+      vBottom.setAttribute('x2', String(cx - L * d2Sin));
+      vBottom.setAttribute('y2', String(cy + L * d2Cos));
     }
 
-    // [2026-08-05 第四阶段] 定位旋转手柄（4个圆点）
+    // 定位旋转手柄（4个圆点）
     // 仅非 MIP viewport 显示手柄（MIP 不支持旋转）
     const handleArr = this.handles.get(viewportId);
     if (handleArr && handleArr.length === 4) {
-      const showHandles = !this._isMipViewport(viewportId);
+      const showHandles = !isMip;
       const hd = HANDLE_DISTANCE;
       const display = showHandles ? '' : 'none';
 
-      // 手柄0: 线段1 正方向端 (center + hd*d1)
-      handleArr[0].setAttribute('cx', String(cx + hd * cos));
-      handleArr[0].setAttribute('cy', String(cy + hd * sin));
+      // 手柄0: 横线 正方向端 (center + hd*d1)
+      handleArr[0].setAttribute('cx', String(cx + hd * d1Cos));
+      handleArr[0].setAttribute('cy', String(cy + hd * d1Sin));
       handleArr[0].style.display = display;
 
-      // 手柄1: 线段1 负方向端 (center - hd*d1)
-      handleArr[1].setAttribute('cx', String(cx - hd * cos));
-      handleArr[1].setAttribute('cy', String(cy - hd * sin));
+      // 手柄1: 横线 负方向端 (center - hd*d1)
+      handleArr[1].setAttribute('cx', String(cx - hd * d1Cos));
+      handleArr[1].setAttribute('cy', String(cy - hd * d1Sin));
       handleArr[1].style.display = display;
 
-      // 手柄2: 线段2 正方向端 (center + hd*d2 = center + hd*(-sin, cos))
-      handleArr[2].setAttribute('cx', String(cx - hd * sin));
-      handleArr[2].setAttribute('cy', String(cy + hd * cos));
+      // 手柄2: 竖线 正方向端 (center + hd*d2 = center + hd*(-d2Sin, d2Cos))
+      handleArr[2].setAttribute('cx', String(cx - hd * d2Sin));
+      handleArr[2].setAttribute('cy', String(cy + hd * d2Cos));
       handleArr[2].style.display = display;
 
-      // 手柄3: 线段2 负方向端 (center - hd*d2 = center + hd*(sin, -cos))
-      handleArr[3].setAttribute('cx', String(cx + hd * sin));
-      handleArr[3].setAttribute('cy', String(cy - hd * cos));
+      // 手柄3: 竖线 负方向端 (center - hd*d2 = center + hd*(d2Sin, -d2Cos))
+      handleArr[3].setAttribute('cx', String(cx + hd * d2Sin));
+      handleArr[3].setAttribute('cy', String(cy - hd * d2Cos));
       handleArr[3].style.display = display;
     }
   }

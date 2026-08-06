@@ -15,6 +15,7 @@ import dicomRTAnnotationExport from './utils/dicomRTAnnotationExport/RTStructure
 import { Enums } from '@cornerstonejs/tools';
 import { utils } from '@ohif/core';
 import tmtvCrosshairService from './services/TMTVCrosshairService';
+import crosshairDisplayService from './services/CrosshairDisplayService';
 import { toolGroupIds } from '../../../modes/tmtv/src/initToolGroups';
 
 const { SegmentationRepresentations } = Enums;
@@ -44,6 +45,9 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
   );
 
   const { getEnabledElement } = utilityModule.exports;
+
+  // [2026-08-06] 初始化 CrosshairDisplayService，注入 servicesManager
+  crosshairDisplayService.init(servicesManager);
 
   function _getActiveViewportsEnabledElement() {
     const { activeViewportId } = viewportGridService.getState();
@@ -726,12 +730,16 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
           if (!toolGroup) return;
           const csToolGroup = (toolGroup as any)._toolGroup || toolGroup;
           if (visible) {
+            // [2026-08-06] 激活 Crosshairs 前先禁用 SingleSliceLine，避免冲突
+            csToolGroup.setToolDisabled('SingleSliceLine');
             commandsManager.runCommand('setToolActiveToolbar', {
               toolName: 'Crosshairs',
               toolGroupIds: [tgId],
             });
           } else {
+            // [2026-08-06] 禁用时同时禁用 SingleSliceLine 和 Crosshairs，确保彻底清理
             csToolGroup.setToolDisabled('Crosshairs');
+            csToolGroup.setToolDisabled('SingleSliceLine');
           }
         } catch (e) {
           console.warn(`setNativeCrosshairsVisibility: 切换失败 (${tgId})`, e);
@@ -778,7 +786,8 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
           if (!toolGroup) return;
           const csToolGroup = (toolGroup as any)._toolGroup || toolGroup;
           const activeToolName = csToolGroup.getActivePrimaryMouseButtonTool();
-          if (activeToolName && activeToolName !== 'Crosshairs') {
+          // [2026-08-06] 排除 Crosshairs 和 SingleSliceLine，避免误停用十字线工具
+          if (activeToolName && activeToolName !== 'Crosshairs' && activeToolName !== 'SingleSliceLine') {
             const activeToolOptions = csToolGroup.getToolConfiguration(activeToolName);
             if (activeToolOptions?.disableOnPassive) {
               csToolGroup.setToolDisabled(activeToolName);
@@ -819,8 +828,16 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       const stageId = hangingProtocolService?._getCurrentStageModel?.()?.id || '';
       const isTmtv = tmtvCrosshairService.isTmtvLayout(stageId);
 
+      // [2026-08-06] 如果当前是单切线模式，切换到十字线时应保持可见（不 toggle off）
+      // 只有在 normal 模式下才执行 toggle 显隐
+      const wasSingleLineMode = crosshairDisplayService.isSingleLineMode();
+
+      // [2026-08-06] 设置模式为 normal，使 SingleSliceLine 按钮失活（互斥）
+      crosshairDisplayService.setMode('normal');
+
       // 统一状态：切换 visible
-      const newVisible = !tmtvCrosshairService.getVisible();
+      // 从单切线切换过来时保持可见，否则 toggle
+      const newVisible = wasSingleLineMode ? true : !tmtvCrosshairService.getVisible();
 
       if (isTmtv) {
         // TMTV 布局：确保 viewport 已注册到 TMTVCrosshairService
@@ -869,6 +886,30 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     // CT/PET/Fusion 同步旋转，MIP 不参与
     rotateCrosshair: ({ degrees }: { degrees: number }) => {
       tmtvCrosshairService.rotateCrosshair(degrees);
+    },
+
+    // [2026-08-06 单切线旋转第一阶段] 启用单切线模式
+    // 通过 CrosshairDisplayService 统一管理，根据布局类型自动路由：
+    //   - TMTV 布局 → SVG overlay 显示十字线
+    //   - 旧 MPR 布局 → SingleSliceLineTool 显示十字线（单切线旋转）
+    enableSingleLine: () => {
+      // 如果已可见且为单切线模式，则切换为关闭（toggle 行为）
+      if (crosshairDisplayService.isVisible() && crosshairDisplayService.isSingleLineMode()) {
+        crosshairDisplayService.disable();
+      } else {
+        crosshairDisplayService.enable('singleLineRotate');
+        // [2026-08-06] TMTV 布局下激活十字线时停用其他工具（互斥）
+        // 非 TMTV 布局下 setToolActive 会自动停用前一个工具，不需要此步骤
+        const stageId = hangingProtocolService?._getCurrentStageModel?.()?.id || '';
+        if (tmtvCrosshairService.isTmtvLayout(stageId)) {
+          actions.deactivateActivePrimaryTools();
+        }
+      }
+    },
+
+    // [2026-08-06 单切线旋转第一阶段] 禁用单切线模式
+    disableSingleLine: () => {
+      crosshairDisplayService.disable();
     },
   };
 
@@ -923,6 +964,12 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     rotateCrosshair: {
       commandFn: actions.rotateCrosshair,
+    },
+    enableSingleLine: {
+      commandFn: actions.enableSingleLine,
+    },
+    disableSingleLine: {
+      commandFn: actions.disableSingleLine,
     },
   };
 

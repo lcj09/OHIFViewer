@@ -26,6 +26,7 @@ import {
   TooltipContent,
 } from '@ohif/ui-next';
 import tmtvCrosshairService from '../services/TMTVCrosshairService';
+import crosshairDisplayService from '../services/CrosshairDisplayService';
 
 function OverlayMenu({ commandsManager, servicesManager, ...props }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -164,14 +165,15 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
       } else {
         // [2026-08-04] 非 TMTV 布局：清理 SVG 层但保留 visible 状态
         // 使用 clear() 而非 reset()，使 visible 状态在布局切换后保持，
-        // 这样切换到非 TMTV 布局时原生 CrosshairsTool 能根据 visible 自动恢复。
+        // 这样切换到非 TMTV 布局时原生工具能根据 visible 自动恢复。
         tmtvCrosshairService.clear();
 
-        // 根据保留的 visible 状态恢复原生 CrosshairsTool
-        const isVisible = tmtvCrosshairService.getVisible();
-        commandsManager.runCommand('setNativeCrosshairsVisibility', { visible: isVisible });
+        // [2026-08-06] 通过 CrosshairDisplayService 恢复显示
+        // 会根据当前 mode 自动选择激活 CrosshairsTool 或 SingleSliceLineTool
+        crosshairDisplayService.refresh();
 
         // 同步 OverlayMenu 的 showCrosshairs 状态
+        const isVisible = tmtvCrosshairService.getVisible();
         if (showCrosshairsRef.current !== isVisible) {
           setShowCrosshairs(isVisible);
         }
@@ -205,7 +207,12 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
     const handlePrimaryToolActivated = (callbackProps: { toolName: string }) => {
       if (!isMountedRef.current) return;
       const { toolName } = callbackProps;
-      if (toolName !== 'Crosshairs' && tmtvCrosshairService.getVisible()) {
+      // [2026-08-06] 排除 Crosshairs 和 SingleSliceLine，避免自我取消
+      if (
+        toolName !== 'Crosshairs' &&
+        toolName !== 'SingleSliceLine' &&
+        tmtvCrosshairService.getVisible()
+      ) {
         // 停用十字线：setVisible(false) 会隐藏 SVG overlay（TMTV 布局）
         // 并设置 visible = false（统一状态）
         // 非 TMTV 布局下原生 CrosshairsTool 已被 setToolActive 自动停用
@@ -255,6 +262,8 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
       if (subscriptionPrimaryToolActivated?.unsubscribe) subscriptionPrimaryToolActivated.unsubscribe();
       // 组件卸载时完全重置十字线服务（包括 visible 状态）
       tmtvCrosshairService.reset();
+      // [2026-08-06 内存修复] 重置 CrosshairDisplayService，释放 servicesManager 引用
+      crosshairDisplayService.reset();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

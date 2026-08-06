@@ -6,6 +6,7 @@ import OverlayMenu from './Toolbar/OverlayMenu';
 import ColormapMenu from './Toolbar/ColormapMenu';
 import SuvThresholdMenu from './Toolbar/SuvThresholdMenu';
 import tmtvCrosshairService from './services/TMTVCrosshairService';
+import crosshairDisplayService from './services/CrosshairDisplayService';
 
 // 2026-04-28 - TMTV专用toolbar模块
 // 注意：必须使用工厂函数模式，接收 commandsManager 和 servicesManager
@@ -61,9 +62,31 @@ export default function getToolbarModule({ commandsManager, servicesManager }) {
       name: 'evaluate.tmtvCrosshair',
       evaluate: () => {
         try {
+          // [2026-08-06] 当单切线模式激活时，Crosshairs 按钮不显示激活状态（互斥）
+          const isActive =
+            tmtvCrosshairService.getVisible() &&
+            !crosshairDisplayService.isSingleLineMode();
           return {
             disabled: false,
-            isActive: tmtvCrosshairService.getVisible(),
+            isActive,
+          };
+        } catch (e) {
+          return { disabled: false };
+        }
+      },
+    },
+    // [2026-08-06 新增] 单切线按钮的 evaluate 函数
+    // 基于 CrosshairDisplayService 的状态决定按钮 isActive（蓝色背景）
+    // 当 visible=true 且 mode='singleLineRotate' 时显示激活状态
+    {
+      name: 'evaluate.singleLine',
+      evaluate: () => {
+        try {
+          return {
+            disabled: false,
+            isActive:
+              crosshairDisplayService.isVisible() &&
+              crosshairDisplayService.isSingleLineMode(),
           };
         } catch (e) {
           return { disabled: false };

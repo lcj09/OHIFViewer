@@ -288,8 +288,11 @@ const toolbarButtons = [
       evaluate: 'evaluate.tmtvCrosshair',
     },
   },
-  // [2026-05-19 新增] 单切线旋转按钮 - 与十字线类似，但旋转时仅影响一条参考线对应的一个视口
-  // 旋转横截面中横线 → 冠状位图像变化；旋转横截面的竖线 → 矢状位图像变化
+  // [2026-05-19 新增, 2026-08-06 修改] 单切线旋转按钮
+  // [2026-08-06] 改为通过 CrosshairDisplayService 统一管理显示状态
+  // 不再直接绑定 SingleSliceLineTool，而是统一入口：
+  //   - TMTV 布局 → SVG overlay 显示十字线
+  //   - 旧 MPR 布局 → Cornerstone CrosshairsTool 显示十字线
   {
     id: 'SingleSliceLine',
     uiType: 'ohif.toolButton',
@@ -297,8 +300,8 @@ const toolbarButtons = [
       icon: 'tool-single-slice-line',
       label: i18n.t('Buttons:Single Slice Line'),
       tooltip: i18n.t('Buttons:Single Slice Line Tool'),
-      commands: setToolActiveToolbar,
-      evaluate: 'evaluate.cornerstoneTool',
+      commands: 'enableSingleLine',
+      evaluate: 'evaluate.singleLine',
     },
   },
   // [2026-05-22 新增] 手动微调按钮 - 融合图像位置微调
