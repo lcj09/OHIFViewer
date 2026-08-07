@@ -2179,22 +2179,29 @@ function commandsModule({
         return;
       }
 
-      // [2026-08-06] 根据同步设置决定是否禁用 cameraPosition 同步组
+      // [2026-08-06, 2026-08-07 修改] 根据同步设置决定是否禁用 cameraPosition 同步组
       // customizationService.syncSettings.orientationSync:
       //   true（默认）→ 同步方位切换到同组其他视口
-      //   false       → 只切换当前视口，不同步
-      let disabledSynchronizers = [];
+      //   false       → 只切换当前视口，禁用同步器且不恢复
+      //
+      // [2026-08-07 修复] 之前切换方位后会立即恢复同步器，导致翻页时
+      // 同步器将已改变的方位（viewPlaneNormal）同步到同组其他视口。
+      // 现在不在命令中恢复同步器，改由 SyncMenu 在用户重新开启同步时统一恢复。
       try {
         const syncSettings = customizationService.getCustomization('syncSettings');
         const orientationSyncEnabled = syncSettings?.orientationSync !== false; // 默认 true
 
         if (!orientationSyncEnabled) {
           const syncs = syncGroupService.getSynchronizersForViewport(viewportId);
-          disabledSynchronizers = syncs.filter(s => {
+          const cameraPositionSyncs = syncs.filter(s => {
             const type = syncGroupService.getSynchronizerType(s);
             return type && type.toLowerCase() === 'cameraposition';
           });
-          disabledSynchronizers.forEach(s => s.setEnabled(false));
+          // 禁用同步器，不在命令结束后恢复
+          // 后续翻页/滚动不会将此视口的 camera（含新方位）同步到其他视口
+          cameraPositionSyncs.forEach(s => {
+            try { s.setEnabled(false); } catch { /* ignore */ }
+          });
         }
       } catch (e) {
         console.warn('setViewportOrientation: 检查同步设置失败', e);
@@ -2206,11 +2213,6 @@ function commandsModule({
       // update the orientation in the viewport info
       const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
       viewportInfo.setOrientation(orientation);
-
-      // [2026-08-06] 恢复同步组
-      disabledSynchronizers.forEach(s => {
-        try { s.setEnabled(true); } catch { /* ignore */ }
-      });
     },
     /**
      * Toggles the horizontal flip state of the viewport.

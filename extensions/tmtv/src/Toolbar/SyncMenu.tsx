@@ -44,7 +44,10 @@ function SyncMenu({ servicesManager, ...props }) {
     }
   }, [customizationService]);
 
-  // [2026-08-06] 切换方位同步开关
+  // [2026-08-06, 2026-08-07 修改] 切换方位同步开关
+  // 开启时：恢复所有被禁用的 cameraPosition 同步器
+  //   setViewportOrientation 在同步关闭时会禁用同步器且不恢复，
+  //   用户重新开启同步时在此统一恢复。
   const handleToggleOrientationSync = useCallback(() => {
     const newState = !orientationSync;
     setOrientationSync(newState);
@@ -52,10 +55,37 @@ function SyncMenu({ servicesManager, ...props }) {
       customizationService.setCustomizations({
         syncSettings: { orientationSync: newState },
       });
+
+      // [2026-08-07] 重新开启同步时，恢复所有 cameraPosition 同步器
+      if (newState) {
+        const { syncGroupService, cornerstoneViewportService } =
+          servicesManager.services;
+        try {
+          const vpIds = cornerstoneViewportService.getViewportIds() || [];
+          const seen = new Set();
+          vpIds.forEach(vpId => {
+            try {
+              const syncs = syncGroupService.getSynchronizersForViewport(vpId);
+              syncs.forEach(s => {
+                if (seen.has(s)) return;
+                seen.add(s);
+                const type = syncGroupService.getSynchronizerType(s);
+                if (type && type.toLowerCase() === 'cameraposition') {
+                  s.setEnabled(true);
+                }
+              });
+            } catch {
+              /* ignore */
+            }
+          });
+        } catch (e) {
+          console.warn('[SyncMenu] 恢复同步器失败', e);
+        }
+      }
     } catch (e) {
       console.warn('[SyncMenu] 保存同步状态失败', e);
     }
-  }, [orientationSync, customizationService]);
+  }, [orientationSync, customizationService, servicesManager]);
 
   return (
     <div id="SyncMenu" data-cy="SyncMenu">
