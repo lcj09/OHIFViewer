@@ -170,6 +170,10 @@ class CrosshairDisplayService {
       const stageId = hangingProtocolService?._getCurrentStageModel?.()?.id || '';
       const isTmtv = tmtvCrosshairService.isTmtvLayout(stageId);
 
+      // [2026-08-07 Step2] 同步当前 stageId 到 TMTVCrosshairService
+      // 用于单切线旋转时判断是否为 2x3-layout（Axial 布局）以启用 target 旋转
+      tmtvCrosshairService.setStageId(stageId);
+
       if (isTmtv) {
         // ========== TMTV 布局：使用 SVG overlay ==========
         this._updateTmtvCrosshair(stageId, cornerstoneViewportService);
@@ -224,11 +228,20 @@ class CrosshairDisplayService {
    *   - mode='normal'           → 激活 CrosshairsTool（双切线旋转）
    *
    * @param visible - true=激活工具，false=停用工具
+   *
+   * [2026-08-10 修复] 激活目标工具前先禁用另一个工具，确保互斥。
+   *   场景：3x4 布局下先激活 Crosshairs，再激活 SingleSliceLine 时，
+   *   若不先禁用 Crosshairs，其 annotation 仍存在并响应旋转交互，
+   *   导致"旋转时仍是十字线旋转"的问题。
+   *   约束：CrosshairsTool 和 SingleSliceLineTool 在 MPR 布局下需互斥激活。
    */
   private _setLegacyCrosshairVisible(visible: boolean, toolGroupService: any): void {
     // 根据模式选择要激活的工具名称
     const toolName =
       this.state.mode === 'singleLineRotate' ? 'SingleSliceLine' : 'Crosshairs';
+    // 另一个需要互斥禁用的工具名称
+    const otherToolName =
+      this.state.mode === 'singleLineRotate' ? 'Crosshairs' : 'SingleSliceLine';
 
     CrosshairDisplayService.LEGACY_TOOLGROUP_IDS.forEach(tgId => {
       try {
@@ -237,6 +250,8 @@ class CrosshairDisplayService {
         const csToolGroup = toolGroup._toolGroup || toolGroup;
 
         if (visible) {
+          // [2026-08-10 修复] 先禁用另一个工具，确保互斥
+          csToolGroup.setToolDisabled(otherToolName);
           csToolGroup.setToolActive(toolName);
         } else {
           // 禁用时同时禁用两个工具，确保彻底清理

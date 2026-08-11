@@ -76,6 +76,13 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
     // 先清空旧的注册
     tmtvCrosshairService.clear();
 
+    // [2026-08-10 修复布局切换后单切线旋转失效] 同步 currentStageId
+    // 原因：clear() 不重置 currentStageId，而 setStageId 只在 CrosshairDisplayService._update()
+    //       （即 enable/disable/toggle）时调用。若用户切换布局后未重新点击单切线按钮，
+    //       currentStageId 仍是旧布局的值，_findTargetViewport 会用旧布局的 viewportId
+    //       列表查找 target，导致找不到 target，旋转失效。
+    tmtvCrosshairService.setStageId(stageId);
+
     if (viewportIds.length === 0) {
       return;
     }
@@ -141,6 +148,11 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
       if (!isMountedRef.current) return;
 
       const tmtv = checkIsTmtvLayout();
+
+      // [2026-08-10 修复布局切换后单切线旋转失效] 同步 currentStageId
+      // 无论进入 TMTV 分支还是非 TMTV 分支，都先同步 stageId，确保
+      // _findTargetViewport 用最新布局的 viewportId 列表查找 target。
+      tmtvCrosshairService.setStageId(getCurrentStageId());
 
       if (tmtv) {
         // [内存排查] 立即清理旧的十字线 SVG 状态，释放对已销毁 viewport 的引用。

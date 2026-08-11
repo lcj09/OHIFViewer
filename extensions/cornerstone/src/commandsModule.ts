@@ -2179,27 +2179,33 @@ function commandsModule({
         return;
       }
 
-      // [2026-08-06, 2026-08-07 修改] 根据同步设置决定是否禁用 cameraPosition 同步组
+      // [2026-08-06, 2026-08-10 修复] 根据同步设置决定是否禁用 cameraPosition 同步组
       // customizationService.syncSettings.orientationSync:
       //   true（默认）→ 同步方位切换到同组其他视口
-      //   false       → 只切换当前视口，禁用同步器且不恢复
+      //   false       → 只切换当前视口，不同步方位
       //
-      // [2026-08-07 修复] 之前切换方位后会立即恢复同步器，导致翻页时
-      // 同步器将已改变的方位（viewPlaneNormal）同步到同组其他视口。
-      // 现在不在命令中恢复同步器，改由 SyncMenu 在用户重新开启同步时统一恢复。
+      // [2026-08-10 修复] 之前 0d3b5e106 提交将"不恢复同步器"作为永久状态，
+      //   导致切换过方位后 cameraPosition 同步器被永久禁用，后续十字线旋转
+      //   （CrosshairsTool 的 setCamera）无法通过同步器传播到同组其他视口，
+      //   表现为"横断面只有一个视口在动"。
+      //   现在改回"切换方位期间临时禁用同步器，切换完成后立即恢复"，
+      //   仅防止 setOrientation() 内部触发的同步器把旧方位同步出去，
+      //   不影响后续旋转/翻页时的同步行为。
+      //   "只切换当前视口"的效果通过 setOrientation 期间禁用同步器实现，
+      //   恢复后同步器不会反向同步（其他视口的 camera 不会变）。
+      let disabledSynchronizers = [];
       try {
         const syncSettings = customizationService.getCustomization('syncSettings');
         const orientationSyncEnabled = syncSettings?.orientationSync !== false; // 默认 true
 
         if (!orientationSyncEnabled) {
           const syncs = syncGroupService.getSynchronizersForViewport(viewportId);
-          const cameraPositionSyncs = syncs.filter(s => {
+          disabledSynchronizers = syncs.filter(s => {
             const type = syncGroupService.getSynchronizerType(s);
             return type && type.toLowerCase() === 'cameraposition';
           });
-          // 禁用同步器，不在命令结束后恢复
-          // 后续翻页/滚动不会将此视口的 camera（含新方位）同步到其他视口
-          cameraPositionSyncs.forEach(s => {
+          // 临时禁用同步器，防止 setOrientation() 内部触发同步
+          disabledSynchronizers.forEach(s => {
             try { s.setEnabled(false); } catch { /* ignore */ }
           });
         }
@@ -2207,12 +2213,20 @@ function commandsModule({
         console.warn('setViewportOrientation: 检查同步设置失败', e);
       }
 
-      viewport.setOrientation(orientation);
-      viewport.render();
+      try {
+        viewport.setOrientation(orientation);
+        viewport.render();
 
-      // update the orientation in the viewport info
-      const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
-      viewportInfo.setOrientation(orientation);
+        // update the orientation in the viewport info
+        const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
+        viewportInfo.setOrientation(orientation);
+      } finally {
+        // [2026-08-10 修复] 无论是否异常都恢复同步器，确保后续旋转/翻页
+        //   能通过同步器正常传播 camera 变化到同组其他视口
+        disabledSynchronizers.forEach(s => {
+          try { s.setEnabled(true); } catch { /* ignore */ }
+        });
+      }
     },
     /**
      * Toggles the horizontal flip state of the viewport.

@@ -48,6 +48,9 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
 
   // [2026-08-06] 初始化 CrosshairDisplayService，注入 servicesManager
   crosshairDisplayService.init(servicesManager);
+  // [2026-08-10 修复同步器干扰] 注入 servicesManager 到 TMTVCrosshairService
+  // 旋转期间需通过 syncGroupService 临时禁用 cameraPosition 同步器
+  tmtvCrosshairService.setServicesManager(servicesManager);
 
   function _getActiveViewportsEnabledElement() {
     const { activeViewportId } = viewportGridService.getState();

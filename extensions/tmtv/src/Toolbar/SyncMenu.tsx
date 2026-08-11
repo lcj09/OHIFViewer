@@ -44,10 +44,11 @@ function SyncMenu({ servicesManager, ...props }) {
     }
   }, [customizationService]);
 
-  // [2026-08-06, 2026-08-07 修改] 切换方位同步开关
-  // 开启时：恢复所有被禁用的 cameraPosition 同步器
-  //   setViewportOrientation 在同步关闭时会禁用同步器且不恢复，
-  //   用户重新开启同步时在此统一恢复。
+  // [2026-08-06, 2026-08-10 修改] 切换方位同步开关
+  // 开启时：恢复所有 cameraPosition 同步器（幂等，setViewportOrientation 已恢复）
+  //   [2026-08-10] setViewportOrientation 已改为切换方位期间临时禁用、
+  //   切换完成后立即恢复同步器，不再永久禁用。此处的恢复逻辑保留作为兜底，
+  //   确保用户重新开启同步时所有同步器都处于启用状态。
   const handleToggleOrientationSync = useCallback(() => {
     const newState = !orientationSync;
     setOrientationSync(newState);
