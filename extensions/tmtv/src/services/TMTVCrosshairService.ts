@@ -711,6 +711,10 @@ class TMTVCrosshairService {
   /**
    * 完全重置状态（包括 visible、worldPosition 和旋转状态）
    * 用于退出 TMTV 模式时清理，确保下次进入时为初始状态
+   *
+   * [2026-08-10 内存泄漏修复] 释放 servicesManager 引用，防止单例持有旧服务对象
+   *   导致 HangingProtocolService、CornerstoneViewportService 等无法被 GC。
+   *   下次进入 TMTV 模式时由 commandsModule 重新注入。
    */
   reset(): void {
     this.clear();
@@ -723,6 +727,8 @@ class TMTVCrosshairService {
     // [2026-08-10 修复变形] 重置拖动起始状态
     this.singleLineRotateStartMouseAngle = 0;
     this.singleLineRotateStartLineAngle = 0;
+    // [2026-08-10 内存泄漏修复] 释放 servicesManager 引用
+    this.servicesManager = null;
   }
 
   /**

@@ -144,6 +144,13 @@ function OverlayMenu({ commandsManager, servicesManager, ...props }) {
   useEffect(() => {
     isMountedRef.current = true;
 
+    // [2026-08-10 内存泄漏修复] 组件挂载时重新注入 servicesManager
+    // 原因：组件卸载时 tmtvCrosshairService.reset() 和 crosshairDisplayService.reset()
+    //   会释放 servicesManager 引用。再次进入 TMTV 模式时组件重新挂载，
+    //   但 commandsModule 不会重新初始化，需要在此处重新注入。
+    tmtvCrosshairService.setServicesManager(servicesManager);
+    crosshairDisplayService.init(servicesManager);
+
     const handleLayoutChanged = () => {
       if (!isMountedRef.current) return;
 
