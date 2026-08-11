@@ -667,6 +667,11 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         viewport.setZoom(currentZoom);
         viewport.render();
       }
+
+      // [2026-08-11 新增] 重置十字线/单切线旋转角度
+      // 在视口重置完成后，调用 TMTVCrosshairService 重置所有旋转角度，
+      // 确保十字线和单切线回到初始状态（0度，不旋转）
+      tmtvCrosshairService.resetRotationAngles();
     },
     // ============================================================================
     // [2026-05-22 新增] 重置融合微调偏移

@@ -732,6 +732,68 @@ class TMTVCrosshairService {
   }
 
   /**
+   * [2026-08-11 新增] 重置十字线/单切线旋转角度和位置
+   *
+   * 功能说明：重置所有旋转角度到初始状态（0度），重置十字线位置到 viewport 中心
+   *           （camera focalPoint）。从第一个非 MIP viewport 的 camera 重新初始化
+   *           viewPlaneNormal 和 viewUp，确保旋转功能可继续使用。
+   *           不清除 viewport 注册、SVG 层、不改变 visible 状态，
+   *           适合在"重置视图"按钮调用。
+   *
+   * 与 reset() 的区别：
+   *   - reset()：完全重置 + 清理所有资源（退出 TMTV 模式时用）
+   *   - resetRotationAngles()：重置旋转角度和位置（重置视图按钮用）
+   *
+   * 边界条件：
+   *   - 可见性保持不变
+   *   - servicesManager 引用保持不变
+   */
+  resetRotationAngles(): void {
+    // 双切线旋转角度
+    this.rotationAngle = 0;
+    // 单切线旋转角度
+    this.singleLineHorizontalAngle = 0;
+    this.singleLineVerticalAngle = 0;
+    this.singleLineRotateStartMouseAngle = 0;
+    this.singleLineRotateStartLineAngle = 0;
+
+    // 从第一个非MIP viewport的camera重新初始化方向状态和位置
+    // 不能设为null，否则rotateCrosshair会因null检查失败而无法旋转
+    // 同时重置worldPosition到viewports中心（camera focalPoint）
+    for (const [viewportId, viewport] of this.viewports) {
+      if (this._isMipViewport(viewportId)) continue;
+      try {
+        const camera = viewport.getCamera?.();
+        if (camera?.viewPlaneNormal && camera?.viewUp) {
+          this.viewPlaneNormal = [
+            camera.viewPlaneNormal[0],
+            camera.viewPlaneNormal[1],
+            camera.viewPlaneNormal[2],
+          ];
+          this.viewUp = [
+            camera.viewUp[0],
+            camera.viewUp[1],
+            camera.viewUp[2],
+          ];
+        }
+        if (camera?.focalPoint) {
+          this.worldPosition = [
+            camera.focalPoint[0],
+            camera.focalPoint[1],
+            camera.focalPoint[2],
+          ];
+        }
+        break; // 只取第一个非MIP viewport
+      } catch (e) {
+        continue;
+      }
+    }
+
+    // 更新 SVG 绘制
+    this.render();
+  }
+
+  /**
    * 设置十字线可见性
    */
   setVisible(value: boolean): void {
