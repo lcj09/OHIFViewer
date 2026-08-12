@@ -41,7 +41,20 @@ function CornerstoneOverlays(props: withAppTypes) {
     const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
 
     if (viewportInfo?.viewportOptions?.customViewportProps?.hideOverlays) {
-      return null;
+      // [2026-08-12 修复] 当 hideOverlays 为 true 时，仍渲染方位标记，
+      // 但隐藏其他叠加层（滚动条、文字叠加、切片加载指示器、像素信息）。
+      // 解决 MIP 视口在 3x4 布局中窄高尺寸下 VTK OrientationMarkerTool 渲染变形的问题。
+      return (
+        <div className="noselect">
+          <ViewportOrientationMarkers
+            imageSliceData={imageSliceData}
+            element={element}
+            viewportData={viewportData}
+            servicesManager={servicesManager}
+            viewportId={viewportId}
+          />
+        </div>
+      );
     }
   }
 

@@ -247,16 +247,7 @@ function _initToolGroups(toolNames, Enums, toolGroupService, commandsManager) {
       // 激活后替换MipJumpToClick的左键绑定，实现鼠标拖拽旋转
       { toolName: toolNames.TrackballRotateTool },
     ],
-    enabled: [
-      {
-        toolName: toolNames.OrientationMarker,
-        configuration: {
-          orientationWidget: {
-            viewportCorner: 'BOTTOM_LEFT',
-          },
-        },
-      },
-    ],
+    enabled: [],
     disabled: [
       // [2026-05-11 修复] Crosshairs必须注册到MIP工具组
       // 即使是disabled状态，工具实例也会被创建
