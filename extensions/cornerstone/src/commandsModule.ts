@@ -2179,7 +2179,7 @@ function commandsModule({
         return;
       }
 
-      // [2026-08-06, 2026-08-10 修复] 根据同步设置决定是否禁用 cameraPosition 同步组
+      // [2026-08-06, 2026-08-10 修复, 2026-08-11 修复] 根据同步设置决定 cameraPosition 同步组行为
       // customizationService.syncSettings.orientationSync:
       //   true（默认）→ 同步方位切换到同组其他视口
       //   false       → 只切换当前视口，不同步方位
@@ -2193,18 +2193,26 @@ function commandsModule({
       //   不影响后续旋转/翻页时的同步行为。
       //   "只切换当前视口"的效果通过 setOrientation 期间禁用同步器实现，
       //   恢复后同步器不会反向同步（其他视口的 camera 不会变）。
+      //
+      // [2026-08-11 修复] 当 orientationSync=false 时，除了切换期间临时禁用同步器，
+      //   切换完成后还要从 cameraPosition 同步组中移除该 viewport 的 source 角色
+      //   （保留 target，让其他视口滚轮滚动时本视口仍能跟随切片）。
+      //   否则滚轮滚动本视口时，同步器会把新方位的相机整个复制给同组其他视口，
+      //   导致它们的方位也被改成新方位（"又变成同步"现象）。
       let disabledSynchronizers = [];
+      let removedSourceSyncs = []; // [2026-08-11] 记录被移除 source 的同步器，供后续恢复
       try {
         const syncSettings = customizationService.getCustomization('syncSettings');
         const orientationSyncEnabled = syncSettings?.orientationSync !== false; // 默认 true
 
         if (!orientationSyncEnabled) {
           const syncs = syncGroupService.getSynchronizersForViewport(viewportId);
-          disabledSynchronizers = syncs.filter(s => {
+          const camPosSyncs = syncs.filter(s => {
             const type = syncGroupService.getSynchronizerType(s);
             return type && type.toLowerCase() === 'cameraposition';
           });
           // 临时禁用同步器，防止 setOrientation() 内部触发同步
+          disabledSynchronizers = camPosSyncs;
           disabledSynchronizers.forEach(s => {
             try { s.setEnabled(false); } catch { /* ignore */ }
           });
@@ -2226,6 +2234,34 @@ function commandsModule({
         disabledSynchronizers.forEach(s => {
           try { s.setEnabled(true); } catch { /* ignore */ }
         });
+
+        // [2026-08-11 修复] orientationSync=false 时，切换完成后把本视口从
+        //   cameraPosition 同步组中完全移除（既不是 source 也不是 target）。
+        //   原因：方位已变的视口与原同步组（如 axialSync）方位不再匹配，
+        //   - 不能作为 source：滚轮滚动会把新方位同步给同组其他视口
+        //   - 不能作为 target：其他视口滚动时会把原方位同步给本视口，覆盖新方位
+        //   因此必须完全移除。SyncMenu 重新开启同步时会重新加回 source/target。
+        try {
+          const syncSettings = customizationService.getCustomization('syncSettings');
+          const orientationSyncEnabled = syncSettings?.orientationSync !== false;
+          if (!orientationSyncEnabled) {
+            const renderingEngineId = viewport.renderingEngineId;
+            const viewportInfo = { renderingEngineId, viewportId };
+            const syncs = syncGroupService.getSynchronizersForViewport(viewportId);
+            syncs.forEach(s => {
+              const type = syncGroupService.getSynchronizerType(s);
+              if (type && type.toLowerCase() === 'cameraposition') {
+                try {
+                  // remove 同时移除 source 和 target
+                  s.remove(viewportInfo);
+                  removedSourceSyncs.push({ synchronizer: s, viewportInfo });
+                } catch { /* ignore */ }
+              }
+            });
+          }
+        } catch (e) {
+          console.warn('setViewportOrientation: 移除同步失败', e);
+        }
       }
     },
     /**

@@ -539,28 +539,28 @@ class TMTVCrosshairService {
     // 方向未变化（包括初次识别为 null 后再次 null 的情况）
     if (current === last) return;
 
-    // 方向发生变化，打印日志
-    if (last === undefined) {
-      // 初次识别
-      console.log(
-        `[TMTVCrosshairService] 方向识别 viewportId=${viewportId} orientation=${current}`
-      );
-    } else if (current === null) {
-      // 从已知方向变为 null（可能是旋转中或 reformat）
-      console.log(
-        `[TMTVCrosshairService] 方向丢失 viewportId=${viewportId} ${last} → null`
-      );
-    } else if (last === null) {
-      // 从 null 变为已知方向（旋转结束）
-      console.log(
-        `[TMTVCrosshairService] 方向恢复 viewportId=${viewportId} null → ${current}`
-      );
-    } else {
-      // 从一个已知方向切换到另一个已知方向（医生切换方向）
-      console.log(
-        `[TMTVCrosshairService] 方向变化 viewportId=${viewportId} ${last} → ${current}`
-      );
-    }
+    // 方向发生变化，打印日志（已注释）
+    // if (last === undefined) {
+    //   // 初次识别
+    //   console.log(
+    //     `[TMTVCrosshairService] 方向识别 viewportId=${viewportId} orientation=${current}`
+    //   );
+    // } else if (current === null) {
+    //   // 从已知方向变为 null（可能是旋转中或 reformat）
+    //   console.log(
+    //     `[TMTVCrosshairService] 方向丢失 viewportId=${viewportId} ${last} → null`
+    //   );
+    // } else if (last === null) {
+    //   // 从 null 变为已知方向（旋转结束）
+    //   console.log(
+    //     `[TMTVCrosshairService] 方向恢复 viewportId=${viewportId} null → ${current}`
+    //   );
+    // } else {
+    //   // 从一个已知方向切换到另一个已知方向（医生切换方向）
+    //   console.log(
+    //     `[TMTVCrosshairService] 方向变化 viewportId=${viewportId} ${last} → ${current}`
+    //   );
+    // }
 
     // [Phase 2.1] 方向丢失（null）时不更新缓存，保留最后一次有效方位
     // 原因：单切线旋转松手后 target camera 处于 oblique 状态，实时识别返回 null，
@@ -1072,12 +1072,12 @@ class TMTVCrosshairService {
         sourceCamera.viewPlaneNormal[1],
         sourceCamera.viewPlaneNormal[2],
       ];
-      console.log(
-        `[TMTVCrosshairService] _applyCrosshairRotation axis=[${rotationAxis.map(n => n.toFixed(2)).join(',')}] angleRad=${angleRad.toFixed(4)} (${(angleRad * 180 / Math.PI).toFixed(1)}°)`
-      );
-      console.log(
-        `[TMTVCrosshairService] baseCamera.pos=[${targetCamera.position?.map((n: number) => n.toFixed(2)).join(',')}] fp=[${targetCamera.focalPoint?.map((n: number) => n.toFixed(2)).join(',')}] viewUp=[${targetCamera.viewUp?.map((n: number) => n.toFixed(2)).join(',')}]`
-      );
+      // console.log(
+      //   `[TMTVCrosshairService] _applyCrosshairRotation axis=[${rotationAxis.map(n => n.toFixed(2)).join(',')}] angleRad=${angleRad.toFixed(4)} (${(angleRad * 180 / Math.PI).toFixed(1)}°)`
+      // );
+      // console.log(
+      //   `[TMTVCrosshairService] baseCamera.pos=[${targetCamera.position?.map((n: number) => n.toFixed(2)).join(',')}] fp=[${targetCamera.focalPoint?.map((n: number) => n.toFixed(2)).join(',')}] viewUp=[${targetCamera.viewUp?.map((n: number) => n.toFixed(2)).join(',')}]`
+      // );
 
       const oldPosition = targetCamera.position;
       const oldFocalPoint = targetCamera.focalPoint;
@@ -1816,9 +1816,9 @@ class TMTVCrosshairService {
         sourceOrientationRaw || this.lastOrientationMap.get(viewportId) || null;
       const targetOrientation = this._getTargetOrientation(sourceOrientation, line);
       const targetIds = this._findTargetViewport(viewportId, sourceOrientation, line);
-      console.log(
-        `[TMTVCrosshairService] 单切线查找 target source=${viewportId}(${sourceOrientation}${sourceOrientationRaw ? '' : '[缓存]'}) line=${line} 期望target=${targetOrientation} 实际targets=[${targetIds.join(',') || '未找到'}]`
-      );
+      //console.log(
+        //`[TMTVCrosshairService] 单切线查找 target source=${viewportId}(${sourceOrientation}${sourceOrientationRaw ? '' : '[缓存]'}) line=${line} 期望target=${targetOrientation} 实际targets=[${targetIds.join(',') || '未找到'}]`
+      //20260812);
       if (targetIds.length > 0) {
         // 逐一保存每个 target 的 initialCamera
         for (const tid of targetIds) {
@@ -1836,14 +1836,14 @@ class TMTVCrosshairService {
           }
         }
         this.singleLineLastRotateAngle = 0; // 初始化增量旋转基准
-        console.log(
-          `[TMTVCrosshairService] 单切线旋转 source=${viewportId}(${sourceOrientation}) targets=[${this.singleLineTargetViewportIds.join(',')}] line=${line}`
-        );
+        // console.log(
+        //   `[TMTVCrosshairService] 单切线旋转 source=${viewportId}(${sourceOrientation}) targets=[${this.singleLineTargetViewportIds.join(',')}] line=${line}`
+        // );
       } else {
         // 无对应方位 target：仅旋转 SVG 线条
-        console.log(
-          `[TMTVCrosshairService] 单切线旋转（仅SVG）source=${viewportId}(${sourceOrientation}) line=${line} 无对应方位 target`
-        );
+        // console.log(
+        //   `[TMTVCrosshairService] 单切线旋转（仅SVG）source=${viewportId}(${sourceOrientation}) line=${line} 无对应方位 target`
+        // );
       }
     }
 
@@ -2019,9 +2019,9 @@ class TMTVCrosshairService {
 
       // 调用 Cornerstone 风格旋转（基于 initialCamera 旋转增量角度，不传 viewPlaneNormal）
       const beforeCam = targetViewport.getCamera();
-      console.log(
-        `[TMTVCrosshairService] 旋转前 target=${targetId} fp=[${beforeCam?.focalPoint?.map((n: number) => n.toFixed(2)).join(',')}] worldPos=[${worldPos.map(n => n.toFixed(2)).join(',')}] fp==world? ${beforeCam?.focalPoint?.[0] === worldPos[0] && beforeCam?.focalPoint?.[1] === worldPos[1] && beforeCam?.focalPoint?.[2] === worldPos[2]}`
-      );
+      // console.log(
+      //   `[TMTVCrosshairService] 旋转前 target=${targetId} fp=[${beforeCam?.focalPoint?.map((n: number) => n.toFixed(2)).join(',')}] worldPos=[${worldPos.map(n => n.toFixed(2)).join(',')}] fp==world? ${beforeCam?.focalPoint?.[0] === worldPos[0] && beforeCam?.focalPoint?.[1] === worldPos[1] && beforeCam?.focalPoint?.[2] === worldPos[2]}`
+      // );
       this._applyCrosshairRotation(
         targetViewport,
         sourceViewport,
@@ -2036,9 +2036,9 @@ class TMTVCrosshairService {
         afterCam.position[2] - afterCam.focalPoint[2],
       ];
       const newVpnLen = Math.sqrt(newVpnDerived.reduce((s: number, v: number) => s + v * v, 0));
-      console.log(
-        `[TMTVCrosshairService] 旋转后 target=${targetId} pos=[${afterCam?.position?.map((n: number) => n.toFixed(2)).join(',')}] fp=[${afterCam?.focalPoint?.map((n: number) => n.toFixed(2)).join(',')}] viewUp=[${afterCam?.viewUp?.map((n: number) => n.toFixed(2)).join(',')}] derivedVpn=[${newVpnDerived.map((n: number) => (n / newVpnLen).toFixed(2)).join(',')}]`
-      );
+      // console.log(
+      //   `[TMTVCrosshairService] 旋转后 target=${targetId} pos=[${afterCam?.position?.map((n: number) => n.toFixed(2)).join(',')}] fp=[${afterCam?.focalPoint?.map((n: number) => n.toFixed(2)).join(',')}] viewUp=[${afterCam?.viewUp?.map((n: number) => n.toFixed(2)).join(',')}] derivedVpn=[${newVpnDerived.map((n: number) => (n / newVpnLen).toFixed(2)).join(',')}]`
+      // );
     }
 
     // 清理已销毁的 target
@@ -2115,9 +2115,9 @@ class TMTVCrosshairService {
       try {
         // 识别 target 当前最接近的标准方向
         const orientation = this._getOrientationFromCamera(targetViewport);
-        console.log(
-          `[TMTVCrosshairService] 松手吸附 target=${targetId} 当前方向=${orientation}`
-        );
+        // console.log(
+        //   `[TMTVCrosshairService] 松手吸附 target=${targetId} 当前方向=${orientation}`
+        // );
 
         if (!orientation) {
           // 无法识别方向（reformat），恢复到旋转前初始状态
@@ -2207,9 +2207,9 @@ class TMTVCrosshairService {
           });
         }
 
-        console.log(
-          `[TMTVCrosshairService] 吸附完成 target=${targetId} → ${orientation}, ${this.singleLineActiveLine}角度=${snappedAngle}°`
-        );
+        // console.log(
+        //   `[TMTVCrosshairService] 吸附完成 target=${targetId} → ${orientation}, ${this.singleLineActiveLine}角度=${snappedAngle}°`
+        // );
       } catch (e) {
         // 吸附失败，恢复到旋转前初始状态
         console.warn(`[TMTVCrosshairService] 吸附失败 target=${targetId}，恢复初始状态`, e);
@@ -2377,6 +2377,44 @@ class TMTVCrosshairService {
       const handler = () => {
         // [Step1] 先检测方向变化（不依赖 visible 状态）
         this._detectAndLogOrientationChange(viewportId);
+        // [2026-08-11 修复] 滚轮切片切换时同步更新 worldPosition
+        // 非 MIP viewport 滚轮切换切片时，focalPoint 沿该 viewport 的法向轴移动，
+        // 需将该轴分量同步到 worldPosition，否则其他视口（含 MIP）的十字线不会跟随移动。
+        // MIP viewport 的 CAMERA_MODIFIED 由 VolumeRotate 触发，不应更新 worldPosition。
+        // 旋转/拖动期间 focalPoint 会因 setCamera 变化，但此时位置由交互逻辑控制，
+        // 不能用 focalPoint 覆盖 worldPosition，否则会导致十字线和图像乱跑。
+        if (
+          this.visible &&
+          !this._isMipViewport(viewportId) &&
+          this.worldPosition &&
+          !this.dragging &&
+          !this.rotating &&
+          !this.singleLineRotating
+        ) {
+          const vp = this.viewports.get(viewportId);
+          if (vp && typeof vp.getCamera === 'function') {
+            try {
+              const camera = vp.getCamera();
+              const fp = camera?.focalPoint;
+              const vpn = camera?.viewPlaneNormal;
+              if (fp && vpn && Number.isFinite(fp[0]) && Number.isFinite(fp[1]) && Number.isFinite(fp[2])) {
+                // 找到最大分量的轴（即该 viewport 的法向轴），只更新该轴
+                const ax = Math.abs(vpn[0]);
+                const ay = Math.abs(vpn[1]);
+                const az = Math.abs(vpn[2]);
+                if (ax >= ay && ax >= az) {
+                  this.worldPosition[0] = fp[0];
+                } else if (ay >= az) {
+                  this.worldPosition[1] = fp[1];
+                } else {
+                  this.worldPosition[2] = fp[2];
+                }
+              }
+            } catch {
+              // getCamera 失败时忽略，仅重绘
+            }
+          }
+        }
         // 再重绘十字线
         this.render();
       };

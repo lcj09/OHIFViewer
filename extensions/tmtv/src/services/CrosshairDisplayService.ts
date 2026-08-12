@@ -252,7 +252,15 @@ class CrosshairDisplayService {
         if (visible) {
           // [2026-08-10 修复] 先禁用另一个工具，确保互斥
           csToolGroup.setToolDisabled(otherToolName);
-          csToolGroup.setToolActive(toolName);
+          // [2026-08-12 修复] 激活工具时必须传入 Primary binding
+          // 原因：不传 bindings 时工具进入 Active 模式但 isPrimary=false，
+          // 鼠标点击十字线中心不触发 addNewAnnotation，导致十字线不能拖动。
+          // 场景：从 TMTV 布局切换到 3x4 布局后，布局切换回调调用
+          // crosshairDisplayService.refresh() → _setLegacyCrosshairVisible(true)，
+          // 若不传 bindings，CrosshairsTool 无 Primary binding，十字线显示但不能拖动。
+          csToolGroup.setToolActive(toolName, {
+            bindings: [{ mouseButton: 1 }], // MouseBindings.Primary
+          });
         } else {
           // 禁用时同时禁用两个工具，确保彻底清理
           csToolGroup.setToolDisabled('SingleSliceLine');

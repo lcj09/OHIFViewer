@@ -10,6 +10,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
+import { getRenderingEngines } from '@cornerstonejs/core';
 import {
   Popover,
   PopoverTrigger,
@@ -44,11 +45,14 @@ function SyncMenu({ servicesManager, ...props }) {
     }
   }, [customizationService]);
 
-  // [2026-08-06, 2026-08-10 修改] 切换方位同步开关
+  // [2026-08-06, 2026-08-10 修改, 2026-08-11 修改] 切换方位同步开关
   // 开启时：恢复所有 cameraPosition 同步器（幂等，setViewportOrientation 已恢复）
   //   [2026-08-10] setViewportOrientation 已改为切换方位期间临时禁用、
   //   切换完成后立即恢复同步器，不再永久禁用。此处的恢复逻辑保留作为兜底，
   //   确保用户重新开启同步时所有同步器都处于启用状态。
+  //   [2026-08-11] setViewportOrientation 在 orientationSync=false 时会从同步器中
+  //   移除该视口的 source 角色（保留 target）。此处重新开启同步时需要把 source
+  //   加回去，否则滚轮滚动该视口不会触发同步。
   const handleToggleOrientationSync = useCallback(() => {
     const newState = !orientationSync;
     setOrientationSync(newState);
@@ -58,26 +62,37 @@ function SyncMenu({ servicesManager, ...props }) {
       });
 
       // [2026-08-07] 重新开启同步时，恢复所有 cameraPosition 同步器
+      // [2026-08-11] setViewportOrientation 在 orientationSync=false 时会从同步组中
+      //   完全移除该视口（remove source 和 target）。此处重新开启同步时需要把
+      //   source 和 target 都加回去，否则滚轮滚动该视口不会触发同步，
+      //   且其他视口滚动时该视口也不会接收同步。
+      //   注意：必须用 getSynchronizersOfType 获取所有 cameraPosition 同步器，
+      //   而非 getSynchronizersForViewport（后者只返回视口当前所在的同步器，
+      //   已被 remove 的视口会返回空数组）。
       if (newState) {
         const { syncGroupService, cornerstoneViewportService } =
           servicesManager.services;
         try {
           const vpIds = cornerstoneViewportService.getViewportIds() || [];
-          const seen = new Set();
-          vpIds.forEach(vpId => {
-            try {
-              const syncs = syncGroupService.getSynchronizersForViewport(vpId);
-              syncs.forEach(s => {
-                if (seen.has(s)) return;
-                seen.add(s);
-                const type = syncGroupService.getSynchronizerType(s);
-                if (type && type.toLowerCase() === 'cameraposition') {
-                  s.setEnabled(true);
-                }
-              });
-            } catch {
-              /* ignore */
-            }
+          // 获取所有 cameraPosition 同步器
+          const camSyncs = syncGroupService.getSynchronizersOfType('cameraPosition') || [];
+          camSyncs.forEach(s => {
+            // 启用同步器
+            try { s.setEnabled(true); } catch { /* ignore */ }
+            // 遍历所有视口，把被移除的加回去
+            vpIds.forEach(vpId => {
+              const renderingEngine =
+                getRenderingEngines().find(re =>
+                  re.getViewports().some(vp => vp.id === vpId)
+                );
+              if (!renderingEngine) return;
+              const viewportInfo = { renderingEngineId: renderingEngine.id, viewportId: vpId };
+              // 如果该视口既不在 source 也不在 target，重新加回去
+              if (!s.hasSourceViewport(renderingEngine.id, vpId) &&
+                  !s.hasTargetViewport(renderingEngine.id, vpId)) {
+                try { s.add(viewportInfo); } catch { /* ignore */ }
+              }
+            });
           });
         } catch (e) {
           console.warn('[SyncMenu] 恢复同步器失败', e);

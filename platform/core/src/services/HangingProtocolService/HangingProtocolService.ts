@@ -1146,7 +1146,7 @@ export default class HangingProtocolService extends PubSubService {
    * @returns {*} The Stage model for the currently displayed Stage
    */
   _getCurrentStageModel() {
-    return this.protocol.stages[this.stageIndex];
+    return this.protocol?.stages?.[this.stageIndex];
   }
 
   /**
