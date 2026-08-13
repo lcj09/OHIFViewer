@@ -228,8 +228,6 @@ export default class ExtensionManager extends PubSubService {
     // 注意：必须放在 service.onModeExit() 之后，因为某些服务的 onModeExit
     //   可能还需要触发事件（通过 _broadcastEvent），如果在之前清空 listeners
     //   会导致这些事件无人响应。
-    let clearedServices = 0;
-    let clearedListeners = 0;
     for (const service of services) {
       // 使用 duck typing 而非 instanceof，因为 DicomMetadataStore 不是 class
       // 而是通过 Object.assign(BaseImplementation, pubSubServiceInterface) 组合的，
@@ -258,18 +256,11 @@ export default class ExtensionManager extends PubSubService {
               });
               service.listeners = {};
             }
-            clearedServices++;
-            clearedListeners += beforeCount;
           }
         } catch (e) {
           console.warn('[ExtensionManager] Failed to clear listeners for', service?.constructor?.name, e);
         }
       }
-    }
-    if (clearedListeners > 0) {
-      console.log(
-        `[ExtensionManager] Cleared ${clearedListeners} leaked listeners across ${clearedServices} service instances`
-      );
     }
   }
 

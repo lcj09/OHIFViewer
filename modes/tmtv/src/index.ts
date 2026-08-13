@@ -277,7 +277,6 @@ function modeFactory({ modeConfiguration }) {
         uiModalService,
       } = servicesManager.services;
 
-      console.log('[tmtv-mode] onModeExit called, destroying services...');
       unsubscriptions.forEach(unsubscribe => unsubscribe());
       uiDialogService.hideAll();
       uiModalService.hide();
@@ -289,39 +288,31 @@ function modeFactory({ modeConfiguration }) {
       // but stay alive via ResizeObserver callbacks and event listener closures, preventing GC.
       // This MUST run while toolGroups still exist. Access toolGroups via toolGroupService
       // (NOT direct import of @cornerstonejs/tools, which may resolve to a different module instance).
-      let cleanedTools = 0;
-      let cleanedOrientationMarkers = 0;
       try {
         const toolGroupIds = toolGroupService.getToolGroupIds();
-        console.log('[tmtv-mode] Found', toolGroupIds.length, 'toolGroups:', toolGroupIds);
         toolGroupIds.forEach(tgId => {
           const tg = toolGroupService.getToolGroup(tgId);
           if (!tg) return;
           const toolInstances = (tg as any)._toolInstances || {};
           const toolNames = Object.keys(toolInstances);
-          console.log('[tmtv-mode] toolGroup', tgId, 'has tools:', toolNames);
           toolNames.forEach(name => {
             const tool = toolInstances[name];
             // Disconnect all ResizeObservers (OrientationMarkerTool creates one per viewport)
             if (tool._resizeObservers && tool._resizeObservers.size > 0) {
-              console.log('[tmtv-mode]   tool', name, 'has', tool._resizeObservers.size, 'ResizeObservers');
               tool._resizeObservers.forEach((ro: any) => {
                 try { ro.disconnect(); } catch {}
               });
               tool._resizeObservers.clear();
-              cleanedTools++;
             }
             // Clean up orientation marker widgets (VTK actors/widgets)
             if (tool.orientationMarkers) {
               const markerIds = Object.keys(tool.orientationMarkers);
-              console.log('[tmtv-mode]   tool', name, 'has orientationMarkers for viewports:', markerIds);
               markerIds.forEach(vid => {
                 const om = tool.orientationMarkers[vid];
                 try {
                   om?.orientationWidget?.setEnabled(false);
                   om?.orientationWidget?.delete?.();
                   om?.actor?.delete?.();
-                  cleanedOrientationMarkers++;
                 } catch {}
               });
               tool.orientationMarkers = {};
@@ -344,7 +335,6 @@ function modeFactory({ modeConfiguration }) {
       } catch (e) {
         console.warn('[tmtv-mode] Tool instance cleanup failed', e);
       }
-      console.log('[tmtv-mode] Cleanup result: disconnected ResizeObserver sets =', cleanedTools, ', orientation markers =', cleanedOrientationMarkers);
 
       toolGroupService.destroy();
       syncGroupService.destroy();
@@ -376,7 +366,6 @@ function modeFactory({ modeConfiguration }) {
         } catch {}
         metadataClearTimer = null;
       }, 10000);
-      console.log('[tmtv-mode] onModeExit complete');
     },
     validationTags: {
       study: [],

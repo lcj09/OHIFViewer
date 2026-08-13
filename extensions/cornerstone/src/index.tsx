@@ -122,9 +122,7 @@ const cornerstoneExtension: Types.Extensions.Extension = {
     // Re-initialize cornerstone tools after a potential destroy() in onModeExit.
     // init() is idempotent (checks csToolsInitialized flag), and addTool() skips
     // duplicates, so this is safe to call on every mode enter.
-    console.log('[CS-Extension] onModeEnter: calling initCornerstoneTools()');
     initCornerstoneTools();
-    console.log('[CS-Extension] onModeEnter: initCornerstoneTools() done, registered tools:', Object.keys((cornerstoneTools as any).state?.tools || {}).length);
 
     const { cornerstoneViewportService, toolbarService, segmentationService } =
       servicesManager.services;
@@ -176,8 +174,6 @@ const cornerstoneExtension: Types.Extensions.Extension = {
   },
   getPanelModule,
   onModeExit: ({ servicesManager }: withAppTypes): void => {
-    console.log('[CS-Extension] onModeExit: STARTED');
-
     unsubscriptions.forEach(unsubscribe => unsubscribe());
     unsubscriptions.length = 0;
 
@@ -206,7 +202,6 @@ const cornerstoneExtension: Types.Extensions.Extension = {
     try {
       const { cornerstoneViewportService } = servicesManager.services;
       cornerstoneViewportService?.destroy?.();
-      console.log('[CS-Extension] ViewportService.destroy() called');
     } catch (e) {
       console.warn('[CS-Extension] ViewportService.destroy() failed', e);
     }
@@ -275,13 +270,6 @@ const cornerstoneExtension: Types.Extensions.Extension = {
         tg._toolInstances = {};
         tg.toolOptions = {};
       });
-      console.log('[CS-Extension] Tool cleanup:', {
-        resizeObserverSets: cleanedTools,
-        cleanUpDataCalled: cleanedUpDataTools,
-        cleanedTools: cleanedToolNames,
-        noCleanUpData: noCleanUpDataToolNames,
-        toolGroups: toolGroups.length,
-      });
     } catch (e) {
       console.warn('[CS-Extension] Tool cleanup failed', e);
     }
@@ -292,7 +280,6 @@ const cornerstoneExtension: Types.Extensions.Extension = {
       const csState = (cornerstoneTools as any).state;
       const remainingElements = csState?.enabledElements ? [...csState.enabledElements] : [];
       if (remainingElements.length > 0) {
-        console.log('[CS-Extension] Fallback ELEMENT_DISABLED for', remainingElements.length, 'elements');
         remainingElements.forEach((element: any) => {
           try {
             const viewportId = element?.dataset?.viewportUid;
@@ -433,7 +420,6 @@ const cornerstoneExtension: Types.Extensions.Extension = {
         }
         // 2) Terminate each registered worker (dicomImageLoader × 3, histogram-worker × 1)
         const registry = webWorkerManager.workerRegistry || {};
-        let terminatedCount = 0;
         Object.keys(registry).forEach(workerName => {
           try {
             const props = registry[workerName];
@@ -452,47 +438,14 @@ const cornerstoneExtension: Types.Extensions.Extension = {
             if (Array.isArray(props?.nativeWorkers)) {
               props.nativeWorkers.length = 0;
             }
-            terminatedCount++;
           } catch (e) {
             console.warn('[CS-Extension] onModeExit: terminate worker failed for', workerName, e);
           }
         });
-        console.log('[CS-Extension] onModeExit: terminated', terminatedCount, 'web worker types');
       }
     } catch (e) {
       console.warn('[CS-Extension] onModeExit: webWorkerManager cleanup failed', e);
     }
-
-    // Brief diagnostic: verify cleanup succeeded
-    try {
-      const { getRenderingEngines, cache } = cornerstone;
-      const csToolsState = (cornerstoneTools as any).state;
-      const are = annotationRenderingEngine as any;
-      const sre = segmentationRenderingEngine as any;
-      const wwm = (cornerstone as any).getWebWorkerManager?.();
-      const wpmPool = wwm?.workerPoolManager?.getRequestPool?.() || {};
-      const pendingWorkerRequests = Object.values(wpmPool).reduce(
-        (sum: number, prioMap: any) =>
-          sum + Object.values(prioMap || {}).reduce((s: number, arr: any) => s + (arr?.length || 0), 0),
-        0
-      );
-      console.log('[CS-Extension] onModeExit: cleanup summary:', {
-        renderingEngines: getRenderingEngines?.().length || 0,
-        volumes: (cache as any)?._volumeCache?.size || 0,
-        images: (cache as any)?._imageCache?.size || 0,
-        enabledElements: csToolsState?.enabledElements?.length || 0,
-        toolGroups: csToolsState?.toolGroups?.length || 0,
-        areViewportElements: are._viewportElements?.size || 0,
-        sreNeedsRender: sre._needsRender?.size || 0,
-        domViewportEls: document.querySelectorAll('[data-viewport-uid]').length,
-        webWorkerTypes: Object.keys(wwm?.workerRegistry || {}).length,
-        pendingWorkerRequests,
-      });
-    } catch (e) {
-      console.warn('[CS-Extension] onModeExit: diagnostics failed', e);
-    }
-
-    console.log('[CS-Extension] onModeExit: DONE');
   },
 
   /**

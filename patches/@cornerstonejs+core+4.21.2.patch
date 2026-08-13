@@ -1,8 +1,49 @@
+diff --git a/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/ContextPoolRenderingEngine.js b/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/ContextPoolRenderingEngine.js
+index 2a1f06e..eead860 100644
+--- a/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/ContextPoolRenderingEngine.js
++++ b/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/ContextPoolRenderingEngine.js
+@@ -373,9 +373,15 @@ class ContextPoolRenderingEngine extends BaseRenderingEngine {
+         }
+     }
+     destroy() {
+-        if (this.contextPool) {
+-            this.contextPool.destroy();
+-        }
++        // [2026-08-12 修复] contextPool.destroy() 内部 vtk 删除链可能因重复 delete
++        // 抛异常（如 ViewNode.children 为 undefined）。若在此中断，super.destroy()
++        // 不会执行，引擎无法从 renderingEngineCache 注销，WebGL 上下文常驻 GPU。
++        // 用 try/catch 吞掉异常，确保 super.destroy() 一定执行、引擎正常注销。
++        try {
++            if (this.contextPool) {
++                this.contextPool.destroy();
++            }
++        } catch (e) { /* 忽略 contextPool 释放异常，继续销毁引擎 */ }
+         super.destroy();
+     }
+     getOffscreenMultiRenderWindow(viewportId) {
+diff --git a/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/WebGLContextPool.js b/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/WebGLContextPool.js
+index 2e456f0..d811321 100644
+--- a/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/WebGLContextPool.js
++++ b/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/WebGLContextPool.js
+@@ -78,8 +78,12 @@ class WebGLContextPool {
+         }
+     }
+     destroy() {
++        // [2026-08-12 修复] 逐个 try/catch，避免某个 context 的 vtk 删除链抛异常
++        // 中断 forEach，导致 this.contexts 无法置空、上下文引用残留。
+         this.contexts.forEach((context) => {
+-            context.delete();
++            try {
++                context.delete();
++            } catch (e) { /* 忽略单个 context 释放异常 */ }
+         });
+         this.contexts = [];
+         this.offScreenCanvasContainers = [];
 diff --git a/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkOffscreenMultiRenderWindow.js b/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkOffscreenMultiRenderWindow.js
-index bbaf2ed..e8f9a2b 100644
+index bbaf2ed..0a977b9 100644
 --- a/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkOffscreenMultiRenderWindow.js
 +++ b/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkOffscreenMultiRenderWindow.js
-@@ -27,8 +27,62 @@ function vtkOffscreenMultiRenderWindow(publicAPI, model) {
+@@ -27,8 +27,65 @@ function vtkOffscreenMultiRenderWindow(publicAPI, model) {
          model.rendererMap[id] = renderer;
      };
      publicAPI.destroy = () => {
@@ -16,7 +57,6 @@ index bbaf2ed..e8f9a2b 100644
 +        // 2. releaseGraphicsResources() — 释放 shader cache、texture、VBO 等 GPU 资源
 +        // 3. 删除 renderers — VTK C++ 对象不会自动回收，必须显式 delete
 +        // 4. renderWindow.delete() — 最后删除渲染窗口
-+        // 5. 清空 canvas 引用 — 打破 canvas → WebGLContext → GPU 内存的引用链
 +
 +        // 1. 删除 interactor（直接访问 model.interactor，不依赖 renderWindow）
 +        try {
@@ -71,3 +111,181 @@ index bbaf2ed..e8f9a2b 100644
      };
      publicAPI.removeRenderer = (id) => {
          const renderer = publicAPI.getRenderer(id);
+diff --git a/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkStreamingOpenGLTexture.js b/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkStreamingOpenGLTexture.js
+index 2d19188..763edd8 100644
+--- a/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkStreamingOpenGLTexture.js
++++ b/node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkStreamingOpenGLTexture.js
+@@ -45,6 +45,32 @@ function vtkStreamingOpenGLTexture(publicAPI, model) {
+         model._openGLRenderWindow.activateTexture(publicAPI);
+         publicAPI.createTexture();
+         publicAPI.bind();
++        // [2026-07-29 GPU纹理诊断] 打印CT/PT上传到GPU的实际数据类型
++        //20260803 const dims = volume.dimensions;
++        //const volDataType = volume.dataType;
++        //const glDataType = model.openGLDataType;
++        //const internalFormat = model.internalFormat;
++        //const gl = model.context;
++        //// 将 GL 常量值映射为可读名称
++        //const glTypeName = (v) => {
++            //if (!gl) return '?';
++           // if (v === gl.SHORT) return 'SHORT(R16)';
++            //if (v === gl.UNSIGNED_SHORT) return 'USHORT(R16)';
++            //if (v === gl.FLOAT) return 'FLOAT(R32F)';
++            //if (v === gl.HALF_FLOAT) return 'HALF_FLOAT(R16F)';
++            //if (v === gl.UNSIGNED_BYTE) return 'UBYTE(R8)';
++            //return v?.toString(16) || '?';
++        //};
++        //const fmtName = (v) => {
++            //if (!gl) return '?';
++            //if (v === gl.R16F) return 'R16F';
++           // if (v === gl.R32F) return 'R32F';
++            //if (v === gl.R16) return 'R16';
++           // if (v === gl.R8) return 'R8';
++           // if (v === gl.RGBA32F) return 'RGBA32F';
++           // if (v === gl.RGBA16F) return 'RGBA16F';
++           // return v?.toString(16) || '?';
++       // };
+         if (volume.isDynamicVolume()) {
+             updateDynamicVolumeTexture();
+             return;
+diff --git a/node_modules/@cornerstonejs/core/dist/esm/utilities/generateVolumePropsFromImageIds.js b/node_modules/@cornerstonejs/core/dist/esm/utilities/generateVolumePropsFromImageIds.js
+index cba0ad6..2eeafdd 100644
+--- a/node_modules/@cornerstonejs/core/dist/esm/utilities/generateVolumePropsFromImageIds.js
++++ b/node_modules/@cornerstonejs/core/dist/esm/utilities/generateVolumePropsFromImageIds.js
+@@ -1,9 +1,6 @@
+ import { vec3 } from 'gl-matrix';
+ import makeVolumeMetadata from './makeVolumeMetadata';
+ import sortImageIdsAndGetSpacing from './sortImageIdsAndGetSpacing';
+-import getScalingParameters from './getScalingParameters';
+-import { hasFloatScalingParameters } from './hasFloatScalingParameters';
+-import { canRenderFloatTextures } from '../init';
+ import cache from '../cache/cache';
+ const constructorToTypedArray = {
+     Uint8Array: 'Uint8Array',
+@@ -27,11 +24,12 @@ function generateVolumePropsFromImageIds(imageIds, volumeId) {
+         ...colCosineVec,
+         ...scanAxisNormal,
+     ];
++    const dataType = _determineDataType(sortedImageIds, volumeMetadata);
+     return {
+         dimensions,
+         spacing,
+         origin,
+-        dataType: _determineDataType(sortedImageIds, volumeMetadata),
++        dataType,
+         direction,
+         metadata: volumeMetadata,
+         imageIds: sortedImageIds,
+@@ -41,35 +39,23 @@ function generateVolumePropsFromImageIds(imageIds, volumeId) {
+     };
+ }
+ function _determineDataType(imageIds, volumeMetadata) {
+-    const { BitsAllocated, PixelRepresentation } = volumeMetadata;
+-    const signed = PixelRepresentation === 1;
++    const { BitsAllocated, Modality } = volumeMetadata;
+     const cachedDataType = _getDataTypeFromCache(imageIds);
+     if (cachedDataType) {
+         return cachedDataType;
+     }
+-    const [firstIndex, middleIndex, lastIndex] = [
+-        0,
+-        Math.floor(imageIds.length / 2),
+-        imageIds.length - 1,
+-    ];
+-    const scalingParameters = [firstIndex, middleIndex, lastIndex].map((index) => getScalingParameters(imageIds[index]));
+-    const hasNegativeRescale = scalingParameters.some((params) => params.rescaleIntercept < 0 || params.rescaleSlope < 0);
+-    const floatAfterScale = scalingParameters.some((params) => hasFloatScalingParameters(params));
+-    const canRenderFloat = canRenderFloatTextures();
+     switch (BitsAllocated) {
+         case 8:
+             return 'Uint8Array';
+         case 16:
+-            if (canRenderFloat && floatAfterScale) {
++            // [2026-08-12 按模态选择性优化]
++            // PT(PET): SUV 为浮点值，必须用 Float32Array 保精度，避免截断导致 PET/MIP 模糊。
++            // 非 PT(如 CT): 一律 Int16Array 配合 norm16(R16_SNORM) 纹理，整数 HU 经 GPU
++            // shader 浮点 scale/offset 还原不丢精度，显存从 4 字节/像素降至 2 字节/像素。
++            if (Modality === 'PT') {
+                 return 'Float32Array';
+             }
+-            if (signed || hasNegativeRescale) {
+-                return 'Int16Array';
+-            }
+-            if (!signed && !hasNegativeRescale) {
+-                return 'Uint16Array';
+-            }
+-            return 'Float32Array';
++            return 'Int16Array';
+         case 24:
+             return 'Uint8Array';
+         case 32:
+diff --git a/node_modules/@cornerstonejs/core/node_modules/.bin/vtkDataConverter b/node_modules/@cornerstonejs/core/node_modules/.bin/vtkDataConverter
+new file mode 100644
+index 0000000..654903c
+--- /dev/null
++++ b/node_modules/@cornerstonejs/core/node_modules/.bin/vtkDataConverter
+@@ -0,0 +1,15 @@
++#!/bin/sh
++basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
++
++case `uname` in
++    *CYGWIN*) basedir=`cygpath -w "$basedir"`;;
++esac
++
++if [ -x "$basedir/node" ]; then
++  "$basedir/node"  "$basedir/../../../../@kitware/vtk.js/Utilities/DataGenerator/convert-cli.js" "$@"
++  ret=$?
++else 
++  node  "$basedir/../../../../@kitware/vtk.js/Utilities/DataGenerator/convert-cli.js" "$@"
++  ret=$?
++fi
++exit $ret
+diff --git a/node_modules/@cornerstonejs/core/node_modules/.bin/vtkDataConverter.cmd b/node_modules/@cornerstonejs/core/node_modules/.bin/vtkDataConverter.cmd
+new file mode 100644
+index 0000000..1e63992
+--- /dev/null
++++ b/node_modules/@cornerstonejs/core/node_modules/.bin/vtkDataConverter.cmd
+@@ -0,0 +1,7 @@
++@IF EXIST "%~dp0\node.exe" (
++  "%~dp0\node.exe"  "%~dp0\..\..\..\..\@kitware\vtk.js\Utilities\DataGenerator\convert-cli.js" %*
++) ELSE (
++  @SETLOCAL
++  @SET PATHEXT=%PATHEXT:;.JS;=;%
++  node  "%~dp0\..\..\..\..\@kitware\vtk.js\Utilities\DataGenerator\convert-cli.js" %*
++)
+\ No newline at end of file
+diff --git a/node_modules/@cornerstonejs/core/node_modules/.bin/xml2json b/node_modules/@cornerstonejs/core/node_modules/.bin/xml2json
+new file mode 100644
+index 0000000..81288c6
+--- /dev/null
++++ b/node_modules/@cornerstonejs/core/node_modules/.bin/xml2json
+@@ -0,0 +1,15 @@
++#!/bin/sh
++basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
++
++case `uname` in
++    *CYGWIN*) basedir=`cygpath -w "$basedir"`;;
++esac
++
++if [ -x "$basedir/node" ]; then
++  "$basedir/node"  "$basedir/../../../../@kitware/vtk.js/Utilities/XMLConverter/xml2json-cli.js" "$@"
++  ret=$?
++else 
++  node  "$basedir/../../../../@kitware/vtk.js/Utilities/XMLConverter/xml2json-cli.js" "$@"
++  ret=$?
++fi
++exit $ret
+diff --git a/node_modules/@cornerstonejs/core/node_modules/.bin/xml2json.cmd b/node_modules/@cornerstonejs/core/node_modules/.bin/xml2json.cmd
+new file mode 100644
+index 0000000..e185e49
+--- /dev/null
++++ b/node_modules/@cornerstonejs/core/node_modules/.bin/xml2json.cmd
+@@ -0,0 +1,7 @@
++@IF EXIST "%~dp0\node.exe" (
++  "%~dp0\node.exe"  "%~dp0\..\..\..\..\@kitware\vtk.js\Utilities\XMLConverter\xml2json-cli.js" %*
++) ELSE (
++  @SETLOCAL
++  @SET PATHEXT=%PATHEXT:;.JS;=;%
++  node  "%~dp0\..\..\..\..\@kitware\vtk.js\Utilities\XMLConverter\xml2json-cli.js" %*
++)
+\ No newline at end of file

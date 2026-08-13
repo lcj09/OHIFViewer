@@ -186,8 +186,6 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
    * Removes the viewport from cornerstone, and destroys the rendering engine
    */
   public destroy() {
-    console.log('[ViewportService] destroy() called, renderingEngine exists:', !!this.renderingEngine);
-
     this._removeResizeObserver();
     this.viewportGridResizeObserver = null;
 
@@ -210,10 +208,6 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     const viewportIds = Array.from(this.viewportsById.keys());
     const renderingEngineId = (this.renderingEngine as any)?.id;
 
-    let disabledCount = 0;
-    let fallbackCount = 0;
-    let removedListeners = 0;
-    let releasedVtkObjects = 0;
     viewportIds.forEach(vid => {
       const vpInfo = this.viewportsById.get(vid);
       const element = vpInfo?.getElement?.();
@@ -237,19 +231,16 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
                 const rgbTF = property.getRGBTransferFunction?.(0);
                 if (rgbTF && typeof rgbTF.delete === 'function') {
                   rgbTF.delete();
-                  releasedVtkObjects++;
                 }
                 // Release Scalar Opacity (PiecewiseFunction)
                 const opacityTF = property.getScalarOpacity?.(0);
                 if (opacityTF && typeof opacityTF.delete === 'function') {
                   opacityTF.delete();
-                  releasedVtkObjects++;
                 }
                 // Release Gradient Opacity (PiecewiseFunction)
                 const gradTF = property.getGradientOpacity?.(0);
                 if (gradTF && typeof gradTF.delete === 'function') {
                   gradTF.delete();
-                  releasedVtkObjects++;
                 }
               }
             } catch { /* actor already destroyed */ }
@@ -265,30 +256,24 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
         try {
           element.removeEventListener(csEnums.Events.VIEWPORT_NEW_IMAGE_SET, handler);
           (vpInfo as any)._newImageSetHandler = null;
-          removedListeners++;
         } catch (e) {
           // Ignore
         }
       }
       try {
         this.renderingEngine?.disableElement(vid);
-        disabledCount++;
       } catch (e) {
         console.warn('[ViewportService] disableElement failed for', vid, '- using fallback', e);
         if (element) {
           try {
             const eventDetail = { element, viewportId: vid, renderingEngineId };
             eventTarget.dispatchEvent(new CustomEvent(csEnums.Events.ELEMENT_DISABLED, { detail: eventDetail }));
-            fallbackCount++;
           } catch (e2) {
             console.warn('[ViewportService] Fallback also failed for', vid, e2);
           }
         }
       }
     });
-    console.log('[ViewportService] Disabled', disabledCount + '/' + viewportIds.length,
-      'viewports (fallbacks:', fallbackCount + ', listeners removed:', removedListeners +
-      ', VTK objects released:', releasedVtkObjects + ')');
 
     // Release WebGL contexts AFTER disabling viewports (DOM listeners already cleaned)
     this._releaseWebGLContexts();
@@ -300,7 +285,6 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     }
 
     // Clear all viewport info to release DOM element references
-    const viewportCount = this.viewportsById.size;
     this.viewportsById.clear();
     this.viewportsDisplaySets.clear();
     this.beforeResizePositionPresentations.clear();
@@ -324,8 +308,6 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     clearTimeout(this.gridResizeTimeOut);
     this.viewportResizeTimer = null;
     this.gridResizeTimeOut = null;
-
-    console.log('[ViewportService] destroy() done:', viewportCount, 'viewports cleared');
   }
 
   /**
@@ -444,9 +426,6 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     const volumeCache = cacheAny._volumeCache;
     const imageCache = cacheAny._imageCache;
 
-    const volumeCountBefore = volumeCache?.size || 0;
-    const imageCountBefore = imageCache?.size || 0;
-
     // Purge volume cache with per-entry error handling
     if (volumeCache) {
       const volumeIds = Array.from(volumeCache.keys());
@@ -491,11 +470,6 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
         }
       });
     }
-
-    const volumeCountAfter = volumeCache?.size || 0;
-    const imageCountAfter = imageCache?.size || 0;
-    console.log('[ViewportService] Cache purged:', volumeCountBefore, '→', volumeCountAfter, 'volumes,',
-      imageCountBefore, '→', imageCountAfter, 'images');
   }
 
   /**
@@ -512,12 +486,10 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       let contextPool = renderingEngine._implementation?.contextPool || renderingEngine.contextPool;
 
       if (!contextPool) {
-        console.log('[ViewportService] No WebGL contextPool (CPU rendering or already destroyed)');
         return;
       }
 
       const contexts = contextPool.contexts || contextPool.getAllContexts?.() || [];
-      let releasedCount = 0;
       contexts.forEach((ctx, index) => {
         try {
           if (!ctx || ctx.isDeleted?.()) return;
@@ -559,7 +531,7 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
           const gl = glRenderWindow?.get3DContext?.() ?? glRenderWindow?.getContext?.();
           if (gl?.getExtension) {
             const loseExt = gl.getExtension('WEBGL_lose_context');
-            if (loseExt) { loseExt.loseContext(); releasedCount++; }
+            if (loseExt) { loseExt.loseContext(); }
           }
 
           // [2026-07-28 GPU 残留修复] 显式删除 VTK OpenGL 渲染窗口并清空 context/canvas 引用。
@@ -595,7 +567,6 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
           console.warn('[ViewportService] WebGL context release failed for', index, e);
         }
       });
-      console.log('[ViewportService] WebGL contexts released:', releasedCount + '/' + contexts.length);
 
       // Clean up offscreen canvas containers
       const containers = contextPool.offScreenCanvasContainers;
