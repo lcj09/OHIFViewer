@@ -246,6 +246,27 @@ function _initToolGroups(toolNames, Enums, toolGroupService, commandsManager) {
       // [2026-05-11 新增] TrackballRotate工具 - 用于3D旋转MIP图像
       // 激活后替换MipJumpToClick的左键绑定，实现鼠标拖拽旋转
       { toolName: toolNames.TrackballRotateTool },
+      // [2026-08-14 新增] 箭头标注工具 - MIP视口支持箭头标注
+      // 原因：mipToolGroup未注册ArrowAnnotate，导致按钮在MIP视口被禁用
+      // 配置与CT/PT/Fusion工具组保持一致，复用arrowTextCallback命令处理文本输入
+      {
+        toolName: toolNames.ArrowAnnotate,
+        configuration: {
+          getTextCallback: (callback, eventDetails) => {
+            commandsManager.runCommand('arrowTextCallback', {
+              callback,
+              eventDetails,
+            });
+          },
+          changeTextCallback: (data, eventDetails, callback) => {
+            commandsManager.runCommand('arrowTextCallback', {
+              callback,
+              data,
+              eventDetails,
+            });
+          },
+        },
+      },
     ],
     enabled: [],
     disabled: [

@@ -3,6 +3,7 @@ import { setAnnotationLabel } from '@cornerstonejs/tools/utilities';
 import { annotation } from '@cornerstonejs/tools';
 import { LabellingFlow } from '@ohif/ui-next';
 import { InputDialog } from '@ohif/ui-next';
+import i18n from 'i18next';
 
 interface InputDialogDefaultProps {
   hide: () => void;
@@ -28,14 +29,16 @@ function InputDialogDefault({
         <InputDialog.Input placeholder={placeholder} />
       </InputDialog.Field>
       <InputDialog.Actions>
-        <InputDialog.ActionsSecondary onClick={hide}>Cancel</InputDialog.ActionsSecondary>
+        <InputDialog.ActionsSecondary onClick={hide}>
+          {i18n.t('Common:Cancel')}
+        </InputDialog.ActionsSecondary>
         <InputDialog.ActionsPrimary
           onClick={value => {
             onSave(value);
             hide();
           }}
         >
-          Save
+          {i18n.t('Common:Save')}
         </InputDialog.ActionsPrimary>
       </InputDialog.Actions>
     </InputDialog>
