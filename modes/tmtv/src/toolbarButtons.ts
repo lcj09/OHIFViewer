@@ -172,6 +172,19 @@ const toolbarButtons = [
       evaluate: 'evaluate.cornerstoneTool',
     },
   },
+  // [2026-08-17 新增] 矩形测量工具（RectangleROI）
+  // 功能：用于绘制矩形ROI，快速测量规则矩形区域的面积和统计值
+  {
+    id: 'RectangleROI',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-rectangle',
+      label: i18n.t('Buttons:Rectangle'),
+      tooltip: i18n.t('Buttons:Rectangle ROI'),
+      commands: setToolActiveToolbar,
+      evaluate: 'evaluate.cornerstoneTool',
+    },
+  },
   // 2026-04-29 - 添加多边形测量和圆测量工具（PlanarFreehandROI）
   // 功能：用于绘制自由形状的多边形测量，适用于不规则区域的测量
   {

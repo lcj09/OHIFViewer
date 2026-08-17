@@ -194,12 +194,14 @@ function modeFactory({ modeConfiguration }) {
         'windowLevelMenu',
       ]);
 
-      // [2026-05-15 修改] 更新MeasurementTools部分，添加角度和Cobb角测量工具
+      // [2026-08-17 修改] 更新MeasurementTools部分，添加矩形测量工具
+      // 矩形测量（RectangleROI）已在TMTV工具组中注册，这里仅补充工具栏下拉入口
       toolbarService.updateSection('MeasurementTools', [
         'Length',
         'Bidirectional',
         'ArrowAnnotate',
         'EllipticalROI',
+        'RectangleROI',  // [2026-08-17 新增] 矩形测量工具 - 用于规则矩形ROI测量
         'PlanarFreehandROI',
         'CircleROI',
         'SphereROI',     // [2026-06-26 新增] 球体测量工具 - SUV Max/Min/Mean + 面积 + 体积

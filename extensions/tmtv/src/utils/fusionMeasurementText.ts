@@ -1,7 +1,7 @@
 // [2026-07-07 新增] Fusion视口测量结果显示SUV值工具函数
 //
 // 功能：在Fusion视口上显示测量结果时，同时显示CT值和PT SUV值
-// 适用工具：EllipticalROI, CircleROI, PlanarFreehandROI (Polygon), SphereROI
+// 适用工具：EllipticalROI, RectangleROI, CircleROI, PlanarFreehandROI (Polygon), SphereROI
 
 import { utilities as csUtils } from '@cornerstonejs/tools';
 
@@ -38,16 +38,16 @@ export function wrapGetTextLinesWithSUV(originalGetTextLines: Function) {
     if (!ptStats) return textLines;
     
     // 检查PT stats是否有有效的SUV值
-    const suvMin = ptStats.min ?? ptStats.suvMin;
     const suvMax = ptStats.max ?? ptStats.suvMax;
+    const suvMin = ptStats.min ?? ptStats.suvMin;
     const suvMean = ptStats.mean ?? ptStats.suvMean;
     
     if (suvMin == null && suvMax == null && suvMean == null) return textLines;
     
     // 添加SUV值到文本
     const suvLines: string[] = [];
-    if (suvMin != null) suvLines.push(`SUV Min: ${csUtils.roundNumber(suvMin)}`);
     if (suvMax != null) suvLines.push(`SUV Max: ${csUtils.roundNumber(suvMax)}`);
+    if (suvMin != null) suvLines.push(`SUV Min: ${csUtils.roundNumber(suvMin)}`);
     if (suvMean != null) suvLines.push(`SUV Mean: ${csUtils.roundNumber(suvMean)}`);
     
     return [...textLines, ...suvLines];

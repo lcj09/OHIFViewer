@@ -201,6 +201,7 @@ function _initToolGroups(toolNames, Enums, toolGroupService, commandsManager) {
     const csToolGroup = fusionToolGroup._toolGroup || fusionToolGroup;
     const suvToolNames = [
       toolNames.EllipticalROI,
+      toolNames.RectangleROI,
       toolNames.PlanarFreehandROI,
       toolNames.CircleROI,
       toolNames.SphereROI,
