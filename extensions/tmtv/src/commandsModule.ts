@@ -104,7 +104,9 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     const isSUVAvailable = imageIdScalingFactor && imageIdScalingFactor.suvbw;
 
     if (isSUVAvailable) {
-      return { windowWidth: 10, windowCenter: 5 };
+      // [2026-08-14 修复] 与index.ts中getPTVOIRange初始加载值保持一致（WW=5, WC=2.5 → SUV 0~5）
+      // 此前此处返回WW=10/WC=5，导致点击重置按钮后窗宽窗位被改变
+      return { windowWidth: 5, windowCenter: 2.5 };
     }
     return null;
   }
