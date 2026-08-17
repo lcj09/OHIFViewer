@@ -41,6 +41,7 @@
   "Reset": "$t(Common:Reset)",
   "Reset to defaults": "Reset to Defaults",
   "Rotate Right": "Rotate Right",
+  "Rotate 180": "Rotate 180",
   "Sagittal": "Sagittal",
   "Save": "Save",
   "Stack Scroll": "Stack Scroll",

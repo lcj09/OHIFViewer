@@ -17,7 +17,7 @@ const toolbarButtons = [
 // [2026-05-12 修改] TMTV模式重置视图按钮
 // 使用TMTV专用 resetTMTVViewport 命令（正确恢复PET SUV窗宽窗位和MIP slabThickness）
 // ============================================================================
-{
+  {
     id: 'ResetTMTV',
     uiType: 'ohif.toolButton',
     props: {
@@ -25,6 +25,37 @@ const toolbarButtons = [
       label: i18n.t('Buttons:Reset View'),
       tooltip: i18n.t('Buttons:Reset View'),
       commands: 'resetTMTVViewport',
+      evaluate: 'evaluate.action',
+    },
+  },
+  // [2026-08-17 新增] TMTV视口顺时针旋转90度按钮
+  // 功能：快速将当前视口按90°顺时针旋转，便于查看方向变化后的图像
+  {
+    id: 'Rotate90',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-rotate-right',
+      label: i18n.t('Buttons:Rotate Right'),
+      tooltip: i18n.t('Buttons:Rotate +90'),
+      commands: 'rotateViewportCW',
+      evaluate: 'evaluate.action',
+    },
+  },
+  // [2026-08-17 新增] TMTV视口180度旋转按钮
+  // 功能：快速将当前视口旋转180°，适用于需要上下翻转式查看的场景
+  {
+    id: 'Rotate180',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-rotate-right',
+      label: i18n.t('Buttons:Rotate 180'),
+      tooltip: i18n.t('Buttons:Rotate 180'),
+      commands: {
+        commandName: 'rotateViewportCWSet',
+        commandOptions: {
+          rotation: 180,
+        },
+      },
       evaluate: 'evaluate.action',
     },
   },

@@ -150,6 +150,8 @@ function modeFactory({ modeConfiguration }) {
       //
       toolbarService.updateSection(toolbarService.sections.primary, [
         'ResetTMTV',          // [2026-05-08 新增] 完全重置按钮 (最前面)
+        'Rotate90',           // [2026-08-17 新增] 顺时针旋转90°
+        'Rotate180',          // [2026-08-17 新增] 180°旋转
         'Save',               // 保存下拉菜单（图像/序列）
         'MeasurementTools',   // 测量工具组 (下拉菜单)
         'Zoom',               // 缩放工具
