@@ -41,22 +41,25 @@ const toolbarButtons = [
       evaluate: 'evaluate.action',
     },
   },
-  // [2026-08-17 新增] TMTV视口180度旋转按钮
-  // 功能：快速将当前视口旋转180°，适用于需要上下翻转式查看的场景
+  // [2026-08-18 修改] TMTV视口翻转按钮（水平翻转）
+  // 功能：水平翻转当前视口图像。用户确认原系统中已有Flip Horizontal（水平翻转）功能，
+  // 故使用原系统按钮定义（图标 tool-flip-horizontal、命令 flipViewportHorizontal、
+  // evaluate 均沿用原系统 basic 模式），替代此前自定义的180°旋转（rotateViewportCWSet）
   {
-    id: 'Rotate180',
+    id: 'FlipHorizontal',
     uiType: 'ohif.toolButton',
     props: {
-      icon: 'tool-rotate-right',
-      label: i18n.t('Buttons:Rotate 180'),
-      tooltip: i18n.t('Buttons:Rotate 180'),
-      commands: {
-        commandName: 'rotateViewportCWSet',
-        commandOptions: {
-          rotation: 180,
+      icon: 'tool-flip-horizontal',
+      label: i18n.t('Buttons:Flip Horizontal'),
+      tooltip: i18n.t('Buttons:Flip Horizontally'),
+      commands: 'flipViewportHorizontal',
+      evaluate: [
+        'evaluate.viewportProperties.toggle',
+        {
+          name: 'evaluate.viewport.supported',
+          unsupportedViewportTypes: ['video', 'volume3d'],
         },
-      },
-      evaluate: 'evaluate.action',
+      ],
     },
   },
   {
