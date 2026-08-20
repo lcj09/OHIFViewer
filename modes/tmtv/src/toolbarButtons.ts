@@ -312,9 +312,11 @@ const toolbarButtons = [
       evaluate: 'evaluate.cornerstoneTool',
     },
   },
+  // [2026-08-20 修改] 调窗按钮改为拆分交互按钮（ohif.tmtvWindowLevelMenu）
+  // 左键点击激活WindowLevel工具（手动调窗，与其他工具互斥），右键点击展开CT预设（仅应用到CT视口）
   {
     id: 'WindowLevel',
-    uiType: 'ohif.toolButton',
+    uiType: 'ohif.tmtvWindowLevelMenu',
     props: {
       icon: 'tool-window-level',
       label: i18n.t('Buttons:Window Level'),

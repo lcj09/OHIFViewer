@@ -6,6 +6,7 @@ import OverlayMenu from './Toolbar/OverlayMenu';
 import SyncMenu from './Toolbar/SyncMenu';
 import ColormapMenu from './Toolbar/ColormapMenu';
 import SuvThresholdMenu from './Toolbar/SuvThresholdMenu';
+import WindowLevelMenu from './Toolbar/WindowLevelMenu';
 import tmtvCrosshairService from './services/TMTVCrosshairService';
 import crosshairDisplayService from './services/CrosshairDisplayService';
 
@@ -58,6 +59,12 @@ export default function getToolbarModule({ commandsManager, servicesManager }) {
       name: 'ohif.suvThresholdMenu',
       defaultComponent: props =>
         SuvThresholdMenu({ ...props, commandsManager, servicesManager }),
+    },
+    // [2026-08-20 新增] 调窗下拉菜单 - 含手动调窗与CT预设
+    {
+      name: 'ohif.tmtvWindowLevelMenu',
+      defaultComponent: props =>
+        WindowLevelMenu({ ...props, commandsManager, servicesManager }),
     },
     // [2026-08-04 新增, 2026-08-04 简化] TMTV十字线按钮的 evaluate 函数
     // 统一使用 tmtvCrosshairService.getVisible() 作为唯一状态源，
