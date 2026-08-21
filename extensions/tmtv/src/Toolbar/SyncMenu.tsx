@@ -1,12 +1,25 @@
-// [2026-08-06 新增] 同步设置菜单组件
+// [2026-08-06 新增, 2026-08-20 修改] 同步设置菜单组件
 //
 // 功能：通过下拉菜单控制视口间的同步行为
 // 下拉菜单包含：
-//   1. 同步方位切换 - 控制方位切换时是否同步到同组其他视口
+//   1. 同步方位切换 - 控制方位切换是否同步到同组其他视口（cameraPosition 同步器）
+//   2. 同步调窗变化 - 控制窗宽窗位变化是否同步（voi 同步器）
+//   3. 同步缩放     - 控制缩放是否同步（zoomSync 同步器，懒创建）
 //
 // 状态存储：使用 customizationService 的 'syncSettings' 存储
-//   { orientationSync: true }  → 同步（默认）
-//   { orientationSync: false } → 不同步（只切换当前视口）
+//   { orientationSync: true, voiSync: true, zoomSync: false }
+//
+// [2026-08-20 修复] 缩放同步必须"懒创建"，不能静态注册到 hangingProtocol：
+//   之前把 zoompan 同步组静态加入 hpViewports 的 syncGroups，视口创建即挂接
+//   CAMERA_MODIFIED 监听。体积流式加载期间每次相机变化都会强制 setZoom/setPan
+//   + render()，而此阶段 initialCamera 可能未就绪，getZoom() 会返回非法值（NaN），
+//   污染相机导致 WebGL uniformMatrix3fv: no array 及图像加载失败。
+//   改为：仅当用户手动打开"同步缩放"开关时才创建并挂接所有视口
+//   （此时视口已加载完成），未开启时不创建任何 zoompan 同步器。
+//   [2026-08-20 更新] 应产品要求移除"同步移动"选项，不再支持 pan 同步。
+//
+// [2026-08-20 注意] customizationService.setCustomizations 对不含 $ 指令的对象是整体替换，
+//   因此每次切换任一开关时都必须写入完整的 syncSettings 对象，避免覆盖其他开关状态。
 
 import React, { useState, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
@@ -25,25 +38,171 @@ import {
 function SyncMenu({ servicesManager, ...props }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [orientationSync, setOrientationSync] = useState(true);
+  const [voiSync, setVoiSync] = useState(true);
+  const [zoomSync, setZoomSync] = useState(false);
 
   const { customizationService } = servicesManager.services;
 
-  // [2026-08-06] 初始化：从 customizationService 读取同步状态
+  // [2026-08-20 新增] 启用/禁用指定同步器
+  // type 按类型获取（如 'voi'），id 按 id 获取（如 'zoomSync'）
+  const applySyncEnabled = useCallback(
+    (type, id, enabled) => {
+      const { syncGroupService } = servicesManager.services;
+      try {
+        let syncs = [];
+        if (type) {
+          syncs = syncGroupService.getSynchronizersOfType(type) || [];
+        } else if (id) {
+          const s = syncGroupService.getSynchronizer(id);
+          if (s) syncs = [s];
+        }
+        syncs.forEach(s => {
+          try {
+            s.setEnabled(enabled);
+          } catch { /* ignore */ }
+        });
+      } catch (e) {
+        console.warn('[SyncMenu] 设置同步器状态失败', e);
+      }
+    },
+    [servicesManager]
+  );
+
+  // [2026-08-20 新增] 懒创建 zoompan 同步器并挂接当前所有视口
+  // 仅在用户开启"同步缩放"或布局切换后需要重新应用时调用（此时视口已加载完成）。
+  // 通过公开 API addViewportToSyncGroup 创建/复用同步器，幂等：已存在的视口不会被重复添加。
+  const ensureZoomPanSync = useCallback(
+    (syncId, options) => {
+      const { syncGroupService, cornerstoneViewportService } = servicesManager.services;
+      try {
+        const vpIds = cornerstoneViewportService.getViewportIds() || [];
+        vpIds.forEach(vpId => {
+          const renderingEngine = getRenderingEngines().find(re =>
+            re.getViewports().some(vp => vp.id === vpId)
+          );
+          if (!renderingEngine) return;
+          try {
+            syncGroupService.addViewportToSyncGroup(vpId, renderingEngine.id, [
+              {
+                type: 'zoompan',
+                id: syncId,
+                source: true,
+                target: true,
+                options,
+              },
+            ]);
+          } catch { /* ignore */ }
+        });
+      } catch (e) {
+        console.warn(`[SyncMenu] 创建同步器 ${syncId} 失败`, e);
+      }
+    },
+    [servicesManager]
+  );
+
+  // [2026-08-20 新增] 将持久化的同步设置应用到同步器
+  // 在组件挂载和视口（重新）创建后调用，确保开关状态与同步器实际状态一致。
+  // 缩放仅在开启时创建同步器（懒创建），关闭时禁用；开启时需确保同步器被启用
+  // （因为布局切换重建同步器后，新建的同步器默认启用，但上次关闭时被禁用的需恢复）。
+  const applyCurrentSyncSettings = useCallback(() => {
+    try {
+      const syncSettings = customizationService.getCustomization('syncSettings') || {};
+      const voiOn = syncSettings.voiSync !== false;
+      const zoomOn = syncSettings.zoomSync === true;
+
+      applySyncEnabled('voi', null, voiOn);
+
+      if (zoomOn) {
+        ensureZoomPanSync('zoomSync', { syncPan: false });
+        applySyncEnabled(null, 'zoomSync', true);
+      } else {
+        applySyncEnabled(null, 'zoomSync', false);
+      }
+    } catch (e) {
+      console.warn('[SyncMenu] 应用同步设置失败', e);
+    }
+  }, [applySyncEnabled, ensureZoomPanSync, customizationService]);
+
+  // [2026-08-20 新增] 持久化同步设置（必须写完整对象，见文件头注释）
+  const persistSyncSettings = useCallback(
+    next => {
+      try {
+        customizationService.setCustomizations({
+          syncSettings: {
+            orientationSync,
+            voiSync,
+            zoomSync,
+            ...next,
+          },
+        });
+      } catch (e) {
+        console.warn('[SyncMenu] 保存同步状态失败', e);
+      }
+    },
+    [orientationSync, voiSync, zoomSync, customizationService]
+  );
+
+  // [2026-08-06, 2026-08-20 修改] 初始化：从 customizationService 读取同步状态并应用到同步器
   useEffect(() => {
     try {
       const syncSettings = customizationService.getCustomization('syncSettings');
-      if (syncSettings && typeof syncSettings.orientationSync === 'boolean') {
-        setOrientationSync(syncSettings.orientationSync);
+      if (syncSettings) {
+        if (typeof syncSettings.orientationSync === 'boolean') {
+          setOrientationSync(syncSettings.orientationSync);
+        }
+        if (typeof syncSettings.voiSync === 'boolean') {
+          setVoiSync(syncSettings.voiSync);
+        }
+        if (typeof syncSettings.zoomSync === 'boolean') {
+          setZoomSync(syncSettings.zoomSync);
+        }
       } else {
-        // 默认同步
         customizationService.setCustomizations({
-          syncSettings: { orientationSync: true },
+          syncSettings: {
+            orientationSync: true,
+            voiSync: true,
+            zoomSync: false,
+          },
         });
       }
+      // 挂载时尝试应用同步器状态（此时同步器/视口可能尚未创建，视口创建后由 PROTOCOL_CHANGED 再应用一次）
+      applyCurrentSyncSettings();
     } catch (e) {
       console.warn('[SyncMenu] 初始化同步状态失败', e);
     }
-  }, [customizationService]);
+  }, [customizationService, applyCurrentSyncSettings]);
+
+  // [2026-08-20 新增] 布局切换（PROTOCOL_CHANGED）后视口重新创建，重新应用同步器开关状态
+  useEffect(() => {
+    const { hangingProtocolService } = servicesManager.services;
+    if (!hangingProtocolService) {
+      return;
+    }
+    let timer = null;
+    let unsub = null;
+    try {
+      const subscription = hangingProtocolService.subscribe(
+        hangingProtocolService.EVENTS.PROTOCOL_CHANGED,
+        () => {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => {
+            timer = null;
+            applyCurrentSyncSettings();
+          }, 300);
+        }
+      );
+      unsub = subscription.unsubscribe;
+    } catch (e) {
+      console.warn('[SyncMenu] 订阅 PROTOCOL_CHANGED 失败', e);
+    }
+    return () => {
+      // [内存排查] 组件卸载前清理定时器和订阅，避免异步回调在卸载后执行
+      if (timer) clearTimeout(timer);
+      try {
+        unsub?.();
+      } catch { /* ignore */ }
+    };
+  }, [servicesManager, applyCurrentSyncSettings]);
 
   // [2026-08-06, 2026-08-10 修改, 2026-08-11 修改] 切换方位同步开关
   // 开启时：恢复所有 cameraPosition 同步器（幂等，setViewportOrientation 已恢复）
@@ -57,9 +216,7 @@ function SyncMenu({ servicesManager, ...props }) {
     const newState = !orientationSync;
     setOrientationSync(newState);
     try {
-      customizationService.setCustomizations({
-        syncSettings: { orientationSync: newState },
-      });
+      persistSyncSettings({ orientationSync: newState });
 
       // [2026-08-07] 重新开启同步时，恢复所有 cameraPosition 同步器
       // [2026-08-11] setViewportOrientation 在 orientationSync=false 时会从同步组中
@@ -101,7 +258,51 @@ function SyncMenu({ servicesManager, ...props }) {
     } catch (e) {
       console.warn('[SyncMenu] 保存同步状态失败', e);
     }
-  }, [orientationSync, customizationService, servicesManager]);
+  }, [orientationSync, persistSyncSettings, servicesManager]);
+
+  // [2026-08-20 新增] 切换调窗同步开关（作用于已注册的 voi 同步器，安全）
+  const handleToggleVoiSync = useCallback(() => {
+    const newState = !voiSync;
+    setVoiSync(newState);
+    try {
+      persistSyncSettings({ voiSync: newState });
+      applySyncEnabled('voi', null, newState);
+    } catch (e) {
+      console.warn('[SyncMenu] 切换调窗同步失败', e);
+    }
+  }, [voiSync, persistSyncSettings, applySyncEnabled]);
+
+  // [2026-08-20 新增] 切换缩放同步开关（懒创建 zoompan 同步器，避免影响图像加载）
+  const handleToggleZoomSync = useCallback(() => {
+    const newState = !zoomSync;
+    setZoomSync(newState);
+    try {
+      persistSyncSettings({ zoomSync: newState });
+      if (newState) {
+        ensureZoomPanSync('zoomSync', { syncPan: false });
+        applySyncEnabled(null, 'zoomSync', true);
+      } else {
+        applySyncEnabled(null, 'zoomSync', false);
+      }
+    } catch (e) {
+      console.warn('[SyncMenu] 切换缩放同步失败', e);
+    }
+  }, [zoomSync, persistSyncSettings, ensureZoomPanSync, applySyncEnabled]);
+
+  // [2026-08-20 新增] 渲染单个同步开关项，保持菜单项样式统一
+  const renderToggleItem = (checked, label, onClick) => (
+    <Button
+      variant="ghost"
+      className={`flex h-8 w-full items-center justify-start px-2 py-1 text-sm hover:bg-primary-dark ${
+        checked ? 'text-highlight' : 'text-gray-400'
+      }`}
+      onClick={onClick}
+      onPointerDown={e => e.stopPropagation()}
+    >
+      <span className="mr-2 inline-block w-4 text-center">{checked ? '✓' : ''}</span>
+      {label}
+    </Button>
+  );
 
   return (
     <div id="SyncMenu" data-cy="SyncMenu">
@@ -138,19 +339,11 @@ function SyncMenu({ servicesManager, ...props }) {
         >
           <div className="flex flex-col gap-0.5">
             {/* 同步方位切换 */}
-            <Button
-              variant="ghost"
-              className={`flex h-8 w-full items-center justify-start px-2 py-1 text-sm hover:bg-primary-dark ${
-                orientationSync ? 'text-highlight' : 'text-gray-400'
-              }`}
-              onClick={handleToggleOrientationSync}
-              onPointerDown={e => e.stopPropagation()}
-            >
-              <span className="mr-2 inline-block w-4 text-center">
-                {orientationSync ? '✓' : ''}
-              </span>
-              同步方位切换
-            </Button>
+            {renderToggleItem(orientationSync, '同步方位切换', handleToggleOrientationSync)}
+            {/* [2026-08-20 新增] 同步调窗变化 */}
+            {renderToggleItem(voiSync, '同步调窗变化', handleToggleVoiSync)}
+            {/* [2026-08-20 新增] 同步缩放 */}
+            {renderToggleItem(zoomSync, '同步缩放', handleToggleZoomSync)}
           </div>
         </PopoverContent>
       </Popover>
