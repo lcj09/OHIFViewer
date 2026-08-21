@@ -259,6 +259,12 @@ function CustomizableViewportOverlay({
   const viewportOverlayConfig = customizationService.getCustomization('viewportOverlay');
   const shouldHideOverlay = viewportOverlayConfig?.hideAll;
 
+  // [2026-08-20 新增] TMTV 模式四角标注字体大小覆盖
+  // 读取模式级定制 'viewportOverlay.fontSize'（如 'text-sm leading-4'），
+  // 未设置时保持默认（text-base leading-5），不影响其他模式。
+  const fontSizeClass =
+    customizationService.getCustomization('viewportOverlay.fontSize') || undefined;
+
   // 使用条件渲染而非提前返回，确保所有 hooks 都能被调用
   const overlayContent = shouldHideOverlay ? null : (
     <ViewportOverlay
@@ -268,6 +274,7 @@ function CustomizableViewportOverlay({
       bottomRight={getContent(bottomRightCustomization, 'bottomRightOverlayItem')}
       color={isLight ? 'text-neutral-dark' : 'text-neutral-light'}
       shadowClass={isLight ? 'shadow-light' : 'shadow-dark'}
+      fontSizeClass={fontSizeClass}
     />
   );
 

@@ -9,6 +9,10 @@ import './ViewportOverlay.css';
  * around the active viewport for metadata or status messages.
  *
  * The parent is responsible for styling offsets.
+ *
+ * [2026-08-20 修改] 新增 fontSizeClass 可选 prop：
+ *   允许按模式覆盖四角标注字体大小。默认 'text-base leading-5'（16px），
+ *   不传或传 undefined 时行为与原实现完全一致，不影响其他模式。
  */
 const classes = {
   topLeft: 'overlay-top left-viewport',
@@ -17,11 +21,19 @@ const classes = {
   bottomLeft: 'overlay-bottom left-viewport',
 };
 
-function ViewportOverlay({ topLeft, topRight, bottomRight, bottomLeft, color = 'text-highlight', shadowClass = 'shadow-dark' }) {
+function ViewportOverlay({
+  topLeft,
+  topRight,
+  bottomRight,
+  bottomLeft,
+  color = 'text-highlight',
+  shadowClass = 'shadow-dark',
+  fontSizeClass = 'text-base leading-5',
+}) {
   const overlay = 'absolute pointer-events-none viewport-overlay';
 
   return (
-    <div className={classNames(color, 'overlay-text', shadowClass, 'text-base leading-5')}>
+    <div className={classNames(color, 'overlay-text', shadowClass, fontSizeClass)}>
       <div
         data-cy="viewport-overlay-top-left"
         className={classNames(overlay, classes.topLeft)}
@@ -59,6 +71,7 @@ ViewportOverlay.propTypes = {
   bottomLeft: PropTypes.node,
   color: PropTypes.string,
   shadowClass: PropTypes.string,
+  fontSizeClass: PropTypes.string,
 };
 
 export { ViewportOverlay };

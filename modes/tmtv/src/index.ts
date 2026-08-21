@@ -238,6 +238,46 @@ function modeFactory({ modeConfiguration }) {
         orientationMenu: {
           hideReformat: true,
         },
+        // [2026-08-20 新增] TMTV模式四角标注缩小字号（16px → 12px）
+        // 独立键 'viewportOverlay.fontSize'，与 OverlayMenu 使用的 'viewportOverlay'(hideAll) 互不冲突
+        'viewportOverlay.fontSize': 'text-xs leading-4',
+        // [2026-08-20 新增] TMTV模式右上角叠加患者信息
+        // 模式级定制覆盖默认的 viewportOverlay.topRight（默认为空数组），
+        // 显示：姓名、性别-年龄、登记号
+        'viewportOverlay.topRight': [
+          {
+            id: 'TMTVPatientName',
+            inheritsFrom: 'ohif.overlayItem',
+            // [2026-08-20 修改] 不显示"姓名"标签，仅显示值
+            title: 'Patient Name',
+            condition: ({ referenceInstance }) => referenceInstance?.PatientName,
+            // [2026-08-20 修复] PatientName 为 DICOM PN 类型（对象 {Alphabetic}），
+            // 必须用 formatPN 转字符串，直接返回对象会导致 React 渲染报错
+            contentF: ({ referenceInstance, formatters: { formatPN } }) =>
+              formatPN(referenceInstance.PatientName),
+          },
+          {
+            id: 'TMTVPatientSexAge',
+            inheritsFrom: 'ohif.overlayItem',
+            // [2026-08-20 修改] 不显示"性别"标签，仅显示值
+            title: 'Sex Age',
+            condition: ({ referenceInstance }) =>
+              referenceInstance &&
+              (referenceInstance.PatientSex || referenceInstance.PatientAge),
+            contentF: ({ referenceInstance }) =>
+              [referenceInstance.PatientSex, referenceInstance.PatientAge]
+                .filter(Boolean)
+                .join(' '),
+          },
+          {
+            id: 'TMTVPatientID',
+            inheritsFrom: 'ohif.overlayItem',
+            // [2026-08-20 修改] 不显示"登记号"标签，仅显示值
+            title: 'Patient ID',
+            condition: ({ referenceInstance }) => referenceInstance?.PatientID,
+            contentF: ({ referenceInstance }) => referenceInstance.PatientID,
+          },
+        ],
       });
 
       // For the hanging protocol we need to decide on the window level
