@@ -214,14 +214,21 @@ export default function getToolbarModule({ servicesManager, extensionManager }: 
         }
 
         // Only show orientation menu for 3D capable viewports
-        const displaySetUIDs = viewportGridService.getDisplaySetsUIDsForViewport(viewportId);
-        const displaySets = displaySetUIDs.map(displaySetService.getDisplaySetByUID);
-        const isNotReconstructable = displaySets.some(displaySet => !displaySet?.isReconstructable);
+        const displaySetUIDs = viewportGridService.getDisplaySetsUIDsForViewport(viewportId) || [];
+        const displaySets = displaySetUIDs
+          .map(uid => displaySetService.getDisplaySetByUID(uid))
+          .filter(Boolean);
 
-        const disabled = isNotReconstructable;
+        // [2026-08-21 修复] PT/MIP 等体积视口的 displaySet 在部分场景下无法通过 UID 解析，
+        // 原逻辑 `some(!isReconstructable)` 会把未解析（undefined）的 displaySet 当作不可重建，
+        // 导致 evaluate 返回 disabled=true，配合 hideWhenDisabled 使按钮在视口选中时被隐藏、
+        // 仅悬停时可见。改为：仅当存在已解析的 displaySet 且均不可重建时才禁用
+        // （只要任一 displaySet 可重建，方位切换即可用）。
+        const isNotReconstructable =
+          displaySets.length > 0 && displaySets.every(displaySet => !displaySet.isReconstructable);
 
         return {
-          disabled,
+          disabled: isNotReconstructable,
         };
       },
     },
@@ -264,10 +271,17 @@ export default function getToolbarModule({ servicesManager, extensionManager }: 
           };
         }
 
-        const displaySetUIDs = viewportGridService.getDisplaySetsUIDsForViewport(viewportId);
-        const displaySets = displaySetUIDs.map(displaySetService.getDisplaySetByUID);
+        const displaySetUIDs = viewportGridService.getDisplaySetsUIDsForViewport(viewportId) || [];
+        const displaySets = displaySetUIDs
+          .map(uid => displaySetService.getDisplaySetByUID(uid))
+          .filter(Boolean);
 
-        const supportWindowLevel = displaySets.some(displaySet => displaySet?.supportsWindowLevel);
+        // [2026-08-21 修复] 同 orientationMenu：displaySet 未解析（undefined/空）时不再禁用按钮，
+        // 避免 PT/MIP 视口因 displaySet 暂时无法解析导致按钮被 hideWhenDisabled 隐藏。
+        // 仅当存在已解析的 displaySet 且均不支持窗宽窗位时才禁用。
+        const supportWindowLevel =
+          displaySets.length === 0 ||
+          displaySets.some(displaySet => displaySet.supportsWindowLevel);
 
         const isInAnySection = toolbarService.isInAnySection('windowLevelMenuEmbedded');
 

@@ -170,8 +170,7 @@ function modeFactory({ modeConfiguration }) {
       ]);
 
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.topLeft, [
-        'orientationMenu'
-        //'dataOverlayMenu',// [2026-07-06] TMTV模式下默认屏蔽视口叠加数据
+        // [2026-08-20 修改] 方位切换与数据叠加已移至左下角（bottomLeft），左上角置空
       ]);
 
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.bottomMiddle, [
@@ -193,7 +192,10 @@ function modeFactory({ modeConfiguration }) {
       ]);
 
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.bottomLeft, [
-        'windowLevelMenu',
+        // [2026-08-20 修改] 左下角按钮顺序：方位切换 → 窗位 → 数据叠加(仍屏蔽)
+        'orientationMenu',   // 方位切换（放在窗位前面）
+        'windowLevelMenu',   // 窗位
+        // 'dataOverlayMenu', // [2026-07-06] 数据叠加（放在窗位后面，仍屏蔽）
       ]);
 
       // [2026-08-17 修改] 更新MeasurementTools部分，添加矩形测量工具
@@ -241,6 +243,8 @@ function modeFactory({ modeConfiguration }) {
         // [2026-08-20 新增] TMTV模式四角标注缩小字号（16px → 12px）
         // 独立键 'viewportOverlay.fontSize'，与 OverlayMenu 使用的 'viewportOverlay'(hideAll) 互不冲突
         'viewportOverlay.fontSize': 'text-xs leading-4',
+        // [2026-08-20 新增] TMTV模式顶部叠加层上移，消除顶部留白（默认 .overlay-top 为 2.15rem）
+        'viewportOverlay.topOffset': '0',
         // [2026-08-20 新增] TMTV模式右上角叠加患者信息
         // 模式级定制覆盖默认的 viewportOverlay.topRight（默认为空数组），
         // 显示：姓名、性别-年龄、登记号

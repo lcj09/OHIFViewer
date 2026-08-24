@@ -24,7 +24,8 @@ function OHIFViewportActionCornersComponent({ viewportId }: OHIFViewportActionCo
       IconContainer={ToolButton}
       containerProps={{
         size: 'tiny',
-        className: 'font-normal text-primary hover:bg-primary/25',
+        // [2026-08-21 修复] 添加 drop-shadow 使按钮图标在浅色背景（PT/MIP 视口）上也可见
+        className: 'font-normal text-primary hover:bg-primary/25 drop-shadow-[0_0_2px_rgba(0,0,0,0.9)]',
       }}
     >
       <ViewportActionCorners.Container>

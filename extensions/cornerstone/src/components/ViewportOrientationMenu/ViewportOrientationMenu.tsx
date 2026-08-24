@@ -153,7 +153,9 @@ function ViewportOrientationMenu({
         </div>
       </PopoverTrigger>
       <PopoverContent
-        className="h-[170px] w-[130px] flex-shrink-0 flex-col items-start rounded p-1"
+        // [2026-08-20 修改] 由固定 h-[170px] 改为自适应高度，
+        // TMTV 模式隐藏 Reformat 后仅剩4项，避免 Acquisition 下方出现大片空白
+        className="w-[130px] flex-shrink-0 flex-col items-start rounded p-1"
         align={align}
         side={side}
         style={{ left: 0 }}

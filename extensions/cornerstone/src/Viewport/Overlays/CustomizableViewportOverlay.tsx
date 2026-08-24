@@ -265,6 +265,11 @@ function CustomizableViewportOverlay({
   const fontSizeClass =
     customizationService.getCustomization('viewportOverlay.fontSize') || undefined;
 
+  // [2026-08-20 新增] TMTV 模式顶部叠加层偏移覆盖
+  // 读取模式级定制 'viewportOverlay.topOffset'（如 '0'），消除顶部留白，
+  // 未设置时保持默认（.overlay-top 为 2.15rem），不影响其他模式。
+  const topOffset = customizationService.getCustomization('viewportOverlay.topOffset');
+
   // 使用条件渲染而非提前返回，确保所有 hooks 都能被调用
   const overlayContent = shouldHideOverlay ? null : (
     <ViewportOverlay
@@ -275,6 +280,7 @@ function CustomizableViewportOverlay({
       color={isLight ? 'text-neutral-dark' : 'text-neutral-light'}
       shadowClass={isLight ? 'shadow-light' : 'shadow-dark'}
       fontSizeClass={fontSizeClass}
+      topOffset={topOffset}
     />
   );
 
