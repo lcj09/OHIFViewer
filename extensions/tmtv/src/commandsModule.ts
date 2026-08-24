@@ -1,9 +1,6 @@
 import OHIF from '@ohif/core';
 import * as cs from '@cornerstonejs/core';
-import {
-  utilities as csUtils,
-  BaseVolumeViewport,
-} from '@cornerstonejs/core';
+import { utilities as csUtils, BaseVolumeViewport } from '@cornerstonejs/core';
 import * as csTools from '@cornerstonejs/tools';
 import { classes } from '@ohif/core';
 import i18n from '@ohif/i18n';
@@ -16,6 +13,7 @@ import { Enums } from '@cornerstonejs/tools';
 import { utils } from '@ohif/core';
 import tmtvCrosshairService from './services/TMTVCrosshairService';
 import crosshairDisplayService from './services/CrosshairDisplayService';
+import tmtvLesionService from './services/TMTVLesionService';
 import { toolGroupIds } from '../../../modes/tmtv/src/initToolGroups';
 
 const { SegmentationRepresentations } = Enums;
@@ -321,19 +319,45 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       segmentationService.setSegmentationGroupStats(segmentationIds, stats);
       return stats;
     },
-    exportTMTVReportCSV: async ({ segmentations, tmtv, config, options }) => {
+    exportTMTVReportCSV: async ({
+      segmentations,
+      tmtv,
+      lesions,
+      lesionTotals,
+      config,
+      options,
+    }) => {
       const segReport = commandsManager.runCommand('getSegmentationCSVReport', {
         segmentations,
       });
 
-      let total_tlg = 0;
-      for (const segmentationId in segReport) {
-        const report = segReport[segmentationId];
-        const tlg = report['namedStats_lesionGlycolysis'];
-        total_tlg += tlg.value;
+      const segmentationIds = segmentations.map(segmentation => segmentation.segmentationId);
+      const lesionState = tmtvLesionService.getState(segmentationIds);
+      const reportLesions = lesions ?? lesionState.lesions;
+      const reportLesionTotals = lesionTotals ?? lesionState.totals;
+      let total_tlg = reportLesionTotals?.tlg;
+
+      if (total_tlg === null || total_tlg === undefined) {
+        total_tlg = 0;
+        for (const segmentationId in segReport) {
+          const report = segReport[segmentationId];
+          const tlg = report['namedStats_lesionGlycolysis'];
+          total_tlg += tlg?.value ?? 0;
+        }
       }
+
       const additionalReportRows = [
         { key: 'Total Lesion Glycolysis', value: { tlg: total_tlg.toFixed(4) } },
+        { key: 'Lesion Count', value: { count: reportLesions.length } },
+        ...reportLesions.map(lesion => ({
+          key: `Lesion ${lesion.lesionNumber}`,
+          value: {
+            volume: lesion.volume.toFixed(4),
+            suvMax: lesion.suvMax?.toFixed(4) ?? '',
+            suvMean: lesion.suvMean?.toFixed(4) ?? '',
+            tlg: lesion.tlg?.toFixed(4) ?? '',
+          },
+        })),
         { key: 'Threshold Configuration', value: { ...config } },
       ];
 
@@ -607,9 +631,9 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
           viewport.setProperties({ invert: true });
         }
         viewport.render();
-      // ── MIP视口重置 ──
-      // 重置相机 + 恢复slabThickness（resetCamera不会恢复slabThickness）
-      // 同时恢复自定义SUV窗宽窗位和反色状态
+        // ── MIP视口重置 ──
+        // 重置相机 + 恢复slabThickness（resetCamera不会恢复slabThickness）
+        // 同时恢复自定义SUV窗宽窗位和反色状态
       } else if (toolGroupId === 'mipToolGroup') {
         viewport.resetCamera();
         viewport.setZoom(currentZoom);
@@ -629,10 +653,10 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
           viewport.setProperties({ invert: true });
         }
         viewport.render();
-      // ── Fusion视口重置 ──
-      // 先调用resetProperties重置CT和PT的所有属性
-      // 然后单独恢复PT volume的VOI和hot_iron色彩映射
-      // 注意：setProperties必须指定volumeId，否则会影响CT volume
+        // ── Fusion视口重置 ──
+        // 先调用resetProperties重置CT和PT的所有属性
+        // 然后单独恢复PT volume的VOI和hot_iron色彩映射
+        // 注意：setProperties必须指定volumeId，否则会影响CT volume
       } else if (toolGroupId === 'fusionToolGroup') {
         viewport.resetProperties?.();
         viewport.resetCamera();
@@ -661,8 +685,8 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
           }
         }
         viewport.render();
-      // ── 其他视口（CT等）──
-      // 使用默认重置行为
+        // ── 其他视口（CT等）──
+        // 使用默认重置行为
       } else {
         viewport.resetProperties?.();
         viewport.resetCamera();
@@ -797,7 +821,11 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
           const csToolGroup = (toolGroup as any)._toolGroup || toolGroup;
           const activeToolName = csToolGroup.getActivePrimaryMouseButtonTool();
           // [2026-08-06] 排除 Crosshairs 和 SingleSliceLine，避免误停用十字线工具
-          if (activeToolName && activeToolName !== 'Crosshairs' && activeToolName !== 'SingleSliceLine') {
+          if (
+            activeToolName &&
+            activeToolName !== 'Crosshairs' &&
+            activeToolName !== 'SingleSliceLine'
+          ) {
             const activeToolOptions = csToolGroup.getToolConfiguration(activeToolName);
             if (activeToolOptions?.disableOnPassive) {
               csToolGroup.setToolDisabled(activeToolName);

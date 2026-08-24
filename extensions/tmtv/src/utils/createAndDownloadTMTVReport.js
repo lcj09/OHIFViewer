@@ -82,12 +82,20 @@ export default function createAndDownloadTMTVReport(segReport, additionalReportR
     const keyMap = {
       'Total Metabolic Tumor Volume': '总代谢肿瘤体积',
       'Total Lesion Glycolysis': '总病灶糖酵解量',
+      'Lesion Count': '病灶数量',
       'Threshold Configuration': '阈值配置',
     };
     const translatedKey = keyMap[key] || key;
     temp.push(`${translatedKey}`);
     Object.keys(values).forEach(k => {
-      const kMap = { tmtv: 'TMTV', tlg: 'TLG' };
+      const kMap = {
+        count: '数量',
+        suvMax: 'SUVmax',
+        suvMean: 'SUVmean',
+        tmtv: 'TMTV',
+        tlg: 'TLG',
+        volume: '体积',
+      };
       temp.push(`${kMap[k] || k}`);
       temp.push(`${values[k]}`);
     });
