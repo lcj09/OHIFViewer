@@ -15,6 +15,7 @@ import tmtvCrosshairService from './services/TMTVCrosshairService';
 import crosshairDisplayService from './services/CrosshairDisplayService';
 import tmtvLesionService from './services/TMTVLesionService';
 import tmtvLesionHighlightService from './services/TMTVLesionHighlightService';
+import { createTMTVReportSections } from './services/TMTVReportService';
 import { toolGroupIds } from '../../../modes/tmtv/src/initToolGroups';
 
 const { SegmentationRepresentations } = Enums;
@@ -376,49 +377,23 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
 
       const segmentationIds = segmentations.map(segmentation => segmentation.segmentationId);
       const lesionState = tmtvLesionService.getState(segmentationIds);
-      // [2026-08-24 功能] CSV 导出追加 lesion 数量和逐病灶统计，和右侧 lesion 面板保持一致
+      // [2026-08-25 功能] 第四阶段 CSV 导出使用 TMTVReportService 生成正式报告结构，避免报告逻辑散落在 commandsModule
       const reportLesions = lesions ?? lesionState.lesions;
       const reportLesionTotals = lesionTotals ?? lesionState.totals;
-      let total_tlg = reportLesionTotals?.tlg;
 
-      if (total_tlg === null || total_tlg === undefined) {
-        total_tlg = 0;
-        for (const segmentationId in segReport) {
-          const report = segReport[segmentationId];
-          const tlg = report['namedStats_lesionGlycolysis'];
-          total_tlg += tlg?.value ?? 0;
-        }
-      }
-
-      const additionalReportRows = [
-        { key: 'Total Lesion Glycolysis', value: { tlg: total_tlg.toFixed(4) } },
-        { key: 'Lesion Count', value: { count: reportLesions.length } },
-        {
-          key: 'Confirmed Lesion Count',
-          value: { count: reportLesions.filter(lesion => lesion.status === 'confirmed').length },
-        },
-        ...reportLesions.map(lesion => ({
-          key: `Lesion ${lesion.lesionNumber}`,
-          value: {
-            status: lesion.status,
-            volume: lesion.volume.toFixed(4),
-            suvMin: lesion.suvMin?.toFixed(4) ?? '',
-            suvMax: lesion.suvMax?.toFixed(4) ?? '',
-            suvMean: lesion.suvMean?.toFixed(4) ?? '',
-            tlg: lesion.tlg?.toFixed(4) ?? '',
+      createAndDownloadTMTVReport(
+        segReport,
+        createTMTVReportSections({
+          segReport,
+          lesions: reportLesions,
+          lesionTotals: {
+            ...reportLesionTotals,
+            tmtv: tmtv ?? reportLesionTotals?.tmtv ?? 0,
           },
-        })),
-        { key: 'Threshold Configuration', value: { ...config } },
-      ];
-
-      if (tmtv !== undefined) {
-        additionalReportRows.unshift({
-          key: 'Total Metabolic Tumor Volume',
-          value: { tmtv },
-        });
-      }
-
-      createAndDownloadTMTVReport(segReport, additionalReportRows, options);
+          config,
+        }),
+        options
+      );
     },
 
     setStartSliceForROIThresholdTool: () => {
