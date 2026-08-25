@@ -1,5 +1,6 @@
 import { cache, Enums as csEnums, volumeLoader } from '@cornerstonejs/core';
 import * as csTools from '@cornerstonejs/tools';
+import i18n from 'i18next';
 
 import type { TMTVLesion } from './TMTVLesionService';
 
@@ -183,10 +184,10 @@ class TMTVLesionHighlightService {
         },
       },
       config: {
-        label: 'Selected Lesion Highlight',
+        label: i18n.t('ROIThresholdConfiguration:Selected Lesion Highlight'),
         segments: {
           [HIGHLIGHT_SEGMENT_INDEX]: {
-            label: 'Selected Lesion',
+            label: i18n.t('ROIThresholdConfiguration:Selected Lesion'),
             active: false,
             locked: true,
           },

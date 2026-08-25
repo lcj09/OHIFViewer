@@ -351,6 +351,17 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         });
       }
     },
+    setTMTVLesionStatus: ({ segmentationIds = [], lesionId, status }) => {
+      // [2026-08-25 功能] 第一阶段 Lesion 确认/拒绝只更新业务状态，TMTV/TLG 只汇总 confirmed lesions
+      const lesionState = tmtvLesionService.setLesionStatus(segmentationIds, lesionId, status);
+
+      if (lesionState) {
+        segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
+          tmtv: lesionState.totals.tmtv,
+          tlg: lesionState.totals.tlg,
+        });
+      }
+    },
     exportTMTVReportCSV: async ({
       segmentations,
       tmtv,
@@ -382,9 +393,14 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       const additionalReportRows = [
         { key: 'Total Lesion Glycolysis', value: { tlg: total_tlg.toFixed(4) } },
         { key: 'Lesion Count', value: { count: reportLesions.length } },
+        {
+          key: 'Confirmed Lesion Count',
+          value: { count: reportLesions.filter(lesion => lesion.status === 'confirmed').length },
+        },
         ...reportLesions.map(lesion => ({
           key: `Lesion ${lesion.lesionNumber}`,
           value: {
+            status: lesion.status,
             volume: lesion.volume.toFixed(4),
             suvMax: lesion.suvMax?.toFixed(4) ?? '',
             suvMean: lesion.suvMean?.toFixed(4) ?? '',
@@ -1011,6 +1027,9 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     deleteTMTVLesion: {
       commandFn: actions.deleteTMTVLesion,
+    },
+    setTMTVLesionStatus: {
+      commandFn: actions.setTMTVLesionStatus,
     },
     exportTMTVReportCSV: {
       commandFn: actions.exportTMTVReportCSV,

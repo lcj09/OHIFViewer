@@ -7,6 +7,11 @@ import {
 } from '../services/SegmentationService/SegmentationService';
 import { useSystem } from '@ohif/core';
 const excludedModalities = ['SM', 'OT', 'DOC', 'ECG'];
+const TMTV_TEMPORARY_HIGHLIGHT_SEGMENTATION_ID_PREFIX = 'tmtv-selected-lesion-highlight';
+
+function isTemporaryTMTVHighlightSegmentation(segmentationId?: string): boolean {
+  return !!segmentationId?.startsWith(TMTV_TEMPORARY_HIGHLIGHT_SEGMENTATION_ID_PREFIX);
+}
 
 function mapSegmentationToDisplay(segmentation, customizationService) {
   const { label, segments, fallbackLabel } = segmentation;
@@ -158,21 +163,31 @@ export function useViewportSegmentations({
       // multiple representation types (e.g., labelmap and surface)
       const uniqueSegmentationMap = new Map();
       representations.forEach(representation => {
+        // [2026-08-25 功能] TMTV 当前选中病灶高亮层是临时显示层，不进入右侧 SegmentationTable，避免误操作/悬挂 representation 报错
+        if (isTemporaryTMTVHighlightSegmentation(representation.segmentationId)) {
+          return;
+        }
+
         if (!uniqueSegmentationMap.has(representation.segmentationId)) {
           uniqueSegmentationMap.set(representation.segmentationId, representation);
         }
       });
 
-      const newSegmentationsWithRepresentations = Array.from(uniqueSegmentationMap.values()).map(
-        representation => {
+      const newSegmentationsWithRepresentations = Array.from(uniqueSegmentationMap.values())
+        .map(representation => {
           const segmentation = segmentationService.getSegmentation(representation.segmentationId);
+
+          if (!segmentation) {
+            return null;
+          }
+
           const mappedSegmentation = mapSegmentationToDisplay(segmentation, customizationService);
           return {
             representation,
             segmentation: mappedSegmentation,
           };
-        }
-      );
+        })
+        .filter(Boolean);
 
       setSegmentationsWithRepresentations({
         segmentationsWithRepresentations: newSegmentationsWithRepresentations,

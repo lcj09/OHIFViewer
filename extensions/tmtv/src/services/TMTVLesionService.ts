@@ -6,6 +6,9 @@ const { SegmentationRepresentations } = csTools.Enums;
 
 type NumericArray = ArrayLike<number>;
 
+export type TMTVLesionStatus = 'candidate' | 'confirmed' | 'rejected';
+export type TMTVLesionCreatedBy = 'threshold' | 'brush' | 'manual';
+
 export type TMTVLesion = {
   id: string;
   lesionNumber: number;
@@ -24,6 +27,10 @@ export type TMTVLesion = {
   tlg: number | null;
   centroid: [number, number, number];
   centroidIJK: [number, number, number];
+  // [2026-08-25 功能] 第一阶段 Lesion 确认流程：candidate/confirmed/rejected 只作为业务状态，不改 Segment 1 voxel
+  status: TMTVLesionStatus;
+  createdBy: TMTVLesionCreatedBy;
+  modified: boolean;
 };
 
 export type TMTVLesionState = {
@@ -43,6 +50,8 @@ type Subscription = {
   unsubscribe: () => void;
 };
 
+type TMTVLesionMeta = Pick<TMTVLesion, 'status' | 'createdBy' | 'modified'>;
+
 const EMPTY_STATE: TMTVLesionState = {
   segmentationIds: [],
   segmentIndex: 1,
@@ -60,6 +69,7 @@ class TMTVLesionService {
   private listeners = new Set<() => void>();
   private selectedLesionIdByGroupId = new Map<string, string | null>();
   private skipNextFullRefreshSegmentationIds = new Set<string>();
+  private lesionMetaByGroupId = new Map<string, Map<string, TMTVLesionMeta>>();
 
   public subscribe(listener: () => void): Subscription {
     this.listeners.add(listener);
@@ -100,31 +110,35 @@ class TMTVLesionService {
     });
 
     const groupId = this.getGroupId(segmentationIds);
+    const previousMeta = this.lesionMetaByGroupId.get(groupId) ?? new Map();
+    const hasPreviousLesionMeta = previousMeta.size > 0;
+    lesions.forEach(lesion => {
+      const meta = previousMeta.get(getLesionIdentityKey(lesion));
+      const wasEditedBySegmentationTool = !meta && hasPreviousLesionMeta;
+
+      // [2026-08-25 功能] 第二阶段 Brush/Eraser 后形状变化的 lesion 回到 candidate，避免沿用旧确认/拒绝状态
+      lesion.status = meta?.status ?? 'candidate';
+      lesion.createdBy = meta?.createdBy ?? (wasEditedBySegmentationTool ? 'brush' : 'threshold');
+      lesion.modified = meta?.modified ?? wasEditedBySegmentationTool;
+    });
+
     const previousSelectedLesionId = this.selectedLesionIdByGroupId.get(groupId) ?? null;
     const selectedLesionId = lesions.some(lesion => lesion.id === previousSelectedLesionId)
       ? previousSelectedLesionId
       : null;
 
-    const totalTMTV = lesions.reduce((sum, lesion) => sum + lesion.volume, 0);
-    const totalTLG = lesions.reduce(
-      (sum, lesion) => (lesion.tlg === null ? sum : sum + lesion.tlg),
-      0
-    );
-    const hasTLG = lesions.some(lesion => lesion.tlg !== null);
+    const totals = computeConfirmedTotals(lesions);
 
     const state: TMTVLesionState = {
       segmentationIds,
       segmentIndex,
       selectedLesionId,
       lesions,
-      totals: {
-        tmtv: totalTMTV,
-        // [2026-08-25 功能] 无 lesion 时总 TLG 明确清零，避免面板/导出沿用旧统计值
-        tlg: lesions.length ? (hasTLG ? totalTLG : null) : 0,
-      },
+      totals,
       updatedAt: Date.now(),
     };
 
+    this.lesionMetaByGroupId.set(groupId, this.createMetaMap(lesions));
     this.selectedLesionIdByGroupId.set(groupId, selectedLesionId);
     this.stateByGroupId.set(groupId, state);
     this.notify();
@@ -149,6 +163,41 @@ class TMTVLesionService {
     this.notify();
 
     return selectedLesion;
+  }
+
+  public setLesionStatus(
+    segmentationIds: string[],
+    lesionId: string,
+    status: TMTVLesionStatus
+  ): TMTVLesionState | null {
+    // [2026-08-25 功能] Confirm/Reject 只更新 lesion 业务状态并重算 confirmed totals，不修改真实 Segment 1
+    const groupId = this.getGroupId(segmentationIds);
+    const state = this.getState(segmentationIds);
+    const lesions = state.lesions.map(lesion =>
+      lesion.id === lesionId
+        ? {
+            ...lesion,
+            status,
+          }
+        : lesion
+    );
+
+    if (!lesions.some(lesion => lesion.id === lesionId)) {
+      return null;
+    }
+
+    const nextState = {
+      ...state,
+      lesions,
+      totals: computeConfirmedTotals(lesions),
+      updatedAt: Date.now(),
+    };
+
+    this.lesionMetaByGroupId.set(groupId, this.createMetaMap(lesions));
+    this.stateByGroupId.set(groupId, nextState);
+    this.notify();
+
+    return nextState;
   }
 
   public deleteLesion(lesionId: string, segmentIndex = 1): TMTVLesionState | null {
@@ -198,9 +247,12 @@ class TMTVLesionService {
 
   public reset(segmentationIds?: string[]): void {
     if (segmentationIds?.length) {
-      this.stateByGroupId.delete(this.getGroupId(segmentationIds));
+      const groupId = this.getGroupId(segmentationIds);
+      this.stateByGroupId.delete(groupId);
+      this.lesionMetaByGroupId.delete(groupId);
     } else {
       this.stateByGroupId.clear();
+      this.lesionMetaByGroupId.clear();
     }
 
     this.notify();
@@ -258,6 +310,9 @@ class TMTVLesionService {
         tlg: stats.suvMean === null ? null : stats.suvMean * volume,
         centroid,
         centroidIJK,
+        status: 'candidate',
+        createdBy: 'threshold',
+        modified: false,
       };
     });
   }
@@ -284,25 +339,16 @@ class TMTVLesionService {
         ...lesion,
         lesionNumber: index + 1,
       }));
-    const totalTMTV = lesions.reduce((sum, lesion) => sum + lesion.volume, 0);
-    const hasTLG = lesions.some(lesion => lesion.tlg !== null);
-    const totalTLG = lesions.reduce(
-      (sum, lesion) => (lesion.tlg === null ? sum : sum + lesion.tlg),
-      0
-    );
     const selectedLesionId = state.selectedLesionId === lesionId ? null : state.selectedLesionId;
     const nextState = {
       ...state,
       selectedLesionId,
       lesions,
-      totals: {
-        tmtv: totalTMTV,
-        // [2026-08-25 功能] 删除最后一个 lesion 后总 TLG 清零，和 TMTV=0 保持一致
-        tlg: lesions.length ? (hasTLG ? totalTLG : null) : 0,
-      },
+      totals: computeConfirmedTotals(lesions),
       updatedAt: Date.now(),
     };
 
+    this.lesionMetaByGroupId.set(groupId, this.createMetaMap(lesions));
     this.selectedLesionIdByGroupId.set(groupId, selectedLesionId);
     this.stateByGroupId.set(groupId, nextState);
     this.notify();
@@ -327,6 +373,61 @@ class TMTVLesionService {
   private notify(): void {
     this.listeners.forEach(listener => listener());
   }
+
+  private createMetaMap(lesions: TMTVLesion[]): Map<string, TMTVLesionMeta> {
+    return new Map(
+      lesions.map(lesion => [
+        getLesionIdentityKey(lesion),
+        {
+          status: lesion.status,
+          createdBy: lesion.createdBy,
+          modified: lesion.modified,
+        },
+      ])
+    );
+  }
+}
+
+function computeConfirmedTotals(lesions: TMTVLesion[]): TMTVLesionState['totals'] {
+  // [2026-08-25 功能] 第一阶段重新定义 Total：只统计医生确认的 confirmed lesions
+  const confirmedLesions = lesions.filter(lesion => lesion.status === 'confirmed');
+  const tmtv = confirmedLesions.reduce((sum, lesion) => sum + lesion.volume, 0);
+  const hasTLG = confirmedLesions.some(lesion => lesion.tlg !== null);
+  const tlg = confirmedLesions.reduce(
+    (sum, lesion) => (lesion.tlg === null ? sum : sum + lesion.tlg),
+    0
+  );
+
+  return {
+    tmtv,
+    tlg: confirmedLesions.length ? (hasTLG ? tlg : null) : 0,
+  };
+}
+
+function getLesionIdentityKey(lesion: TMTVLesion): string {
+  // [2026-08-25 功能] 第二阶段用几何身份判断 lesion 是否被 Brush/Eraser 改变；避免删除前序病灶后因重新编号丢失状态
+  const { min, max } = lesion.boundsIJK;
+
+  return [
+    lesion.segmentationId,
+    lesion.segmentIndex,
+    lesion.voxelCount,
+    getVoxelIndicesHash(lesion.voxelIndices),
+    min.join(':'),
+    max.join(':'),
+  ].join('|');
+}
+
+function getVoxelIndicesHash(voxelIndices: number[]): string {
+  // [2026-08-25 功能] 第二阶段用轻量 hash 捕捉包围盒不变但内部 voxel 被 Brush/Eraser 改动的情况
+  let hash = 2166136261;
+
+  voxelIndices.forEach(voxelIndex => {
+    hash ^= voxelIndex;
+    hash = Math.imul(hash, 16777619);
+  });
+
+  return (hash >>> 0).toString(36);
 }
 
 function getScalarData(volume): NumericArray | null {
