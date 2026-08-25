@@ -402,6 +402,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
           value: {
             status: lesion.status,
             volume: lesion.volume.toFixed(4),
+            suvMin: lesion.suvMin?.toFixed(4) ?? '',
             suvMax: lesion.suvMax?.toFixed(4) ?? '',
             suvMean: lesion.suvMean?.toFixed(4) ?? '',
             tlg: lesion.tlg?.toFixed(4) ?? '',

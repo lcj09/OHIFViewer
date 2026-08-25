@@ -91,6 +91,7 @@ export default function createAndDownloadTMTVReport(segReport, additionalReportR
     Object.keys(values).forEach(k => {
       const kMap = {
         count: '数量',
+        suvMin: 'SUVmin',
         suvMax: 'SUVmax',
         suvMean: 'SUVmean',
         tmtv: 'TMTV',

@@ -1,10 +1,14 @@
-import { cache } from '@cornerstonejs/core';
 import * as csTools from '@cornerstonejs/tools';
 import extractConnectedComponents from '../utils/extractConnectedComponents';
+import {
+  computeLesionStatisticsForComponent,
+  computePatientTotals,
+  getCachedVolume,
+  getDimensions,
+  getScalarData,
+} from './TMTVStatisticsService';
 
 const { SegmentationRepresentations } = csTools.Enums;
-
-type NumericArray = ArrayLike<number>;
 
 export type TMTVLesionStatus = 'candidate' | 'confirmed' | 'rejected';
 export type TMTVLesionCreatedBy = 'threshold' | 'brush' | 'manual';
@@ -22,6 +26,7 @@ export type TMTVLesion = {
     max: [number, number, number];
   };
   volume: number;
+  suvMin: number | null;
   suvMax: number | null;
   suvMean: number | null;
   tlg: number | null;
@@ -278,10 +283,6 @@ class TMTVLesionService {
       return [];
     }
 
-    const referenceVolume = getReferenceVolume(segmentationVolumeId);
-    const suvScalarData = getScalarData(referenceVolume);
-    const spacing = getSpacing(referenceVolume) ?? getSpacing(segmentationVolume);
-    const voxelVolume = getVoxelVolumeInML(spacing);
     const components = extractConnectedComponents({
       scalarData: labelmapScalarData,
       dimensions,
@@ -289,12 +290,13 @@ class TMTVLesionService {
     });
 
     return components.map((component, componentIndex) => {
-      // [2026-08-24 功能] 对单个 lesion 计算 Volume、SUVmax、SUVmean、TLG、中心点和包围盒
-      const stats = computeSUVStats(component.voxelIndices, suvScalarData);
-      const volume = component.voxelIndices.length * voxelVolume;
-      const centroidIJK = computeCentroidIJK(component.voxelIndices, dimensions);
-      const boundsIJK = computeBoundsIJK(component.voxelIndices, dimensions);
-      const centroid = transformIndexToWorld(referenceVolume ?? segmentationVolume, centroidIJK);
+      // [2026-08-25 功能] 第三阶段病灶统计统一委托给 TMTVStatisticsService，LesionService 只负责生命周期和列表状态
+      const stats = computeLesionStatisticsForComponent({
+        voxelIndices: component.voxelIndices,
+        dimensions,
+        segmentationVolume,
+        segmentationVolumeId,
+      });
 
       return {
         id: `${segmentationId}:${segmentIndex}:${componentIndex + 1}`,
@@ -303,13 +305,14 @@ class TMTVLesionService {
         segmentIndex,
         voxelIndices: component.voxelIndices,
         voxelCount: component.voxelIndices.length,
-        boundsIJK,
-        volume,
+        boundsIJK: stats.boundsIJK,
+        volume: stats.volume,
+        suvMin: stats.suvMin,
         suvMax: stats.suvMax,
         suvMean: stats.suvMean,
-        tlg: stats.suvMean === null ? null : stats.suvMean * volume,
-        centroid,
-        centroidIJK,
+        tlg: stats.tlg,
+        centroid: stats.centroid,
+        centroidIJK: stats.centroidIJK,
         status: 'candidate',
         createdBy: 'threshold',
         modified: false,
@@ -389,19 +392,8 @@ class TMTVLesionService {
 }
 
 function computeConfirmedTotals(lesions: TMTVLesion[]): TMTVLesionState['totals'] {
-  // [2026-08-25 功能] 第一阶段重新定义 Total：只统计医生确认的 confirmed lesions
-  const confirmedLesions = lesions.filter(lesion => lesion.status === 'confirmed');
-  const tmtv = confirmedLesions.reduce((sum, lesion) => sum + lesion.volume, 0);
-  const hasTLG = confirmedLesions.some(lesion => lesion.tlg !== null);
-  const tlg = confirmedLesions.reduce(
-    (sum, lesion) => (lesion.tlg === null ? sum : sum + lesion.tlg),
-    0
-  );
-
-  return {
-    tmtv,
-    tlg: confirmedLesions.length ? (hasTLG ? tlg : null) : 0,
-  };
+  // [2026-08-25 功能] 第三阶段患者级 TMTV/TLG 由统计服务统一计算，只纳入 confirmed lesions
+  return computePatientTotals(lesions);
 }
 
 function getLesionIdentityKey(lesion: TMTVLesion): string {
@@ -430,160 +422,18 @@ function getVoxelIndicesHash(voxelIndices: number[]): string {
   return (hash >>> 0).toString(36);
 }
 
-function getScalarData(volume): NumericArray | null {
-  return (
-    volume?.voxelManager?.getCompleteScalarDataArray?.() ??
-    volume?.voxelManager?.getScalarData?.() ??
-    volume?.scalarData ??
-    null
-  );
-}
-
-function setScalarValue(volume, scalarData: NumericArray, voxelIndex: number, value: number): void {
+function setScalarValue(
+  volume,
+  scalarData: ArrayLike<number>,
+  voxelIndex: number,
+  value: number
+): void {
   if (volume?.voxelManager?.setAtIndex) {
     volume.voxelManager.setAtIndex(voxelIndex, value);
     return;
   }
 
   (scalarData as number[])[voxelIndex] = value;
-}
-
-function getCachedVolume(volumeId: string) {
-  try {
-    return cache.getVolume(volumeId);
-  } catch (error) {
-    return null;
-  }
-}
-
-function getDimensions(volume): [number, number, number] | null {
-  const dimensions = volume?.dimensions ?? volume?.imageData?.getDimensions?.();
-
-  if (!dimensions || dimensions.length < 3) {
-    return null;
-  }
-
-  return [dimensions[0], dimensions[1], dimensions[2]];
-}
-
-function getSpacing(volume): [number, number, number] | null {
-  const spacing = volume?.spacing ?? volume?.imageData?.getSpacing?.();
-
-  if (!spacing || spacing.length < 3) {
-    return null;
-  }
-
-  return [spacing[0], spacing[1], spacing[2]];
-}
-
-function getVoxelVolumeInML(spacing: [number, number, number] | null): number {
-  if (!spacing) {
-    return 0;
-  }
-
-  return Math.abs(spacing[0] * spacing[1] * spacing[2]) / 1000;
-}
-
-function getReferenceVolume(segmentationVolumeId: string) {
-  try {
-    return csTools.utilities.segmentation.getReferenceVolumeForSegmentationVolume(
-      segmentationVolumeId
-    );
-  } catch (error) {
-    return null;
-  }
-}
-
-function computeSUVStats(voxelIndices: number[], scalarData: NumericArray | null) {
-  if (!scalarData) {
-    return {
-      suvMax: null,
-      suvMean: null,
-    };
-  }
-
-  let max = -Infinity;
-  let sum = 0;
-  let count = 0;
-
-  voxelIndices.forEach(voxelIndex => {
-    const value = scalarData[voxelIndex];
-
-    if (typeof value !== 'number' || Number.isNaN(value)) {
-      return;
-    }
-
-    if (value > max) {
-      max = value;
-    }
-
-    sum += value;
-    count++;
-  });
-
-  if (!count) {
-    return {
-      suvMax: null,
-      suvMean: null,
-    };
-  }
-
-  return {
-    suvMax: max,
-    suvMean: sum / count,
-  };
-}
-
-function computeCentroidIJK(
-  voxelIndices: number[],
-  dimensions: [number, number, number]
-): [number, number, number] {
-  const [dimX, dimY] = dimensions;
-  const sliceSize = dimX * dimY;
-  let sumX = 0;
-  let sumY = 0;
-  let sumZ = 0;
-
-  voxelIndices.forEach(voxelIndex => {
-    const z = Math.floor(voxelIndex / sliceSize);
-    const remainder = voxelIndex - z * sliceSize;
-    const y = Math.floor(remainder / dimX);
-    const x = remainder - y * dimX;
-
-    sumX += x;
-    sumY += y;
-    sumZ += z;
-  });
-
-  const count = voxelIndices.length || 1;
-
-  return [sumX / count, sumY / count, sumZ / count];
-}
-
-function computeBoundsIJK(
-  voxelIndices: number[],
-  dimensions: [number, number, number]
-): { min: [number, number, number]; max: [number, number, number] } {
-  const [dimX, dimY] = dimensions;
-  const sliceSize = dimX * dimY;
-  const min: [number, number, number] = [Infinity, Infinity, Infinity];
-  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
-
-  voxelIndices.forEach(voxelIndex => {
-    const z = Math.floor(voxelIndex / sliceSize);
-    const remainder = voxelIndex - z * sliceSize;
-    const y = Math.floor(remainder / dimX);
-    const x = remainder - y * dimX;
-
-    min[0] = Math.min(min[0], x);
-    min[1] = Math.min(min[1], y);
-    min[2] = Math.min(min[2], z);
-    max[0] = Math.max(max[0], x);
-    max[1] = Math.max(max[1], y);
-    max[2] = Math.max(max[2], z);
-  });
-
-  return { min, max };
 }
 
 function getModifiedSlices(
@@ -596,36 +446,6 @@ function getModifiedSlices(
 
   const sliceSize = dimensions[0] * dimensions[1];
   return Array.from(new Set(voxelIndices.map(voxelIndex => Math.floor(voxelIndex / sliceSize))));
-}
-
-function transformIndexToWorld(volume, ijk: [number, number, number]): [number, number, number] {
-  const imageData = volume?.imageData;
-
-  if (imageData?.indexToWorld) {
-    return imageData.indexToWorld(ijk);
-  }
-
-  const origin = volume?.origin ?? imageData?.getOrigin?.() ?? [0, 0, 0];
-  const spacing = getSpacing(volume) ?? [1, 1, 1];
-  const direction = volume?.direction ?? imageData?.getDirection?.();
-
-  if (!direction || direction.length < 9) {
-    return [
-      origin[0] + ijk[0] * spacing[0],
-      origin[1] + ijk[1] * spacing[1],
-      origin[2] + ijk[2] * spacing[2],
-    ];
-  }
-
-  const scaledI = ijk[0] * spacing[0];
-  const scaledJ = ijk[1] * spacing[1];
-  const scaledK = ijk[2] * spacing[2];
-
-  return [
-    origin[0] + direction[0] * scaledI + direction[3] * scaledJ + direction[6] * scaledK,
-    origin[1] + direction[1] * scaledI + direction[4] * scaledJ + direction[7] * scaledK,
-    origin[2] + direction[2] * scaledI + direction[5] * scaledJ + direction[8] * scaledK,
-  ];
 }
 
 const tmtvLesionService = new TMTVLesionService();

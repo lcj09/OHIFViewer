@@ -357,6 +357,10 @@ export default function PanelRoiThresholdSegmentation() {
                   </span>
                   <span className="text-foreground text-right">{formatStat(lesion.suvMax)}</span>
                   <span className="text-muted-foreground">
+                    {t('SUVmin', { defaultValue: 'SUVmin' })}
+                  </span>
+                  <span className="text-foreground text-right">{formatStat(lesion.suvMin)}</span>
+                  <span className="text-muted-foreground">
                     {t('SUVmean', { defaultValue: 'SUVmean' })}
                   </span>
                   <span className="text-foreground text-right">{formatStat(lesion.suvMean)}</span>
