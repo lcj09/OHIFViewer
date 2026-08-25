@@ -86,7 +86,7 @@ export function createTMTVReportSections({
       ],
       rows: lesions.map(lesion => [
         `Lesion ${lesion.lesionNumber}`,
-        lesion.status,
+        getLesionStatusLabel(lesion.status),
         formatNumber(lesion.volume),
         formatNumber(lesion.suvMin),
         formatNumber(lesion.suvMax),
@@ -111,6 +111,19 @@ export function createTMTVReportSections({
   }
 
   return sections;
+}
+
+function getLesionStatusLabel(status: TMTVLesion['status']): string {
+  // [2026-08-25 功能] CSV 报告中将 lesion 状态从内部枚举值转换为中文，便于临床阅读
+  if (status === 'confirmed') {
+    return '已确认';
+  }
+
+  if (status === 'rejected') {
+    return '已拒绝';
+  }
+
+  return '候选';
 }
 
 function getReportValue(report, ...keys: string[]): string {

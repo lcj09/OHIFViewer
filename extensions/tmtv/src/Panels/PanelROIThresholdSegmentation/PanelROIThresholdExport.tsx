@@ -9,6 +9,7 @@ import tmtvLesionService from '../../services/TMTVLesionService';
 import tmtvLesionHighlightService from '../../services/TMTVLesionHighlightService';
 
 const SEGMENT_INDEX = 1;
+const LESION_FILTERS = ['all', 'confirmed', 'candidate', 'rejected'];
 
 function formatStat(value: number | null | undefined, digits = 3) {
   return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '';
@@ -34,6 +35,8 @@ export default function PanelRoiThresholdSegmentation() {
     [segmentationsInfo]
   );
   const [lesionState, setLesionState] = useState(() => tmtvLesionService.getState(segmentationIds));
+  const [lesionFilter, setLesionFilter] = useState('all');
+  const [exportConfirmedOnly, setExportConfirmedOnly] = useState(true);
 
   const refreshTMTVAndLesions = useCallback(
     async (segmentationId?: string) => {
@@ -145,7 +148,15 @@ export default function PanelRoiThresholdSegmentation() {
   const lesionCount = lesionState.lesions.length;
   const selectedLesionId = lesionState.selectedLesionId;
   const confirmedCount = lesionState.lesions.filter(lesion => lesion.status === 'confirmed').length;
+  const candidateCount = lesionState.lesions.filter(lesion => lesion.status === 'candidate').length;
   const rejectedCount = lesionState.lesions.filter(lesion => lesion.status === 'rejected').length;
+  const filteredLesions = useMemo(
+    () =>
+      lesionFilter === 'all'
+        ? lesionState.lesions
+        : lesionState.lesions.filter(lesion => lesion.status === lesionFilter),
+    [lesionFilter, lesionState.lesions]
+  );
 
   const handleSelectLesion = lesionId => {
     // [2026-08-25 功能] 点击 lesion 后只触发右侧选中和图像高亮，不执行视图定位
@@ -197,7 +208,9 @@ export default function PanelRoiThresholdSegmentation() {
     commandsManager.runCommand('exportTMTVReportCSV', {
       segmentations,
       tmtv: tmtvValue,
-      lesions: lesionState.lesions,
+      lesions: exportConfirmedOnly
+        ? lesionState.lesions.filter(lesion => lesion.status === 'confirmed')
+        : lesionState.lesions,
       lesionTotals: lesionState.totals,
       config: {},
     });
@@ -215,6 +228,38 @@ export default function PanelRoiThresholdSegmentation() {
     return t('Candidate', { defaultValue: 'Candidate' });
   };
 
+  const getFilterLabel = filter => {
+    if (filter === 'all') {
+      return t('All', { defaultValue: 'All' });
+    }
+
+    if (filter === 'confirmed') {
+      return t('Confirmed', { defaultValue: 'Confirmed' });
+    }
+
+    if (filter === 'rejected') {
+      return t('Rejected', { defaultValue: 'Rejected' });
+    }
+
+    return t('Candidate', { defaultValue: 'Candidate' });
+  };
+
+  const getFilterCount = filter => {
+    if (filter === 'confirmed') {
+      return confirmedCount;
+    }
+
+    if (filter === 'candidate') {
+      return candidateCount;
+    }
+
+    if (filter === 'rejected') {
+      return rejectedCount;
+    }
+
+    return lesionCount;
+  };
+
   return (
     <div className="mb-2 flex min-h-0 flex-col">
       {/* [2026-08-25 功能] 右侧 lesion 区域限制高度并显示滚动条，避免遮挡下方分割工具 */}
@@ -228,7 +273,16 @@ export default function PanelRoiThresholdSegmentation() {
             </span>
             <span className="text-foreground">{formatStat(tlgValue)}</span>
           </div>
-          <div className="flex items-center">
+          <div className="flex items-center gap-2">
+            <label className="text-muted-foreground flex cursor-pointer items-center gap-1 text-[11px]">
+              <input
+                type="checkbox"
+                className="accent-primary h-3 w-3"
+                checked={exportConfirmedOnly}
+                onChange={event => setExportConfirmedOnly(event.target.checked)}
+              />
+              <span>{t('Export confirmed only', { defaultValue: 'Export confirmed only' })}</span>
+            </label>
             <Button
               dataCY="exportTmtvCsvReport"
               size="sm"
@@ -244,8 +298,28 @@ export default function PanelRoiThresholdSegmentation() {
             <span>{t('Lesions', { defaultValue: 'Lesions' })}</span>
             <span>{lesionCount}</span>
             <span>{`${t('Confirmed', { defaultValue: 'Confirmed' })} ${confirmedCount}`}</span>
+            <span>{`${t('Candidate', { defaultValue: 'Candidate' })} ${candidateCount}`}</span>
             <span>{`${t('Rejected', { defaultValue: 'Rejected' })} ${rejectedCount}`}</span>
           </div>
+        </div>
+        <div className="border-border flex flex-shrink-0 flex-wrap gap-1 border-t px-2 py-1">
+          {/* [2026-08-25 功能] Lesion 过滤仅改变右侧展示，不触发重新分割或统计，避免额外性能开销 */}
+          {LESION_FILTERS.map(filter => {
+            const isActive = lesionFilter === filter;
+
+            return (
+              <button
+                key={filter}
+                type="button"
+                className={`rounded px-2 py-0.5 text-[11px] ${
+                  isActive ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
+                }`}
+                onClick={() => setLesionFilter(filter)}
+              >
+                {`${getFilterLabel(filter)} ${getFilterCount(filter)}`}
+              </button>
+            );
+          })}
         </div>
         <div className="ohif-scrollbar ohif-scrollbar-stable-gutter min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-2 py-2">
           {!lesionCount && (
@@ -255,7 +329,14 @@ export default function PanelRoiThresholdSegmentation() {
               })}
             </div>
           )}
-          {lesionState.lesions.map(lesion => {
+          {!!lesionCount && !filteredLesions.length && (
+            <div className="text-muted-foreground py-2 text-sm">
+              {t('No lesions match the current filter.', {
+                defaultValue: 'No lesions match the current filter.',
+              })}
+            </div>
+          )}
+          {filteredLesions.map(lesion => {
             const isSelected = lesion.id === selectedLesionId;
             const isConfirmed = lesion.status === 'confirmed';
             const isRejected = lesion.status === 'rejected';

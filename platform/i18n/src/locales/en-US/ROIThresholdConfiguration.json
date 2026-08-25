@@ -10,6 +10,7 @@
   "ThresholdRange": "Threshold Range",
   "Lesions": "Lesions",
   "Lesion": "Lesion",
+  "All": "All",
   "Candidate": "Candidate",
   "Confirmed": "Confirmed",
   "Rejected": "Rejected",
@@ -23,8 +24,10 @@
   "SUVmin": "SUVmin",
   "SUVmean": "SUVmean",
   "TLG": "TLG",
+  "Export confirmed only": "Export confirmed only",
   "Selected Lesion Highlight": "Selected Lesion Highlight",
   "Selected Lesion": "Selected Lesion",
   "No Segment 1 lesions found.": "No Segment 1 lesions found.",
+  "No lesions match the current filter.": "No lesions match the current filter.",
   "Delete rejected lesion confirmation": "Delete this rejected lesion from Segment 1? This cannot be restored."
 }
