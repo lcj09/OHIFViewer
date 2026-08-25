@@ -14,6 +14,7 @@ import { utils } from '@ohif/core';
 import tmtvCrosshairService from './services/TMTVCrosshairService';
 import crosshairDisplayService from './services/CrosshairDisplayService';
 import tmtvLesionService from './services/TMTVLesionService';
+import tmtvLesionHighlightService from './services/TMTVLesionHighlightService';
 import { toolGroupIds } from '../../../modes/tmtv/src/initToolGroups';
 
 const { SegmentationRepresentations } = Enums;
@@ -49,6 +50,8 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
   // [2026-08-10 修复同步器干扰] 注入 servicesManager 到 TMTVCrosshairService
   // 旋转期间需通过 syncGroupService 临时禁用 cameraPosition 同步器
   tmtvCrosshairService.setServicesManager(servicesManager);
+  // [2026-08-25 功能] 注入服务用于 lesion 选中高亮，保持高亮层与真实 Segment 1 分离
+  tmtvLesionHighlightService.init(servicesManager);
 
   function _getActiveViewportsEnabledElement() {
     const { activeViewportId } = viewportGridService.getState();
@@ -319,6 +322,35 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       segmentationService.setSegmentationGroupStats(segmentationIds, stats);
       return stats;
     },
+    selectTMTVLesion: async ({ segmentationIds, lesionId }) => {
+      // [2026-08-25 功能] 单击 lesion 只更新右侧 selected 状态和独立高亮层，不移动 viewport/crosshair
+      const lesion = tmtvLesionService.selectLesion(segmentationIds, lesionId);
+
+      await tmtvLesionHighlightService.highlightLesion(segmentationIds, lesion);
+
+      const activeViewportId = viewportGridService.getActiveViewportId?.();
+      if (activeViewportId) {
+        toolbarService.refreshToolbarState?.({ viewportId: activeViewportId });
+      }
+    },
+    deleteTMTVLesion: ({ segmentationIds = [], lesionId }) => {
+      // [2026-08-24 功能] 删除病灶后使用增量 totals，避免立即触发全量 TMTV/lesion 重算造成卡顿
+      const previousLesionState = tmtvLesionService.getState(segmentationIds);
+      const shouldClearHighlight = previousLesionState.selectedLesionId === lesionId;
+      const lesionState = tmtvLesionService.deleteLesion(lesionId, 1);
+
+      if (lesionState) {
+        if (shouldClearHighlight) {
+          // [2026-08-25 功能] 删除当前选中的 lesion 时同步清空独立高亮 mask，避免残留视觉层
+          tmtvLesionHighlightService.clearHighlight(lesionState.segmentationIds);
+        }
+
+        segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
+          tmtv: lesionState.totals.tmtv,
+          tlg: lesionState.totals.tlg,
+        });
+      }
+    },
     exportTMTVReportCSV: async ({
       segmentations,
       tmtv,
@@ -333,6 +365,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
 
       const segmentationIds = segmentations.map(segmentation => segmentation.segmentationId);
       const lesionState = tmtvLesionService.getState(segmentationIds);
+      // [2026-08-24 功能] CSV 导出追加 lesion 数量和逐病灶统计，和右侧 lesion 面板保持一致
       const reportLesions = lesions ?? lesionState.lesions;
       const reportLesionTotals = lesionTotals ?? lesionState.totals;
       let total_tlg = reportLesionTotals?.tlg;
@@ -972,6 +1005,12 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     calculateTMTV: {
       commandFn: actions.calculateTMTV,
+    },
+    selectTMTVLesion: {
+      commandFn: actions.selectTMTVLesion,
+    },
+    deleteTMTVLesion: {
+      commandFn: actions.deleteTMTVLesion,
     },
     exportTMTVReportCSV: {
       commandFn: actions.exportTMTVReportCSV,
