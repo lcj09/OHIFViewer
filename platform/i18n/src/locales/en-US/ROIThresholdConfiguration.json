@@ -18,6 +18,9 @@
   "Reject": "Reject",
   "Restore": "Restore",
   "Delete": "Delete",
+  "Merge selected lesions": "Merge selected lesions",
+  "Select for merge": "Select for merge",
+  "Merged": "Merged",
   "Edited": "Edited",
   "Volume": "Volume",
   "SUVmax": "SUVmax",
@@ -27,7 +30,10 @@
   "Export confirmed only": "Export confirmed only",
   "Selected Lesion Highlight": "Selected Lesion Highlight",
   "Selected Lesion": "Selected Lesion",
+  "Segment 1 advanced data": "Segment 1 / Advanced Data",
   "No Segment 1 lesions found.": "No Segment 1 lesions found.",
+  "Restore local segmentation": "Restore local segmentation",
+  "Restoring local segmentation": "Restoring local segmentation...",
   "No lesions match the current filter.": "No lesions match the current filter.",
   "Delete rejected lesion confirmation": "Delete this rejected lesion from Segment 1? This cannot be restored."
 }

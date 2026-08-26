@@ -1,14 +1,27 @@
 import React from 'react';
 import { PanelSegmentation } from '@ohif/extension-cornerstone';
+import { PanelSection } from '@ohif/ui-next';
+import { useTranslation } from 'react-i18next';
 import PanelROIThresholdExport from './PanelROIThresholdSegmentation/PanelROIThresholdExport';
 
 export default function PanelTMTV({ configuration }: withAppTypes) {
+  const { t } = useTranslation('ROIThresholdConfiguration');
+
   return (
-    // [2026-08-25 功能] TMTV 右侧面板增加外层滚动容器，避免 lesion 列表展开后遮挡分割工具区
-    <div className="ohif-scrollbar ohif-scrollbar-stable-gutter flex h-full min-h-0 flex-col overflow-y-auto overflow-x-hidden pr-1">
-      <PanelSegmentation configuration={configuration}>
-        <PanelROIThresholdExport />
-      </PanelSegmentation>
+    // [2026-08-26 功能] 商业软件式 TMTV 布局：Lesion 管理独立作为主区域，底层 Segmentation 表默认折叠为高级数据区
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden pr-1">
+      <PanelROIThresholdExport />
+      <PanelSection
+        defaultOpen={false}
+        className="flex-shrink-0"
+      >
+        <PanelSection.Header>
+          <span>{t('Segment 1 advanced data', { defaultValue: 'Segment 1 / Advanced Data' })}</span>
+        </PanelSection.Header>
+        <PanelSection.Content>
+          <PanelSegmentation configuration={configuration} />
+        </PanelSection.Content>
+      </PanelSection>
     </div>
   );
 }

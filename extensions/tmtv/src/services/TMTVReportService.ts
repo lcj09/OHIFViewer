@@ -85,7 +85,7 @@ export function createTMTVReportSections({
         'Edited',
       ],
       rows: lesions.map(lesion => [
-        `Lesion ${lesion.lesionNumber}`,
+        `Lesion ${lesion.displayIndex ?? lesion.lesionNumber}`,
         getLesionStatusLabel(lesion.status),
         formatNumber(lesion.volume),
         formatNumber(lesion.suvMin),
@@ -96,8 +96,8 @@ export function createTMTVReportSections({
         formatNumber(lesion.centroid?.[1]),
         formatNumber(lesion.centroid?.[2]),
         formatBounds(lesion.boundsIJK),
-        lesion.createdBy,
-        lesion.modified ? 'yes' : 'no',
+        getCreatedByLabel(lesion.createdBy),
+        lesion.modified ? '是' : '否',
       ]),
     },
   ];
@@ -124,6 +124,19 @@ function getLesionStatusLabel(status: TMTVLesion['status']): string {
   }
 
   return '候选';
+}
+
+function getCreatedByLabel(createdBy: TMTVLesion['createdBy']): string {
+  // [2026-08-26 功能] CSV 报告中将 lesion 来源转换为中文，便于区分阈值生成、画笔编辑和手工新增
+  if (createdBy === 'manual') {
+    return '手工添加';
+  }
+
+  if (createdBy === 'brush') {
+    return '画笔编辑';
+  }
+
+  return '阈值生成';
 }
 
 function getReportValue(report, ...keys: string[]): string {

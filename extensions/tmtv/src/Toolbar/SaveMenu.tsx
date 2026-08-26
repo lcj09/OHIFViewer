@@ -2,7 +2,10 @@ import React, { useState, useCallback } from 'react';
 import PropTypes from 'prop-types';
 import html2canvas from 'html2canvas';
 import { classes } from '@ohif/core';
-import { getEnabledElement as csGetEnabledElement, utilities as csUtils } from '@cornerstonejs/core';
+import {
+  getEnabledElement as csGetEnabledElement,
+  utilities as csUtils,
+} from '@cornerstonejs/core';
 import {
   Popover,
   PopoverTrigger,
@@ -95,7 +98,11 @@ function SaveMenu({ commandsManager, servicesManager, ...props }) {
    * @param metadata - DICOM元数据对象
    * @param sliceIndex - 当前切片索引（从0开始）
    */
-  const uploadSingleImage = async (wrapperElement: HTMLElement, metadata: ReturnType<typeof getActiveViewportMetadata>, sliceIndex: number) => {
+  const uploadSingleImage = async (
+    wrapperElement: HTMLElement,
+    metadata: ReturnType<typeof getActiveViewportMetadata>,
+    sliceIndex: number
+  ) => {
     // 使用html2canvas截取视口DOM（包含Canvas图像 + SVG标注 + React覆盖层）
     const canvas = await html2canvas(wrapperElement as HTMLElement, {
       useCORS: true,
@@ -283,7 +290,11 @@ function SaveMenu({ commandsManager, servicesManager, ...props }) {
 
   // SaveMenu 容器：gap-[12px] 控制撤销/重做/保存按钮组间距，按钮与文字作为整体
   return (
-    <div id="SaveMenu" data-cy="SaveMenu" className="flex items-center gap-[12px]">
+    <div
+      id="SaveMenu"
+      data-cy="SaveMenu"
+      className="flex items-center gap-[12px]"
+    >
       {/* ========== 撤销/重做功能按钮（2026-06-16 添加）========== */}
       {/* 撤销按钮：回退上一步标注操作 */}
       <Tooltip>
@@ -292,13 +303,13 @@ function SaveMenu({ commandsManager, servicesManager, ...props }) {
             <Button
               variant="ghost"
               size="icon"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-foreground/80 hover:bg-background hover:text-highlight"
+              className="text-foreground/80 hover:bg-background hover:text-highlight inline-flex h-10 w-10 items-center justify-center rounded-lg"
               aria-label="撤销"
               onClick={() => commandsManager.run('undo')}
             >
               <Icons.Undo className="h-6 w-6" />
             </Button>
-            <span className="text-[12px] leading-tight text-white whitespace-nowrap">撤销</span>
+            <span className="whitespace-nowrap text-[12px] leading-tight text-white">撤销</span>
           </div>
         </TooltipTrigger>
         <TooltipContent side="bottom">
@@ -313,13 +324,13 @@ function SaveMenu({ commandsManager, servicesManager, ...props }) {
             <Button
               variant="ghost"
               size="icon"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-foreground/80 hover:bg-background hover:text-highlight"
+              className="text-foreground/80 hover:bg-background hover:text-highlight inline-flex h-10 w-10 items-center justify-center rounded-lg"
               aria-label="重做"
               onClick={() => commandsManager.run('redo')}
             >
               <Icons.Redo className="h-6 w-6" />
             </Button>
-            <span className="text-[12px] leading-tight text-white whitespace-nowrap">重做</span>
+            <span className="whitespace-nowrap text-[12px] leading-tight text-white">重做</span>
           </div>
         </TooltipTrigger>
         <TooltipContent side="bottom">
@@ -328,7 +339,10 @@ function SaveMenu({ commandsManager, servicesManager, ...props }) {
       </Tooltip>
 
       {/* 原有保存菜单按钮 */}
-      <Popover open={isMenuOpen} onOpenChange={setIsMenuOpen}>
+      <Popover
+        open={isMenuOpen}
+        onOpenChange={setIsMenuOpen}
+      >
         <Tooltip>
           <TooltipTrigger asChild>
             <PopoverTrigger asChild>
@@ -336,15 +350,18 @@ function SaveMenu({ commandsManager, servicesManager, ...props }) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={`inline-flex h-10 w-10 items-center justify-center rounded-lg text-foreground/80 hover:bg-background hover:text-highlight ${
-                    isUploading ? 'animate-pulse bg-primary/20 text-highlight' : ''
+                  className={`text-foreground/80 hover:bg-background hover:text-highlight inline-flex h-10 w-10 items-center justify-center rounded-lg ${
+                    isUploading ? 'bg-primary/20 text-highlight animate-pulse' : ''
                   }`}
                   aria-label="保存"
                   disabled={isUploading}
                 >
-                  <Icons.ByName name="tool-save" className="h-7 w-7" />
+                  <Icons.ByName
+                    name="tool-save"
+                    className="h-7 w-7"
+                  />
                 </Button>
-                <span className="text-[12px] leading-tight text-white whitespace-nowrap">保存</span>
+                <span className="whitespace-nowrap text-[12px] leading-tight text-white">保存</span>
               </div>
             </PopoverTrigger>
           </TooltipTrigger>
@@ -361,7 +378,7 @@ function SaveMenu({ commandsManager, servicesManager, ...props }) {
             {/* 图像：上传当前选中视口的单张图像 */}
             <Button
               variant="ghost"
-              className="flex h-8 w-full items-center justify-start px-2 py-1 text-sm text-common-bright hover:bg-primary-dark disabled:opacity-50"
+              className="text-common-bright hover:bg-primary-dark flex h-8 w-full items-center justify-start px-2 py-1 text-sm disabled:opacity-50"
               onClick={handleSaveImage}
               disabled={isUploading}
             >
@@ -370,7 +387,7 @@ function SaveMenu({ commandsManager, servicesManager, ...props }) {
             {/* 序列：遍历当前视口的所有切片并逐张上传 */}
             <Button
               variant="ghost"
-              className="flex h-8 w-full items-center justify-start px-2 py-1 text-sm text-common-bright hover:bg-primary-dark disabled:opacity-50"
+              className="text-common-bright hover:bg-primary-dark flex h-8 w-full items-center justify-start px-2 py-1 text-sm disabled:opacity-50"
               onClick={handleSaveSeries}
               disabled={isUploading}
             >

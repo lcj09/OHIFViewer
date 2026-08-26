@@ -8,14 +8,18 @@ import { Button, Icons, Tooltip, TooltipTrigger, TooltipContent } from '@ohif/ui
  */
 function UndoRedoButtons({ commandsManager, servicesManager, ...props }) {
   return (
-    <div id="UndoRedoButtons" data-cy="UndoRedoButtons" className="flex items-center gap-0">
+    <div
+      id="UndoRedoButtons"
+      data-cy="UndoRedoButtons"
+      className="flex items-center gap-0"
+    >
       {/* 撤销按钮 */}
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
             variant="ghost"
             size="icon"
-            className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-foreground/80 hover:bg-background hover:text-highlight"
+            className="text-foreground/80 hover:bg-background hover:text-highlight inline-flex h-10 w-10 items-center justify-center rounded-lg"
             aria-label="撤销"
             onClick={() => {
               commandsManager.run('undo');
@@ -33,7 +37,7 @@ function UndoRedoButtons({ commandsManager, servicesManager, ...props }) {
           <Button
             variant="ghost"
             size="icon"
-            className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-foreground/80 hover:bg-background hover:text-highlight"
+            className="text-foreground/80 hover:bg-background hover:text-highlight inline-flex h-10 w-10 items-center justify-center rounded-lg"
             aria-label="重做"
             onClick={() => {
               commandsManager.run('redo');

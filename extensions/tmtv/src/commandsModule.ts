@@ -5,7 +5,10 @@ import * as csTools from '@cornerstonejs/tools';
 import { classes } from '@ohif/core';
 import i18n from '@ohif/i18n';
 import getThresholdValues from './utils/getThresholdValue';
-import createAndDownloadTMTVReport from './utils/createAndDownloadTMTVReport';
+import createAndDownloadTMTVReport, {
+  createAndDownloadTMTVReportExcel,
+  openTMTVReportPrintWindow,
+} from './utils/createAndDownloadTMTVReport';
 
 import dicomRTAnnotationExport from './utils/dicomRTAnnotationExport/RTStructureSet';
 
@@ -15,7 +18,9 @@ import tmtvCrosshairService from './services/TMTVCrosshairService';
 import crosshairDisplayService from './services/CrosshairDisplayService';
 import tmtvLesionService from './services/TMTVLesionService';
 import tmtvLesionHighlightService from './services/TMTVLesionHighlightService';
+import tmtvSegmentMaskStorageService from './services/TMTVSegmentMaskStorageService';
 import { createTMTVReportSections } from './services/TMTVReportService';
+import { getDimensions } from './services/TMTVStatisticsService';
 import { toolGroupIds } from '../../../modes/tmtv/src/initToolGroups';
 
 const { SegmentationRepresentations } = Enums;
@@ -199,15 +204,16 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
 
       return metadata;
     },
-    createNewLabelmapFromPT: async ({ label }) => {
-      // Create a segmentation of the same resolution as the source data
-      // using volumeLoader.createAndCacheDerivedVolume.
-
+    hasPersistedTMTVSegmentMask: async () => {
+      // [2026-08-26 功能] 本地分割恢复：只检测当前 PT volume 是否存在可恢复 mask，不创建 segmentation、不影响 viewport
       const { viewportMatchDetails } = hangingProtocolService.getMatchDetails();
-
       const ptDisplaySet = actions.getMatchingPTDisplaySet({
         viewportMatchDetails,
       });
+
+      if (!ptDisplaySet) {
+        return false;
+      }
 
       let withPTViewportId = null;
 
@@ -223,9 +229,79 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         }
       }
 
+      if (!withPTViewportId) {
+        return false;
+      }
+
+      const ptViewport = cornerstoneViewportService.getCornerstoneViewport(withPTViewportId);
+      const ptVolumeId = _getPTVolumeId(ptViewport);
+      const ptVolume = ptVolumeId ? cs.cache.getVolume(ptVolumeId) : null;
+      const dimensions = getDimensions(ptVolume);
+
+      return (
+        !!ptVolume &&
+        !!dimensions &&
+        (await tmtvSegmentMaskStorageService.hasSegmentMaskForReferenceVolume({
+          referenceVolume: ptVolume,
+          segmentIndex: 1,
+          dimensions,
+        }))
+      );
+    },
+    createNewLabelmapFromPT: async ({
+      label = undefined,
+      restoreOnlyIfPersistedMask = false,
+    } = {}) => {
+      // Create a segmentation of the same resolution as the source data
+      // using volumeLoader.createAndCacheDerivedVolume.
+
+      const { viewportMatchDetails } = hangingProtocolService.getMatchDetails();
+
+      const ptDisplaySet = actions.getMatchingPTDisplaySet({
+        viewportMatchDetails,
+      });
+
       if (!ptDisplaySet) {
         uiNotificationService.error('No matching PT display set found');
         return;
+      }
+
+      let withPTViewportId = null;
+
+      for (const [viewportId, { displaySetsInfo }] of viewportMatchDetails.entries()) {
+        const isPT = displaySetsInfo.some(
+          ({ displaySetInstanceUID }) =>
+            displaySetInstanceUID === ptDisplaySet.displaySetInstanceUID
+        );
+
+        if (isPT) {
+          withPTViewportId = viewportId;
+          break;
+        }
+      }
+
+      if (!withPTViewportId) {
+        uiNotificationService.error('No viewport showing matching PT display set found');
+        return;
+      }
+
+      if (restoreOnlyIfPersistedMask) {
+        const ptViewport = cornerstoneViewportService.getCornerstoneViewport(withPTViewportId);
+        const ptVolumeId = _getPTVolumeId(ptViewport);
+        const ptVolume = ptVolumeId ? cs.cache.getVolume(ptVolumeId) : null;
+        const dimensions = getDimensions(ptVolume);
+        const hasPersistedMask =
+          !!ptVolume &&
+          !!dimensions &&
+          (await tmtvSegmentMaskStorageService.hasSegmentMaskForReferenceVolume({
+            referenceVolume: ptVolume,
+            segmentIndex: 1,
+            dimensions,
+          }));
+
+        if (!hasPersistedMask) {
+          return;
+        }
       }
 
       const currentSegmentations =
@@ -234,11 +310,12 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       const displaySet = displaySetService.getDisplaySetByUID(ptDisplaySet.displaySetInstanceUID);
 
       const segmentationId = await segmentationService.createLabelmapForDisplaySet(displaySet, {
-        label: `Segmentation ${currentSegmentations.length + 1}`,
+        label: label ?? `Segmentation ${currentSegmentations.length + 1}`,
         segments: { 1: { label: `${i18n.t('Segment')} 1`, active: true } },
       });
 
-      segmentationService.addSegmentationRepresentation(withPTViewportId, {
+      // [2026-08-26 功能] IndexedDB 稀疏保存/恢复 Segment 1 mask：等待空 labelmap representation 建立后再返回，保证后续可立即写回恢复 mask
+      await segmentationService.addSegmentationRepresentation(withPTViewportId, {
         segmentationId,
       });
 
@@ -363,6 +440,41 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         });
       }
     },
+    mergeTMTVLesions: ({ segmentationIds = [], lesionIds = [] }) => {
+      // [2026-08-26 功能] Merge Lesions：业务层合并多个 lesion/finding，不创建新 Segment、不修改 Segment 1 voxel
+      const lesionState = tmtvLesionService.mergeLesions(segmentationIds, lesionIds);
+
+      if (lesionState) {
+        segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
+          tmtv: lesionState.totals.tmtv,
+          tlg: lesionState.totals.tlg,
+        });
+      }
+    },
+    undoTMTVLesionEdit: () => {
+      // [2026-08-26 功能] TMTV 专用撤销命令，避免覆盖测量/标注等全局 undo 行为
+      const historyEntry = tmtvLesionService.undo();
+
+      if (historyEntry?.type === 'STATUS') {
+        const lesionState = tmtvLesionService.getState(historyEntry.segmentationIds);
+        segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
+          tmtv: lesionState.totals.tmtv,
+          tlg: lesionState.totals.tlg,
+        });
+      }
+    },
+    redoTMTVLesionEdit: () => {
+      // [2026-08-26 功能] TMTV 专用重做命令，避免覆盖测量/标注等全局 redo 行为
+      const historyEntry = tmtvLesionService.redo();
+
+      if (historyEntry?.type === 'STATUS') {
+        const lesionState = tmtvLesionService.getState(historyEntry.segmentationIds);
+        segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
+          tmtv: lesionState.totals.tmtv,
+          tlg: lesionState.totals.tlg,
+        });
+      }
+    },
     exportTMTVReportCSV: async ({
       segmentations,
       tmtv,
@@ -382,6 +494,70 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       const reportLesionTotals = lesionTotals ?? lesionState.totals;
 
       createAndDownloadTMTVReport(
+        segReport,
+        createTMTVReportSections({
+          segReport,
+          lesions: reportLesions,
+          lesionTotals: {
+            ...reportLesionTotals,
+            tmtv: tmtv ?? reportLesionTotals?.tmtv ?? 0,
+          },
+          config,
+        }),
+        options
+      );
+    },
+    exportTMTVReportExcel: async ({
+      segmentations,
+      tmtv,
+      lesions,
+      lesionTotals,
+      config,
+      options,
+    }) => {
+      const segReport = commandsManager.runCommand('getSegmentationCSVReport', {
+        segmentations,
+      });
+
+      const segmentationIds = segmentations.map(segmentation => segmentation.segmentationId);
+      const lesionState = tmtvLesionService.getState(segmentationIds);
+      const reportLesions = lesions ?? lesionState.lesions;
+      const reportLesionTotals = lesionTotals ?? lesionState.totals;
+
+      // [2026-08-26 功能] 本地 Excel 报告：复用同一份 TMTVReportService 数据，保证 Excel 与 CSV 统计口径一致
+      createAndDownloadTMTVReportExcel(
+        segReport,
+        createTMTVReportSections({
+          segReport,
+          lesions: reportLesions,
+          lesionTotals: {
+            ...reportLesionTotals,
+            tmtv: tmtv ?? reportLesionTotals?.tmtv ?? 0,
+          },
+          config,
+        }),
+        options
+      );
+    },
+    exportTMTVReportPDF: async ({
+      segmentations,
+      tmtv,
+      lesions,
+      lesionTotals,
+      config,
+      options,
+    }) => {
+      const segReport = commandsManager.runCommand('getSegmentationCSVReport', {
+        segmentations,
+      });
+
+      const segmentationIds = segmentations.map(segmentation => segmentation.segmentationId);
+      const lesionState = tmtvLesionService.getState(segmentationIds);
+      const reportLesions = lesions ?? lesionState.lesions;
+      const reportLesionTotals = lesionTotals ?? lesionState.totals;
+
+      // [2026-08-26 功能] 本地 PDF 报告：打开打印窗口并由浏览器另存为 PDF，不依赖服务端
+      openTMTVReportPrintWindow(
         segReport,
         createTMTVReportSections({
           segReport,
@@ -992,6 +1168,9 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     createNewLabelmapFromPT: {
       commandFn: actions.createNewLabelmapFromPT,
     },
+    hasPersistedTMTVSegmentMask: {
+      commandFn: actions.hasPersistedTMTVSegmentMask,
+    },
     thresholdSegmentationByRectangleROITool: {
       commandFn: actions.thresholdSegmentationByRectangleROITool,
     },
@@ -1007,8 +1186,23 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     setTMTVLesionStatus: {
       commandFn: actions.setTMTVLesionStatus,
     },
+    mergeTMTVLesions: {
+      commandFn: actions.mergeTMTVLesions,
+    },
+    undoTMTVLesionEdit: {
+      commandFn: actions.undoTMTVLesionEdit,
+    },
+    redoTMTVLesionEdit: {
+      commandFn: actions.redoTMTVLesionEdit,
+    },
     exportTMTVReportCSV: {
       commandFn: actions.exportTMTVReportCSV,
+    },
+    exportTMTVReportExcel: {
+      commandFn: actions.exportTMTVReportExcel,
+    },
+    exportTMTVReportPDF: {
+      commandFn: actions.exportTMTVReportPDF,
     },
     createTMTVRTReport: {
       commandFn: actions.createTMTVRTReport,

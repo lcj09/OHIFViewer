@@ -16,6 +16,16 @@ interface ToolboxProps {
    * The display title for the toolbox.
    */
   title: string;
+
+  /**
+   * [2026-08-26 功能] 右侧面板紧凑模式：为 TMTV Lesion 管理释放更多纵向空间。
+   */
+  compact?: boolean;
+
+  /**
+   * [2026-08-26 功能] 商业软件式工作流：允许工具抽屉默认折叠，把主空间留给业务面板。
+   */
+  defaultOpen?: boolean;
 }
 
 /**
@@ -28,7 +38,12 @@ interface ToolboxProps {
  * role in enhancing the app with a toolbox by providing a way to integrate
  * and display various tools and their corresponding options
  */
-export function Toolbox({ buttonSectionId, title }: ToolboxProps) {
+export function Toolbox({
+  buttonSectionId,
+  title,
+  compact = false,
+  defaultOpen = true,
+}: ToolboxProps) {
   const { servicesManager } = useSystem();
   const { t } = useTranslation();
 
@@ -60,7 +75,7 @@ export function Toolbox({ buttonSectionId, title }: ToolboxProps) {
   const CustomConfigComponent = customizationService.getCustomization(`${buttonSectionId}.config`);
 
   return (
-    <PanelSection>
+    <PanelSection defaultOpen={defaultOpen}>
       <PanelSection.Header className="flex items-center justify-between">
         <span>{t(title)}</span>
         {CustomConfigComponent && (
@@ -85,7 +100,7 @@ export function Toolbox({ buttonSectionId, title }: ToolboxProps) {
           return (
             <div
               key={sectionId}
-              className="bg-muted flex flex-wrap gap-2 py-2 px-1"
+              className={`bg-muted flex flex-wrap px-1 ${compact ? 'gap-1 py-1' : 'gap-2 py-2'}`}
             >
               {buttons.map(tool => {
                 // Skip over tools that are not visible. The visible flag is typically set to
@@ -113,7 +128,7 @@ export function Toolbox({ buttonSectionId, title }: ToolboxProps) {
           );
         })}
         {activeToolOptions && (
-          <div className="bg-muted mt-1 h-auto px-2">
+          <div className={`bg-muted h-auto px-2 ${compact ? 'mt-0 py-1' : 'mt-1'}`}>
             <ToolSettings options={activeToolOptions} />
           </div>
         )}

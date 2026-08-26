@@ -7,6 +7,7 @@ import * as cs3dTools from '@cornerstonejs/tools';
 import { useSystem } from '@ohif/core';
 import { useSegmentations } from '@ohif/extension-cornerstone';
 import { useTranslation } from 'react-i18next';
+import tmtvLesionHighlightService from '../services/TMTVLesionHighlightService';
 
 const LOWER_CT_THRESHOLD_DEFAULT = -1024;
 const UPPER_CT_THRESHOLD_DEFAULT = 1024;
@@ -46,7 +47,11 @@ function reducer(state, action) {
 function RectangleROIOptions() {
   const { commandsManager } = useSystem();
   const segmentations = useSegmentations();
-  const activeSegmentation = segmentations[0];
+  // [2026-08-26 功能] TMTV 分割工具只使用真实 Segment 1，避免高亮层成为 Brush/Eraser/阈值工具的编辑目标
+  const activeSegmentation = segmentations.find(
+    segmentation =>
+      !tmtvLesionHighlightService.isHighlightSegmentationId(segmentation.segmentationId)
+  );
   const { t } = useTranslation('ROIThresholdConfiguration');
 
   const runCommand = useCallback(

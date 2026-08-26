@@ -18,6 +18,9 @@
   "Reject": "拒绝",
   "Restore": "恢复",
   "Delete": "删除",
+  "Merge selected lesions": "合并选中病灶",
+  "Select for merge": "选择用于合并",
+  "Merged": "已合并",
   "Edited": "已编辑",
   "Volume": "体积",
   "SUVmax": "SUVmax",
@@ -27,7 +30,10 @@
   "Export confirmed only": "仅导出已确认病灶",
   "Selected Lesion Highlight": "选中病灶高亮",
   "Selected Lesion": "选中病灶",
+  "Segment 1 advanced data": "Segment 1 / 高级分割数据",
   "No Segment 1 lesions found.": "未发现 Segment 1 病灶。",
+  "Restore local segmentation": "恢复本地分割",
+  "Restoring local segmentation": "正在恢复本地分割...",
   "No lesions match the current filter.": "当前筛选条件下没有病灶。",
   "Delete rejected lesion confirmation": "确定要从 Segment 1 中删除这个已拒绝病灶吗？删除后无法恢复。"
 }
