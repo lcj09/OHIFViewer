@@ -63,6 +63,12 @@
   "Delete selected": "Delete selected",
   "Delete rejected lesions confirmation": "Delete selected rejected lesions from Segment 1? This cannot be restored.",
   "Write mode": "Write mode",
+  "All quality": "All quality",
+  "Needs review": "Needs review",
+  "Small volume": "Small volume",
+  "Low uptake": "Low uptake",
+  "High uptake": "High uptake",
+  "High burden": "High burden",
   "Lesion number": "Lesion number",
   "Ascending": "Asc",
   "Descending": "Desc"

@@ -10,11 +10,30 @@ import tmtvLesionHighlightService from '../../services/TMTVLesionHighlightServic
 
 const SEGMENT_INDEX = 1;
 const LESION_FILTERS = ['all', 'confirmed', 'candidate', 'rejected'];
+const LESION_QUALITY_FILTERS = [
+  'all',
+  'review',
+  'smallVolume',
+  'lowUptake',
+  'highUptake',
+  'highBurden',
+];
 const LESION_SORT_OPTIONS = ['volume', 'suvMax', 'tlg', 'displayIndex'];
+const LESION_QUALITY_RULES = {
+  smallVolumeML: 1,
+  lowSUVMax: 3,
+  highSUVMax: 10,
+  highTLG: 50,
+};
 
 type LocalSegmentMaskInfo = {
   voxelCount: number;
   updatedAt: number;
+};
+
+type LesionQualityTag = {
+  key: string;
+  tone: 'warning' | 'danger' | 'accent';
 };
 
 function formatStat(value: number | null | undefined, digits = 3) {
@@ -41,6 +60,44 @@ function getFiniteInputNumber(value: string, fallback: number): number {
 
 function getSortableNumber(value: number | null | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : -Infinity;
+}
+
+function getLesionQualityTags(lesion): LesionQualityTag[] {
+  // [2026-08-27 功能] 自动分割质量控制：基于体积/SUV/TLG 生成可解释标签，只用于筛选和提示，不自动修改 mask
+  const tags: LesionQualityTag[] = [];
+  const volume = getSortableNumber(lesion.volume);
+  const suvMax = getSortableNumber(lesion.suvMax);
+  const tlg = getSortableNumber(lesion.tlg);
+
+  if (volume > -Infinity && volume < LESION_QUALITY_RULES.smallVolumeML) {
+    tags.push({ key: 'smallVolume', tone: 'warning' });
+  }
+
+  if (suvMax > -Infinity && suvMax < LESION_QUALITY_RULES.lowSUVMax) {
+    tags.push({ key: 'lowUptake', tone: 'warning' });
+  }
+
+  if (suvMax >= LESION_QUALITY_RULES.highSUVMax) {
+    tags.push({ key: 'highUptake', tone: 'danger' });
+  }
+
+  if (tlg >= LESION_QUALITY_RULES.highTLG) {
+    tags.push({ key: 'highBurden', tone: 'accent' });
+  }
+
+  if (tags.some(tag => tag.key === 'smallVolume' || tag.key === 'lowUptake')) {
+    tags.unshift({ key: 'review', tone: 'warning' });
+  }
+
+  return tags;
+}
+
+function doesLesionMatchQualityFilter(lesion, qualityFilter: string): boolean {
+  if (qualityFilter === 'all') {
+    return true;
+  }
+
+  return getLesionQualityTags(lesion).some(tag => tag.key === qualityFilter);
 }
 
 function setPrimaryTMTVSegmentationActive({
@@ -100,6 +157,7 @@ export default function PanelRoiThresholdSegmentation() {
   );
   const [lesionState, setLesionState] = useState(() => tmtvLesionService.getState(segmentationIds));
   const [lesionFilter, setLesionFilter] = useState('all');
+  const [lesionQualityFilter, setLesionQualityFilter] = useState('all');
   const [exportConfirmedOnly, setExportConfirmedOnly] = useState(true);
   const [mergeSelectionIds, setMergeSelectionIds] = useState<string[]>([]);
   const [hasPersistedMask, setHasPersistedMask] = useState(false);
@@ -117,11 +175,24 @@ export default function PanelRoiThresholdSegmentation() {
   const [lesionSortDirection, setLesionSortDirection] = useState<'asc' | 'desc'>('desc');
   const hasAttemptedInitialMaskRestoreRef = useRef(false);
   const localMaskRequestIdRef = useRef(0);
+  const lesionRefreshRequestIdRef = useRef(0);
+  const isRestoringPersistedMaskRef = useRef(false);
 
-  const refreshTMTVAndLesions = useCallback(
-    async (segmentationId?: string, options: { restorePersistedMask?: boolean } = {}) => {
-      // [2026-08-24 功能] Segment 1 更新后同步刷新整体 TMTV/TLG 和 lesion 级统计
-      const currentSegmentations = segmentationIds.length
+  const getCurrentTMTVSegmentations = useCallback(
+    (preferredSegmentationId?: string) => {
+      // [2026-08-27 功能] 本地 mask 恢复：优先使用刚创建的 segmentation，避免旧 segmentationIds 闭包导致恢复后 lesion 列表为空
+      if (preferredSegmentationId) {
+        const preferredSegmentation = segmentationService.getSegmentation(preferredSegmentationId);
+
+        if (
+          preferredSegmentation &&
+          !tmtvLesionHighlightService.isHighlightSegmentationId(preferredSegmentationId)
+        ) {
+          return [preferredSegmentation];
+        }
+      }
+
+      return segmentationIds.length
         ? segmentationIds.map(id => segmentationService.getSegmentation(id)).filter(Boolean)
         : segmentationService
             .getSegmentations()
@@ -129,6 +200,16 @@ export default function PanelRoiThresholdSegmentation() {
               segmentation =>
                 !tmtvLesionHighlightService.isHighlightSegmentationId(segmentation.segmentationId)
             );
+    },
+    [segmentationGroupId, segmentationService]
+  );
+
+  const refreshTMTVAndLesions = useCallback(
+    async (segmentationId?: string, options: { restorePersistedMask?: boolean } = {}) => {
+      // [2026-08-24 功能] Segment 1 更新后同步刷新整体 TMTV/TLG 和 lesion 级统计
+      const requestId = lesionRefreshRequestIdRef.current + 1;
+      lesionRefreshRequestIdRef.current = requestId;
+      const currentSegmentations = getCurrentTMTVSegmentations(segmentationId);
 
       await handleROIThresholding({
         segmentationId,
@@ -137,6 +218,10 @@ export default function PanelRoiThresholdSegmentation() {
         segmentations: currentSegmentations,
       });
 
+      if (lesionRefreshRequestIdRef.current !== requestId) {
+        return;
+      }
+
       const nextLesionState = await tmtvLesionService.extractLesionsForSegmentationsAsync(
         currentSegmentations,
         SEGMENT_INDEX,
@@ -144,6 +229,10 @@ export default function PanelRoiThresholdSegmentation() {
           restorePersistedMask: options.restorePersistedMask,
         }
       );
+
+      if (lesionRefreshRequestIdRef.current !== requestId) {
+        return;
+      }
 
       setLesionState(nextLesionState);
 
@@ -172,6 +261,7 @@ export default function PanelRoiThresholdSegmentation() {
     [
       commandsManager,
       cornerstoneViewportService,
+      getCurrentTMTVSegmentations,
       segmentationGroupId,
       segmentationService,
       viewportGridService,
@@ -210,6 +300,11 @@ export default function PanelRoiThresholdSegmentation() {
   useEffect(() => {
     // [2026-08-24 功能] 订阅 TMTVLesionService 状态，让右侧 lesion 面板响应选中/删除/重算
     const subscription = tmtvLesionService.subscribe(() => {
+      if (isRestoringPersistedMaskRef.current) {
+        // [2026-08-27 功能] 本地 mask 恢复：恢复完成前忽略旧订阅闭包，防止空 segmentationIds 把刚恢复的病灶列表清掉
+        return;
+      }
+
       const nextLesionState = tmtvLesionService.getState(segmentationIds);
       setLesionState(nextLesionState);
       setMergeSelectionIds(previousSelectionIds =>
@@ -233,6 +328,11 @@ export default function PanelRoiThresholdSegmentation() {
         // [2026-08-26 功能] IndexedDB 稀疏保存/恢复 Segment 1 mask：没有现成 segmentation 时不自动创建，避免刷新后改变 viewport 几何或工具编辑目标
         hasAttemptedInitialMaskRestoreRef.current = true;
         await refreshLocalMaskInfo();
+        return;
+      }
+
+      if (isRestoringPersistedMaskRef.current) {
+        // [2026-08-27 功能] 本地 mask 显式恢复：创建恢复载体会触发 segmentationGroupId 变化，普通初始化刷新需让位给带 restorePersistedMask 的恢复请求
         return;
       }
 
@@ -280,6 +380,8 @@ export default function PanelRoiThresholdSegmentation() {
   useEffect(() => {
     return () => {
       localMaskRequestIdRef.current += 1;
+      lesionRefreshRequestIdRef.current += 1;
+      isRestoringPersistedMaskRef.current = false;
     };
   }, []);
 
@@ -290,6 +392,7 @@ export default function PanelRoiThresholdSegmentation() {
     }
 
     setIsRestoringPersistedMask(true);
+    isRestoringPersistedMaskRef.current = true;
 
     try {
       const restoredSegmentationId = await commandsManager.runCommand('createNewLabelmapFromPT', {
@@ -304,6 +407,7 @@ export default function PanelRoiThresholdSegmentation() {
         await refreshLocalMaskInfo();
       }
     } finally {
+      isRestoringPersistedMaskRef.current = false;
       setIsRestoringPersistedMask(false);
     }
   };
@@ -352,6 +456,11 @@ export default function PanelRoiThresholdSegmentation() {
     }, 100);
 
     const dataModifiedCallback = eventDetail => {
+      if (isRestoringPersistedMaskRef.current) {
+        // [2026-08-27 功能] 本地 mask 恢复：写回本地 mask 会触发 modified 事件，恢复专用刷新完成前不启动普通重算
+        return;
+      }
+
       // [2026-08-26 功能] Brush/Eraser 事件容错：部分底层工具可能不带 segmentationId，仍需刷新真实 Segment 1 的 lesion 列表
       const modifiedSegmentationId = eventDetail?.segmentationId;
 
@@ -400,13 +509,30 @@ export default function PanelRoiThresholdSegmentation() {
   const confirmedCount = lesionState.lesions.filter(lesion => lesion.status === 'confirmed').length;
   const candidateCount = lesionState.lesions.filter(lesion => lesion.status === 'candidate').length;
   const rejectedCount = lesionState.lesions.filter(lesion => lesion.status === 'rejected').length;
-  const filteredLesions = useMemo(
-    () =>
+  const filteredLesions = useMemo(() => {
+    // [2026-08-27 功能] 自动分割质量控制：状态筛选和质量筛选叠加生效，批量按钮直接作用于当前筛选结果
+    const statusFilteredLesions =
       lesionFilter === 'all'
         ? lesionState.lesions
-        : lesionState.lesions.filter(lesion => lesion.status === lesionFilter),
-    [lesionFilter, lesionState.lesions]
-  );
+        : lesionState.lesions.filter(lesion => lesion.status === lesionFilter);
+
+    return statusFilteredLesions.filter(lesion =>
+      doesLesionMatchQualityFilter(lesion, lesionQualityFilter)
+    );
+  }, [lesionFilter, lesionQualityFilter, lesionState.lesions]);
+  const qualityCounts = useMemo(() => {
+    // [2026-08-27 功能] 自动分割质量控制：为质量筛选下拉提供计数，帮助医生快速判断是否存在低优先级候选
+    return LESION_QUALITY_FILTERS.reduce<Record<string, number>>((counts, qualityFilter) => {
+      counts[qualityFilter] =
+        qualityFilter === 'all'
+          ? lesionState.lesions.length
+          : lesionState.lesions.filter(lesion =>
+              doesLesionMatchQualityFilter(lesion, qualityFilter)
+            ).length;
+
+      return counts;
+    }, {});
+  }, [lesionState.lesions]);
   const visibleLesions = useMemo(() => {
     // [2026-08-26 功能] 自动分割审核排序：默认大体积优先，减少医生在几十个候选中查找重点病灶的成本
     const sortDirectionMultiplier = lesionSortDirection === 'asc' ? 1 : -1;
@@ -776,6 +902,62 @@ export default function PanelRoiThresholdSegmentation() {
     return lesionCount;
   };
 
+  const getQualityFilterLabel = filter => {
+    if (filter === 'review') {
+      return t('Needs review', { defaultValue: 'Needs review' });
+    }
+
+    if (filter === 'smallVolume') {
+      return t('Small volume', { defaultValue: 'Small volume' });
+    }
+
+    if (filter === 'lowUptake') {
+      return t('Low uptake', { defaultValue: 'Low uptake' });
+    }
+
+    if (filter === 'highUptake') {
+      return t('High uptake', { defaultValue: 'High uptake' });
+    }
+
+    if (filter === 'highBurden') {
+      return t('High burden', { defaultValue: 'High burden' });
+    }
+
+    return t('All quality', { defaultValue: 'All quality' });
+  };
+
+  const getQualityTagLabel = tagKey => {
+    if (tagKey === 'review') {
+      return t('Needs review', { defaultValue: 'Needs review' });
+    }
+
+    if (tagKey === 'smallVolume') {
+      return t('Small volume', { defaultValue: 'Small volume' });
+    }
+
+    if (tagKey === 'lowUptake') {
+      return t('Low uptake', { defaultValue: 'Low uptake' });
+    }
+
+    if (tagKey === 'highUptake') {
+      return t('High uptake', { defaultValue: 'High uptake' });
+    }
+
+    return t('High burden', { defaultValue: 'High burden' });
+  };
+
+  const getQualityTagClass = (tone: LesionQualityTag['tone']) => {
+    if (tone === 'danger') {
+      return 'border-red-400/40 bg-red-500/15 text-red-200';
+    }
+
+    if (tone === 'accent') {
+      return 'border-primary/40 bg-primary/15 text-primary';
+    }
+
+    return 'border-yellow-400/40 bg-yellow-500/15 text-yellow-100';
+  };
+
   function getSortLabel(sortKey) {
     if (sortKey === 'suvMax') {
       return t('SUVmax', { defaultValue: 'SUVmax' });
@@ -1072,6 +1254,21 @@ export default function PanelRoiThresholdSegmentation() {
           </div>
           <div className="flex items-center gap-1">
             <select
+              data-cy="tmtvLesionQualityFilter"
+              className="border-input bg-popover text-foreground h-7 min-w-0 flex-1 rounded border px-1.5 text-xs"
+              value={lesionQualityFilter}
+              onChange={event => setLesionQualityFilter(event.target.value)}
+            >
+              {LESION_QUALITY_FILTERS.map(qualityFilter => (
+                <option
+                  key={qualityFilter}
+                  value={qualityFilter}
+                >
+                  {`${getQualityFilterLabel(qualityFilter)} ${qualityCounts[qualityFilter] ?? 0}`}
+                </option>
+              ))}
+            </select>
+            <select
               data-cy="tmtvLesionSort"
               className="border-input bg-popover text-foreground h-7 min-w-0 flex-1 rounded border px-1.5 text-xs"
               value={lesionSortKey}
@@ -1262,6 +1459,7 @@ export default function PanelRoiThresholdSegmentation() {
             const isSelected = lesion.id === selectedLesionId;
             const isConfirmed = lesion.status === 'confirmed';
             const isRejected = lesion.status === 'rejected';
+            const qualityTags = getLesionQualityTags(lesion);
 
             return (
               <div
@@ -1326,6 +1524,20 @@ export default function PanelRoiThresholdSegmentation() {
                           </span>
                         )}
                       </div>
+                      {!!qualityTags.length && (
+                        <div className="mt-1 flex max-w-[190px] flex-wrap gap-1">
+                          {qualityTags.slice(0, 3).map(tag => (
+                            <span
+                              key={tag.key}
+                              className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-3 ${getQualityTagClass(
+                                tag.tone
+                              )}`}
+                            >
+                              {getQualityTagLabel(tag.key)}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="flex flex-wrap justify-end gap-0.5">

@@ -144,6 +144,7 @@ class TMTVLesionService {
   private isApplyingHistory = false;
   private pendingStatusHistoryApplication: PendingStatusHistoryApplication | null = null;
   private mergeGroupByGroupId = new Map<string, Map<string, string>>();
+  private asyncExtractionRequestIdByGroupId = new Map<string, number>();
 
   public subscribe(listener: () => void): Subscription {
     this.listeners.add(listener);
@@ -231,6 +232,10 @@ class TMTVLesionService {
     const segmentationIds = segmentations
       .map(segmentation => segmentation?.segmentationId)
       .filter(Boolean);
+    const groupId = this.getGroupId(segmentationIds);
+    const requestId = (this.asyncExtractionRequestIdByGroupId.get(groupId) ?? 0) + 1;
+
+    this.asyncExtractionRequestIdByGroupId.set(groupId, requestId);
 
     if (options.restorePersistedMask) {
       await Promise.all(
@@ -244,11 +249,18 @@ class TMTVLesionService {
       segmentations.map(async segmentation => {
         this.recordLabelmapHistoryFromSegmentation(segmentation, segmentIndex, segmentationIds);
         const lesions = await this.extractLesionsForSegmentationAsync(segmentation, segmentIndex);
-        this.schedulePersistedSegmentMaskSave(segmentation, segmentIndex);
         return lesions;
       })
     );
     const lesions = lesionGroups.flat();
+
+    if (this.asyncExtractionRequestIdByGroupId.get(groupId) !== requestId) {
+      return this.getState(segmentationIds);
+    }
+
+    segmentations.forEach(segmentation => {
+      this.schedulePersistedSegmentMaskSave(segmentation, segmentIndex);
+    });
 
     return this.finalizeExtractedLesionState(segmentationIds, segmentIndex, lesions);
   }
@@ -621,6 +633,7 @@ class TMTVLesionService {
       const groupId = this.getGroupId(segmentationIds);
       this.stateByGroupId.delete(groupId);
       this.mergeGroupByGroupId.delete(groupId);
+      this.asyncExtractionRequestIdByGroupId.delete(groupId);
       segmentationIds.forEach(segmentationId => {
         this.labelmapSnapshotBySegmentationId.delete(segmentationId);
       });
@@ -630,6 +643,7 @@ class TMTVLesionService {
       this.labelmapSnapshotBySegmentationId.clear();
       this.historyStack = [];
       this.redoStack = [];
+      this.asyncExtractionRequestIdByGroupId.clear();
     }
 
     this.notify();

@@ -63,6 +63,12 @@
   "Delete selected": "删除选中",
   "Delete rejected lesions confirmation": "确定要从 Segment 1 中删除这些已拒绝病灶吗？删除后无法恢复。",
   "Write mode": "写入方式",
+  "All quality": "全部质量",
+  "Needs review": "需复核",
+  "Small volume": "小体积",
+  "Low uptake": "低摄取",
+  "High uptake": "高摄取",
+  "High burden": "高负荷",
   "Lesion number": "病灶编号",
   "Ascending": "升序",
   "Descending": "降序"
