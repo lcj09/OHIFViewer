@@ -12,8 +12,25 @@ const SEGMENT_INDEX = 1;
 const LESION_FILTERS = ['all', 'confirmed', 'candidate', 'rejected'];
 const LESION_SORT_OPTIONS = ['volume', 'suvMax', 'tlg', 'displayIndex'];
 
+type LocalSegmentMaskInfo = {
+  voxelCount: number;
+  updatedAt: number;
+};
+
 function formatStat(value: number | null | undefined, digits = 3) {
   return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '';
+}
+
+function formatLocalMaskUpdatedAt(updatedAt: number | null | undefined) {
+  if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) {
+    return '';
+  }
+
+  return new Date(updatedAt).toLocaleString();
+}
+
+function formatCount(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : '0';
 }
 
 function getFiniteInputNumber(value: string, fallback: number): number {
@@ -86,6 +103,9 @@ export default function PanelRoiThresholdSegmentation() {
   const [exportConfirmedOnly, setExportConfirmedOnly] = useState(true);
   const [mergeSelectionIds, setMergeSelectionIds] = useState<string[]>([]);
   const [hasPersistedMask, setHasPersistedMask] = useState(false);
+  const [localMaskInfo, setLocalMaskInfo] = useState<LocalSegmentMaskInfo | null>(null);
+  const [isCheckingLocalMask, setIsCheckingLocalMask] = useState(false);
+  const [isClearingLocalMask, setIsClearingLocalMask] = useState(false);
   const [isRestoringPersistedMask, setIsRestoringPersistedMask] = useState(false);
   const [autoSUVThreshold, setAutoSUVThreshold] = useState(2.5);
   const [autoMinVolumeML, setAutoMinVolumeML] = useState(0.1);
@@ -96,6 +116,7 @@ export default function PanelRoiThresholdSegmentation() {
   const [lesionSortKey, setLesionSortKey] = useState('volume');
   const [lesionSortDirection, setLesionSortDirection] = useState<'asc' | 'desc'>('desc');
   const hasAttemptedInitialMaskRestoreRef = useRef(false);
+  const localMaskRequestIdRef = useRef(0);
 
   const refreshTMTVAndLesions = useCallback(
     async (segmentationId?: string, options: { restorePersistedMask?: boolean } = {}) => {
@@ -157,6 +178,35 @@ export default function PanelRoiThresholdSegmentation() {
     ]
   );
 
+  const refreshLocalMaskInfo = useCallback(async () => {
+    // [2026-08-27 功能] 本地存储管理 UI：异步刷新当前病例本地 mask 摘要，并用 requestId 避免旧请求覆盖新状态
+    const requestId = localMaskRequestIdRef.current + 1;
+    localMaskRequestIdRef.current = requestId;
+    setIsCheckingLocalMask(true);
+
+    try {
+      const info = await commandsManager.runCommand('getTMTVSegmentMaskStorageInfo', {
+        segmentIndex: SEGMENT_INDEX,
+      });
+
+      if (localMaskRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setLocalMaskInfo(info ?? null);
+      setHasPersistedMask(!!info);
+    } catch {
+      if (localMaskRequestIdRef.current === requestId) {
+        setLocalMaskInfo(null);
+        setHasPersistedMask(false);
+      }
+    } finally {
+      if (localMaskRequestIdRef.current === requestId) {
+        setIsCheckingLocalMask(false);
+      }
+    }
+  }, [commandsManager]);
+
   useEffect(() => {
     // [2026-08-24 功能] 订阅 TMTVLesionService 状态，让右侧 lesion 面板响应选中/删除/重算
     const subscription = tmtvLesionService.subscribe(() => {
@@ -182,12 +232,9 @@ export default function PanelRoiThresholdSegmentation() {
       if (!segmentationIds.length) {
         // [2026-08-26 功能] IndexedDB 稀疏保存/恢复 Segment 1 mask：没有现成 segmentation 时不自动创建，避免刷新后改变 viewport 几何或工具编辑目标
         hasAttemptedInitialMaskRestoreRef.current = true;
-        const hasMask = await commandsManager.runCommand('hasPersistedTMTVSegmentMask');
-        setHasPersistedMask(!!hasMask);
+        await refreshLocalMaskInfo();
         return;
       }
-
-      setHasPersistedMask(false);
 
       for (const segmentationId of segmentationIds) {
         await refreshTMTVAndLesions(segmentationId, {
@@ -196,10 +243,45 @@ export default function PanelRoiThresholdSegmentation() {
       }
 
       hasAttemptedInitialMaskRestoreRef.current = true;
+      await refreshLocalMaskInfo();
     };
 
     initialRun();
-  }, [commandsManager, refreshTMTVAndLesions, segmentationGroupId]);
+  }, [refreshLocalMaskInfo, refreshTMTVAndLesions, segmentationGroupId]);
+
+  useEffect(() => {
+    // [2026-08-27 功能] 本地存储管理 UI：刷新进入模式时 PT volume 可能晚于面板就绪，做短时复查保证恢复入口能出现
+    const timeoutIds = [300, 1200, 3000].map(delay =>
+      window.setTimeout(() => {
+        refreshLocalMaskInfo();
+      }, delay)
+    );
+
+    return () => {
+      timeoutIds.forEach(timeoutId => window.clearTimeout(timeoutId));
+    };
+  }, [refreshLocalMaskInfo, segmentationGroupId]);
+
+  useEffect(() => {
+    if (!lesionState.updatedAt) {
+      return;
+    }
+
+    // [2026-08-27 功能] 本地存储管理 UI：分割编辑后等待防抖保存落库，再刷新本地保存状态，避免显示旧时间
+    const timeoutId = window.setTimeout(() => {
+      refreshLocalMaskInfo();
+    }, 1000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [lesionState.updatedAt, refreshLocalMaskInfo]);
+
+  useEffect(() => {
+    return () => {
+      localMaskRequestIdRef.current += 1;
+    };
+  }, []);
 
   const handleRestorePersistedMask = async () => {
     // [2026-08-26 功能] 本地分割恢复：由医生显式点击后才创建 Segment 1 并恢复 IndexedDB mask，避免打开面板即改变图像状态
@@ -219,10 +301,47 @@ export default function PanelRoiThresholdSegmentation() {
         await refreshTMTVAndLesions(restoredSegmentationId, {
           restorePersistedMask: true,
         });
-        setHasPersistedMask(false);
+        await refreshLocalMaskInfo();
       }
     } finally {
       setIsRestoringPersistedMask(false);
+    }
+  };
+
+  const handleClearLocalMask = async () => {
+    // [2026-08-27 功能] 本地存储管理 UI：仅删除浏览器本地备份，不清空当前影像上的 Segment 1 体素
+    if (isClearingLocalMask) {
+      return;
+    }
+
+    const shouldClear =
+      typeof window === 'undefined' ||
+      window.confirm?.(
+        t('Clear local segmentation confirmation', {
+          defaultValue:
+            'Clear the browser local Segment 1 backup for this case? This will not clear the current image segmentation.',
+        })
+      );
+
+    if (!shouldClear) {
+      return;
+    }
+
+    setIsClearingLocalMask(true);
+
+    try {
+      const didClear = await commandsManager.runCommand('clearTMTVSegmentMaskStorage', {
+        segmentIndex: SEGMENT_INDEX,
+      });
+
+      if (didClear) {
+        setLocalMaskInfo(null);
+        setHasPersistedMask(false);
+      } else {
+        await refreshLocalMaskInfo();
+      }
+    } finally {
+      setIsClearingLocalMask(false);
     }
   };
 
@@ -547,6 +666,7 @@ export default function PanelRoiThresholdSegmentation() {
         return;
       }
 
+      setLocalMaskInfo(null);
       setHasPersistedMask(false);
       setAutoSegmentationSummary(
         t('Auto segmentation summary', {
@@ -857,6 +977,60 @@ export default function PanelRoiThresholdSegmentation() {
             <div className="text-muted-foreground mt-0.5 truncate text-[11px]">
               {autoSegmentationSummary}
             </div>
+          )}
+        </div>
+        <div className="border-border bg-background flex flex-shrink-0 items-center justify-between gap-2 border-t px-2 py-1">
+          {/* [2026-08-27 功能] 本地存储管理 UI：显示当前病例 Segment 1 浏览器本地保存状态，并支持一键清除本地备份 */}
+          <div className="min-w-0 text-[11px] leading-4">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="text-muted-foreground font-semibold uppercase">
+                {t('Local segmentation storage', {
+                  defaultValue: 'Local save',
+                })}
+              </span>
+              <span
+                className={
+                  localMaskInfo
+                    ? 'text-green-400'
+                    : isCheckingLocalMask
+                      ? 'text-primary'
+                      : 'text-muted-foreground'
+                }
+              >
+                {isCheckingLocalMask
+                  ? t('Checking', { defaultValue: 'Checking...' })
+                  : localMaskInfo
+                    ? t('Saved', { defaultValue: 'Saved' })
+                    : t('Not saved', { defaultValue: 'Not saved' })}
+              </span>
+            </div>
+            {localMaskInfo && (
+              <div className="text-muted-foreground truncate">
+                {`${t('Saved at', { defaultValue: 'Saved at' })} ${formatLocalMaskUpdatedAt(
+                  localMaskInfo.updatedAt
+                )} · ${formatCount(localMaskInfo.voxelCount)} ${t('Voxels', {
+                  defaultValue: 'voxels',
+                })}`}
+              </div>
+            )}
+          </div>
+          {localMaskInfo && (
+            <Button
+              dataCY="clearTmtvLocalSegmentation"
+              size="sm"
+              variant="ghost"
+              className="h-6 flex-shrink-0 px-2 text-xs text-red-300 hover:text-red-200"
+              disabled={isClearingLocalMask}
+              onClick={handleClearLocalMask}
+            >
+              <span>
+                {isClearingLocalMask
+                  ? t('Clearing', { defaultValue: 'Clearing...' })
+                  : t('Clear local segmentation', {
+                      defaultValue: 'Clear',
+                    })}
+              </span>
+            </Button>
           )}
         </div>
         <div className="border-border flex flex-shrink-0 flex-col gap-1 border-t px-2 py-1">

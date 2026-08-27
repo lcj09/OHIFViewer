@@ -15,6 +15,15 @@ export type PersistedSegmentMask = {
   updatedAt: number;
 };
 
+export type SegmentMaskStorageInfo = {
+  storageKey: string;
+  segmentIndex: number;
+  dimensions: [number, number, number];
+  voxelCount: number;
+  updatedAt: number;
+  geometryFingerprint: string | null;
+};
+
 type SegmentMaskContext = {
   segmentationId: string;
   segmentationVolumeId: string;
@@ -82,32 +91,65 @@ class TMTVSegmentMaskStorageService {
     dimensions,
   }: ReferenceVolumeMaskContext): Promise<boolean> {
     // [2026-08-26 功能] IndexedDB 稀疏保存/恢复 Segment 1 mask：自动创建空分割前先探测是否确有本地 mask，避免无意义创建导致图像/工具状态异常
-    const db = await this.getDatabase();
+    return !!(await this.getSegmentMaskInfoForReferenceVolume({
+      referenceVolume,
+      segmentIndex,
+      dimensions,
+    }));
+  }
 
-    if (!db) {
+  public async getSegmentMaskInfoForReferenceVolume({
+    referenceVolume,
+    segmentIndex,
+    dimensions,
+  }: ReferenceVolumeMaskContext): Promise<SegmentMaskStorageInfo | null> {
+    // [2026-08-27 功能] 本地存储管理 UI：读取当前病例 Segment 1 本地 mask 摘要，避免面板直接加载大体素数组
+    const record = await this.findSegmentMaskForReferenceVolume({
+      referenceVolume,
+      segmentIndex,
+      dimensions,
+    });
+
+    if (!record) {
+      return null;
+    }
+
+    return {
+      storageKey: record.storageKey,
+      segmentIndex: record.segmentIndex,
+      dimensions: record.dimensions,
+      voxelCount: record.voxelCount,
+      updatedAt: record.updatedAt,
+      geometryFingerprint: record.geometryFingerprint,
+    };
+  }
+
+  public async deleteSegmentMaskForReferenceVolume({
+    referenceVolume,
+    segmentIndex,
+    dimensions,
+  }: ReferenceVolumeMaskContext): Promise<boolean> {
+    // [2026-08-27 功能] 本地存储管理 UI：清除当前病例本地 mask，并取消待保存任务，避免删除后被防抖写入重新保存
+    const db = await this.getDatabase();
+    const storageKeys = this.createStorageKeysFromReferenceVolume(referenceVolume, segmentIndex);
+
+    this.clearScheduledSaves(storageKeys);
+
+    if (!db || !storageKeys.length) {
       return false;
     }
 
-    const storageKeys = this.createStorageKeysFromReferenceVolume(referenceVolume, segmentIndex);
     const geometryFingerprint = createGeometryFingerprint({ referenceVolume, dimensions });
 
-    for (const storageKey of storageKeys) {
-      const record = await getFromStore<PersistedSegmentMask>(db, storageKey);
-
-      if (
-        record &&
-        record.version === 1 &&
-        record.segmentIndex === segmentIndex &&
-        areDimensionsEqual(record.dimensions, dimensions) &&
-        !!record.geometryFingerprint &&
-        record.geometryFingerprint === geometryFingerprint &&
-        record.voxelIndices?.length
-      ) {
-        return true;
-      }
+    try {
+      return await this.deleteSegmentMaskRecordsForGeometry(db, storageKeys, {
+        segmentIndex,
+        dimensions,
+        geometryFingerprint,
+      });
+    } catch {
+      return false;
     }
-
-    return false;
   }
 
   public scheduleSaveSegmentMask(input: SaveSegmentMaskInput): void {
@@ -119,21 +161,32 @@ class TMTVSegmentMaskStorageService {
       return;
     }
 
-    const previousTimeout = this.saveTimeoutByKey.get(primaryStorageKey);
-
-    if (previousTimeout) {
-      clearTimeout(previousTimeout);
-    }
+    this.clearScheduledSaves(storageKeys);
 
     const timeout = setTimeout(() => {
       this.saveTimeoutByKey.delete(primaryStorageKey);
-      this.saveSegmentMask(input, storageKeys);
+      this.persistSegmentMask(input, storageKeys);
     }, SAVE_DEBOUNCE_MS);
 
     this.saveTimeoutByKey.set(primaryStorageKey, timeout);
   }
 
-  private async saveSegmentMask(input: SaveSegmentMaskInput, storageKeys: string[]): Promise<void> {
+  public async saveSegmentMask(input: SaveSegmentMaskInput): Promise<void> {
+    // [2026-08-27 功能] 本地存储管理 UI：删除 lesion 后立即写入/清空本地 mask，避免刷新早于防抖保存导致旧 mask 被恢复
+    const storageKeys = this.createStorageKeys(input);
+
+    if (!storageKeys.length) {
+      return;
+    }
+
+    this.clearScheduledSaves(storageKeys);
+    await this.persistSegmentMask(input, storageKeys);
+  }
+
+  private async persistSegmentMask(
+    input: SaveSegmentMaskInput,
+    storageKeys: string[]
+  ): Promise<void> {
     const db = await this.getDatabase();
 
     if (!db) {
@@ -148,7 +201,11 @@ class TMTVSegmentMaskStorageService {
       );
 
       if (!voxelIndices?.length) {
-        await Promise.all(storageKeys.map(storageKey => deleteFromStore(db, storageKey)));
+        await this.deleteSegmentMaskRecordsForGeometry(db, storageKeys, {
+          segmentIndex: input.segmentIndex,
+          dimensions: input.dimensions,
+          geometryFingerprint: createGeometryFingerprint(input),
+        });
         return;
       }
 
@@ -171,6 +228,139 @@ class TMTVSegmentMaskStorageService {
     } catch {
       // IndexedDB 不可用、容量不足或事务失败时忽略，分割主流程仍以内存中的 Segment 1 为准。
     }
+  }
+
+  private async deleteSegmentMaskRecordsForGeometry(
+    db: IDBDatabase,
+    storageKeys: string[],
+    {
+      segmentIndex,
+      dimensions,
+      geometryFingerprint,
+    }: {
+      segmentIndex: number;
+      dimensions: [number, number, number];
+      geometryFingerprint: string;
+    }
+  ): Promise<boolean> {
+    // [2026-08-27 功能] 本地存储管理 UI：按稳定 key 和几何指纹清理同一病例的所有本地 mask，避免旧 key 仍可恢复
+    let didDelete = false;
+
+    for (const storageKey of storageKeys) {
+      const record = await getFromStore<PersistedSegmentMask>(db, storageKey);
+
+      if (
+        this.isValidSegmentMaskRecord(record, {
+          segmentIndex,
+          dimensions,
+          geometryFingerprint,
+        })
+      ) {
+        await deleteFromStore(db, storageKey);
+        didDelete = true;
+      }
+    }
+
+    const records = await getAllFromStore<PersistedSegmentMask>(db);
+
+    for (const record of records) {
+      if (
+        record?.storageKey &&
+        !storageKeys.includes(record.storageKey) &&
+        this.isValidSegmentMaskRecord(record, {
+          segmentIndex,
+          dimensions,
+          geometryFingerprint,
+        })
+      ) {
+        await deleteFromStore(db, record.storageKey);
+        didDelete = true;
+      }
+    }
+
+    return didDelete;
+  }
+
+  private async findSegmentMaskForReferenceVolume({
+    referenceVolume,
+    segmentIndex,
+    dimensions,
+  }: ReferenceVolumeMaskContext): Promise<PersistedSegmentMask | null> {
+    // [2026-08-27 功能] 本地存储管理 UI：优先按稳定 key 查找，刷新后 key 变化时再按几何指纹兜底匹配
+    const db = await this.getDatabase();
+
+    if (!db) {
+      return null;
+    }
+
+    const storageKeys = this.createStorageKeysFromReferenceVolume(referenceVolume, segmentIndex);
+    const geometryFingerprint = createGeometryFingerprint({ referenceVolume, dimensions });
+
+    try {
+      for (const storageKey of storageKeys) {
+        const record = await getFromStore<PersistedSegmentMask>(db, storageKey);
+
+        if (
+          this.isValidSegmentMaskRecord(record, {
+            segmentIndex,
+            dimensions,
+            geometryFingerprint,
+          })
+        ) {
+          return record;
+        }
+      }
+
+      const records = await getAllFromStore<PersistedSegmentMask>(db);
+
+      return (
+        records.find(record =>
+          this.isValidSegmentMaskRecord(record, {
+            segmentIndex,
+            dimensions,
+            geometryFingerprint,
+          })
+        ) ?? null
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  private isValidSegmentMaskRecord(
+    record: PersistedSegmentMask | null,
+    {
+      segmentIndex,
+      dimensions,
+      geometryFingerprint,
+    }: {
+      segmentIndex: number;
+      dimensions: [number, number, number];
+      geometryFingerprint: string;
+    }
+  ): record is PersistedSegmentMask {
+    return (
+      !!record &&
+      record.version === 1 &&
+      record.segmentIndex === segmentIndex &&
+      areDimensionsEqual(record.dimensions, dimensions) &&
+      !!record.geometryFingerprint &&
+      record.geometryFingerprint === geometryFingerprint &&
+      !!record.voxelIndices?.length
+    );
+  }
+
+  private clearScheduledSaves(storageKeys: string[]): void {
+    storageKeys.forEach(storageKey => {
+      const timeout = this.saveTimeoutByKey.get(storageKey);
+
+      if (!timeout) {
+        return;
+      }
+
+      clearTimeout(timeout);
+      this.saveTimeoutByKey.delete(storageKey);
+    });
   }
 
   private async getDatabase(): Promise<IDBDatabase | null> {
@@ -313,6 +503,16 @@ function getFromStore<T>(db: IDBDatabase, key: string): Promise<T | null> {
 
     request.onsuccess = () => resolve((request.result as T) ?? null);
     request.onerror = () => resolve(null);
+  });
+}
+
+function getAllFromStore<T>(db: IDBDatabase): Promise<T[]> {
+  return new Promise(resolve => {
+    const transaction = db.transaction(STORE_NAME, 'readonly');
+    const request = transaction.objectStore(STORE_NAME).getAll();
+
+    request.onsuccess = () => resolve((request.result as T[]) ?? []);
+    request.onerror = () => resolve([]);
   });
 }
 

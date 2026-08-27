@@ -260,15 +260,15 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
 
       return metadata;
     },
-    hasPersistedTMTVSegmentMask: async () => {
-      // [2026-08-26 功能] 本地分割恢复：只检测当前 PT volume 是否存在可恢复 mask，不创建 segmentation、不影响 viewport
+    getTMTVSegmentMaskReferenceContext: ({ segmentIndex = 1 } = {}) => {
+      // [2026-08-27 功能] 本地存储管理 UI：从当前 PT displaySet/viewport 解析本地 mask 查询上下文，刷新初期 viewport volume 未就绪时使用 imageId cache 兜底
       const { viewportMatchDetails } = hangingProtocolService.getMatchDetails();
       const ptDisplaySet = actions.getMatchingPTDisplaySet({
         viewportMatchDetails,
       });
 
       if (!ptDisplaySet) {
-        return false;
+        return null;
       }
 
       let withPTViewportId = null;
@@ -285,24 +285,84 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         }
       }
 
-      if (!withPTViewportId) {
+      let referenceVolume = null;
+
+      if (withPTViewportId) {
+        const ptViewport = cornerstoneViewportService.getCornerstoneViewport(withPTViewportId);
+        const ptVolumeId = _getPTVolumeId(ptViewport);
+        referenceVolume = ptVolumeId ? cs.cache.getVolume(ptVolumeId) : null;
+      }
+
+      if (!referenceVolume) {
+        const dataSource = extensionManager.getDataSources()?.[0];
+        const imageIds =
+          ptDisplaySet.imageIds ?? dataSource?.getImageIdsForDisplaySet?.(ptDisplaySet) ?? [];
+        const firstImageId = imageIds[0];
+        const ptVolumeInfo = firstImageId
+          ? cs.cache.getVolumeContainingImageId(firstImageId)
+          : null;
+
+        referenceVolume = ptVolumeInfo?.volume ?? null;
+      }
+
+      const dimensions = getDimensions(referenceVolume);
+
+      if (!referenceVolume || !dimensions) {
+        return null;
+      }
+
+      return {
+        referenceVolume,
+        segmentIndex,
+        dimensions,
+      };
+    },
+    hasPersistedTMTVSegmentMask: async () => {
+      // [2026-08-26 功能] 本地分割恢复：只检测当前 PT volume 是否存在可恢复 mask，不创建 segmentation、不影响 viewport
+      const referenceContext = actions.getTMTVSegmentMaskReferenceContext({
+        segmentIndex: 1,
+      });
+
+      if (!referenceContext) {
         return false;
       }
 
-      const ptViewport = cornerstoneViewportService.getCornerstoneViewport(withPTViewportId);
-      const ptVolumeId = _getPTVolumeId(ptViewport);
-      const ptVolume = ptVolumeId ? cs.cache.getVolume(ptVolumeId) : null;
-      const dimensions = getDimensions(ptVolume);
+      return await tmtvSegmentMaskStorageService.hasSegmentMaskForReferenceVolume(referenceContext);
+    },
+    getTMTVSegmentMaskStorageInfo: async ({ segmentIndex = 1 } = {}) => {
+      // [2026-08-27 功能] 本地存储管理 UI：查询当前病例浏览器本地保存摘要，供右侧面板显示保存状态/时间/体素数
+      const referenceContext = actions.getTMTVSegmentMaskReferenceContext({
+        segmentIndex,
+      });
 
-      return (
-        !!ptVolume &&
-        !!dimensions &&
-        (await tmtvSegmentMaskStorageService.hasSegmentMaskForReferenceVolume({
-          referenceVolume: ptVolume,
-          segmentIndex: 1,
-          dimensions,
-        }))
+      if (!referenceContext) {
+        return null;
+      }
+
+      return await tmtvSegmentMaskStorageService.getSegmentMaskInfoForReferenceVolume(
+        referenceContext
       );
+    },
+    clearTMTVSegmentMaskStorage: async ({ segmentIndex = 1 } = {}) => {
+      // [2026-08-27 功能] 本地存储管理 UI：只清除当前病例本地 IndexedDB mask，不修改当前内存中的 Segment 1 分割
+      const referenceContext = actions.getTMTVSegmentMaskReferenceContext({
+        segmentIndex,
+      });
+
+      if (!referenceContext) {
+        return false;
+      }
+
+      const didDelete =
+        await tmtvSegmentMaskStorageService.deleteSegmentMaskForReferenceVolume(referenceContext);
+
+      uiNotificationService.show({
+        title: 'TMTV Local Segmentation',
+        message: didDelete ? 'Local segmentation was cleared.' : 'No local segmentation found.',
+        type: didDelete ? 'success' : 'warning',
+      });
+
+      return didDelete;
     },
     createNewLabelmapFromPT: async ({
       label = undefined,
@@ -1403,6 +1463,12 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     hasPersistedTMTVSegmentMask: {
       commandFn: actions.hasPersistedTMTVSegmentMask,
+    },
+    getTMTVSegmentMaskStorageInfo: {
+      commandFn: actions.getTMTVSegmentMaskStorageInfo,
+    },
+    clearTMTVSegmentMaskStorage: {
+      commandFn: actions.clearTMTVSegmentMaskStorage,
     },
     thresholdSegmentationByRectangleROITool: {
       commandFn: actions.thresholdSegmentationByRectangleROITool,

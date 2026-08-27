@@ -431,6 +431,17 @@ class TMTVLesionService {
     // [2026-08-24 功能] 删除单个完整连通域时增量更新 lesion state，避免立即全量扫描 labelmap
     const nextState = this.removeLesionFromState(state, lesionId);
     this.skipNextFullRefreshSegmentationIds.add(lesion.segmentationId);
+    this.savePersistedSegmentMaskNow(
+      {
+        segmentationId: lesion.segmentationId,
+        representationData: {
+          [SegmentationRepresentations.Labelmap]: {
+            volumeId: segmentationVolume.volumeId,
+          },
+        },
+      },
+      segmentIndex
+    );
     segmentationVolume.modified?.();
     csTools.segmentation.triggerSegmentationEvents.triggerSegmentationDataModified(
       lesion.segmentationId,
@@ -529,6 +540,17 @@ class TMTVLesionService {
       }
 
       this.skipNextFullRefreshSegmentationIds.add(segmentationId);
+      this.savePersistedSegmentMaskNow(
+        {
+          segmentationId,
+          representationData: {
+            [SegmentationRepresentations.Labelmap]: {
+              volumeId: volumeData.segmentationVolume.volumeId,
+            },
+          },
+        },
+        segmentIndex
+      );
       volumeData.segmentationVolume.modified?.();
       csTools.segmentation.triggerSegmentationEvents.triggerSegmentationDataModified(
         segmentationId,
@@ -875,6 +897,32 @@ class TMTVLesionService {
     } = segmentationData;
 
     tmtvSegmentMaskStorageService.scheduleSaveSegmentMask({
+      segmentationId,
+      segmentationVolumeId,
+      segmentationVolume,
+      scalarData: labelmapScalarData,
+      segmentIndex,
+      dimensions,
+    });
+  }
+
+  private savePersistedSegmentMaskNow(segmentation: any, segmentIndex: number): void {
+    // [2026-08-27 功能] 删除病灶后立即同步本地 mask；如果 Segment 1 已空，IndexedDB 记录会立刻清除
+    const segmentationData = this.getSegmentationExtractionData(segmentation);
+
+    if (!segmentationData) {
+      return;
+    }
+
+    const {
+      segmentationId,
+      segmentationVolumeId,
+      segmentationVolume,
+      labelmapScalarData,
+      dimensions,
+    } = segmentationData;
+
+    tmtvSegmentMaskStorageService.saveSegmentMask({
       segmentationId,
       segmentationVolumeId,
       segmentationVolume,
