@@ -11,12 +11,25 @@ const setToolActiveToolbar = {
     toolGroupIds: [toolGroupIds.CT, toolGroupIds.PT, toolGroupIds.Fusion, toolGroupIds.MIP],
   },
 };
+const setSegmentationToolActiveToolbar = {
+  commandName: 'setToolActiveToolbar',
+  commandOptions: {
+    // [2026-08-27 功能] TMTV 分割编辑只绑定 PT/Fusion，避免 CT/MIP 视口坐标写入 PT labelmap 时出现偏移
+    toolGroupIds: [toolGroupIds.PT, toolGroupIds.Fusion],
+  },
+};
+const ensurePrimaryTMTVSegmentationActive = {
+  commandName: 'ensurePrimaryTMTVSegmentationActive',
+  commandOptions: {
+    clearSelection: true,
+  },
+};
 
 const toolbarButtons = [
   // ============================================================================
-// [2026-05-12 修改] TMTV模式重置视图按钮
-// 使用TMTV专用 resetTMTVViewport 命令（正确恢复PET SUV窗宽窗位和MIP slabThickness）
-// ============================================================================
+  // [2026-05-12 修改] TMTV模式重置视图按钮
+  // 使用TMTV专用 resetTMTVViewport 命令（正确恢复PET SUV窗宽窗位和MIP slabThickness）
+  // ============================================================================
   {
     id: 'ResetTMTV',
     uiType: 'ohif.toolButton',
@@ -450,7 +463,7 @@ const toolbarButtons = [
     props: {
       icon: 'tool-create-threshold',
       label: i18n.t('Buttons:Rectangle ROI Threshold'),
-      commands: setToolActiveToolbar,
+      commands: setSegmentationToolActiveToolbar,
       evaluate: [
         'evaluate.cornerstone.segmentation',
         {
@@ -461,7 +474,6 @@ const toolbarButtons = [
       options: 'tmtv.RectangleROIThresholdOptions',
     },
   },
-
 
   // [2026-06-08 新增] 打点分割（一键点击分割）按钮
   // 功能：鼠标悬停显示预览（+号），点击自动分割病灶区域，无需手动涂抹
@@ -486,13 +498,14 @@ const toolbarButtons = [
         },
       ],
       commands: [
-        'setToolActiveToolbar',
+        setSegmentationToolActiveToolbar,
         {
           commandName: 'activateSelectedSegmentationOfType',
           commandOptions: {
             segmentationRepresentationType: 'Labelmap',
           },
         },
+        ensurePrimaryTMTVSegmentationActive,
       ],
     },
   },
@@ -503,6 +516,7 @@ const toolbarButtons = [
     props: {
       icon: 'icon-tool-brush',
       label: i18n.t('Buttons:Brush'),
+      commands: [setSegmentationToolActiveToolbar, ensurePrimaryTMTVSegmentationActive],
       evaluate: [
         {
           name: 'evaluate.cornerstone.segmentation',
@@ -538,7 +552,7 @@ const toolbarButtons = [
             { value: 'CircularBrush', label: i18n.t('Buttons:Circle') },
             { value: 'SphereBrush', label: i18n.t('Buttons:Sphere') },
           ],
-          commands: 'setToolActiveToolbar',
+          commands: setSegmentationToolActiveToolbar,
         },
       ],
     },
@@ -549,6 +563,7 @@ const toolbarButtons = [
     props: {
       icon: 'icon-tool-eraser',
       label: i18n.t('Buttons:Eraser'),
+      commands: [setSegmentationToolActiveToolbar, ensurePrimaryTMTVSegmentationActive],
       evaluate: [
         {
           name: 'evaluate.cornerstone.segmentation',
@@ -583,7 +598,7 @@ const toolbarButtons = [
             { value: 'CircularEraser', label: i18n.t('Buttons:Circle') },
             { value: 'SphereEraser', label: i18n.t('Buttons:Sphere') },
           ],
-          commands: 'setToolActiveToolbar',
+          commands: setSegmentationToolActiveToolbar,
         },
       ],
     },
@@ -594,10 +609,15 @@ const toolbarButtons = [
     props: {
       icon: 'icon-tool-threshold',
       label: i18n.t('Buttons:Threshold Tool'),
+      commands: [setSegmentationToolActiveToolbar, ensurePrimaryTMTVSegmentationActive],
       evaluate: [
         {
           name: 'evaluate.cornerstone.segmentation',
-          toolNames: ['ThresholdCircularBrush', 'ThresholdSphereBrush', 'ThresholdCircularBrushDynamic'],
+          toolNames: [
+            'ThresholdCircularBrush',
+            'ThresholdSphereBrush',
+            'ThresholdCircularBrushDynamic',
+          ],
         },
         {
           name: 'evaluate.cornerstone.segmentation.synchronizeDrawingRadius',
@@ -636,12 +656,14 @@ const toolbarButtons = [
           ],
           commands: ({ value, commandsManager }) => {
             if (value === 'ThresholdDynamic') {
-              commandsManager.run('setToolActive', {
+              commandsManager.run('setToolActiveToolbar', {
                 toolName: 'ThresholdCircularBrushDynamic',
+                toolGroupIds: [toolGroupIds.PT, toolGroupIds.Fusion],
               });
             } else {
-              commandsManager.run('setToolActive', {
+              commandsManager.run('setToolActiveToolbar', {
                 toolName: 'ThresholdCircularBrush',
+                toolGroupIds: [toolGroupIds.PT, toolGroupIds.Fusion],
               });
             }
           },
@@ -657,7 +679,7 @@ const toolbarButtons = [
           ],
           condition: ({ options }) =>
             options.find(option => option.id === 'dynamic-mode').value === 'ThresholdRange',
-          commands: 'setToolActiveToolbar',
+          commands: setSegmentationToolActiveToolbar,
         },
         {
           name: i18n.t('ROIThresholdConfiguration:ThresholdRange'),
@@ -902,29 +924,29 @@ const toolbarButtons = [
   //
   // ============================================================================
   {
-    id: 'Probe',  // [2026-04-29] 按钮唯一标识 - 用于在index.ts中引用
+    id: 'Probe', // [2026-04-29] 按钮唯一标识 - 用于在index.ts中引用
 
-    uiType: 'ohif.toolButton',  // OHIF标准工具按钮类型
+    uiType: 'ohif.toolButton', // OHIF标准工具按钮类型
 
     props: {
-      icon: 'tool-probe',  // [2026-04-29] 使用基础查看器的探针图标 ( Icons.tsx中定义 )
+      icon: 'tool-probe', // [2026-04-29] 使用基础查看器的探针图标 ( Icons.tsx中定义 )
 
-      label: i18n.t('Buttons:Probe'),  // 按钮显示文本 (国际化)
+      label: i18n.t('Buttons:Probe'), // 按钮显示文本 (国际化)
 
-      tooltip: i18n.t('Buttons:Toggle auto probe (mouse move to show pixel values)'),  // 鼠标悬停提示文本
+      tooltip: i18n.t('Buttons:Toggle auto probe (mouse move to show pixel values)'), // 鼠标悬停提示文本
 
       // [2026-04-29] 命令配置 - 定义点击按钮时执行的操作
       commands: {
-        commandName: 'togglePixelInfo',  // 调用commandsModule中定义的togglePixelInfo命令
+        commandName: 'togglePixelInfo', // 调用commandsModule中定义的togglePixelInfo命令
         // 该命令实现:
         //   1. 切换PixelInfoManager的全局开关状态
         //   2. 实现与测量工具的互斥逻辑 (启用探针时取消其他工具)
-        commandOptions: {},  // 命令参数 (当前无额外参数)
+        commandOptions: {}, // 命令参数 (当前无额外参数)
       },
 
       // [2026-04-29] 状态评估配置 - 控制按钮的active高亮状态
       evaluate: {
-        name: 'evaluate.pixelInfoActive',  // 自定义评估函数名称
+        name: 'evaluate.pixelInfoActive', // 自定义评估函数名称
         // 函数定义在 getToolbarModule.tsx 中
         // 功能: 读取 window.__pixelInfoEnabled 全局变量
         // 返回: { isActive: true/false } 控制按钮是否高亮

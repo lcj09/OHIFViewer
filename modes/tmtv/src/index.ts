@@ -456,8 +456,8 @@ function modeFactory({ modeConfiguration }) {
               leftPanelClosed: true,
               rightPanels: [tmtv.tmtv, tmtv.petSUV],
               rightPanelResizable: true,
-              // [2026-06-23 新增] 右侧面板默认折叠，用户点击后可展开
-              rightPanelClosed: true,
+              // [2026-08-21 修改] 右侧面板默认展开
+              rightPanelClosed: false,
               viewports: [
                 {
                   namespace: cs3d.viewport,

@@ -10,9 +10,20 @@ import tmtvLesionHighlightService from '../../services/TMTVLesionHighlightServic
 
 const SEGMENT_INDEX = 1;
 const LESION_FILTERS = ['all', 'confirmed', 'candidate', 'rejected'];
+const LESION_SORT_OPTIONS = ['volume', 'suvMax', 'tlg', 'displayIndex'];
 
 function formatStat(value: number | null | undefined, digits = 3) {
   return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '';
+}
+
+function getFiniteInputNumber(value: string, fallback: number): number {
+  const numericValue = Number(value);
+
+  return Number.isFinite(numericValue) ? numericValue : fallback;
+}
+
+function getSortableNumber(value: number | null | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : -Infinity;
 }
 
 function setPrimaryTMTVSegmentationActive({
@@ -76,6 +87,14 @@ export default function PanelRoiThresholdSegmentation() {
   const [mergeSelectionIds, setMergeSelectionIds] = useState<string[]>([]);
   const [hasPersistedMask, setHasPersistedMask] = useState(false);
   const [isRestoringPersistedMask, setIsRestoringPersistedMask] = useState(false);
+  const [autoSUVThreshold, setAutoSUVThreshold] = useState(2.5);
+  const [autoMinVolumeML, setAutoMinVolumeML] = useState(0.1);
+  const [autoWriteMode, setAutoWriteMode] = useState<'overwrite' | 'append'>('overwrite');
+  const [isRunningAutoSegmentation, setIsRunningAutoSegmentation] = useState(false);
+  const [autoSegmentationSummary, setAutoSegmentationSummary] = useState('');
+  const [isAutoSegmentationExpanded, setIsAutoSegmentationExpanded] = useState(true);
+  const [lesionSortKey, setLesionSortKey] = useState('volume');
+  const [lesionSortDirection, setLesionSortDirection] = useState<'asc' | 'desc'>('desc');
   const hasAttemptedInitialMaskRestoreRef = useRef(false);
 
   const refreshTMTVAndLesions = useCallback(
@@ -214,19 +233,32 @@ export default function PanelRoiThresholdSegmentation() {
     }, 100);
 
     const dataModifiedCallback = eventDetail => {
-      if (tmtvLesionHighlightService.isHighlightSegmentationId(eventDetail.segmentationId)) {
+      // [2026-08-26 功能] Brush/Eraser 事件容错：部分底层工具可能不带 segmentationId，仍需刷新真实 Segment 1 的 lesion 列表
+      const modifiedSegmentationId = eventDetail?.segmentationId;
+
+      if (tmtvLesionHighlightService.isHighlightSegmentationId(modifiedSegmentationId)) {
         return;
       }
 
-      if (segmentationIds.length && !segmentationIds.includes(eventDetail.segmentationId)) {
+      if (
+        modifiedSegmentationId &&
+        segmentationIds.length &&
+        !segmentationIds.includes(modifiedSegmentationId)
+      ) {
         return;
       }
 
-      if (tmtvLesionService.consumeSkipNextFullRefresh(eventDetail.segmentationId)) {
+      if (
+        modifiedSegmentationId &&
+        tmtvLesionService.consumeSkipNextFullRefresh(modifiedSegmentationId)
+      ) {
         return;
       }
 
-      debouncedHandleROIThresholding(eventDetail);
+      debouncedHandleROIThresholding({
+        ...eventDetail,
+        segmentationId: modifiedSegmentationId ?? segmentationIds[0],
+      });
     };
 
     const dataModifiedSubscription = segmentationService.subscribe(
@@ -256,6 +288,29 @@ export default function PanelRoiThresholdSegmentation() {
         : lesionState.lesions.filter(lesion => lesion.status === lesionFilter),
     [lesionFilter, lesionState.lesions]
   );
+  const visibleLesions = useMemo(() => {
+    // [2026-08-26 功能] 自动分割审核排序：默认大体积优先，减少医生在几十个候选中查找重点病灶的成本
+    const sortDirectionMultiplier = lesionSortDirection === 'asc' ? 1 : -1;
+
+    return [...filteredLesions].sort((firstLesion, secondLesion) => {
+      const firstValue = getLesionSortValue(firstLesion, lesionSortKey);
+      const secondValue = getLesionSortValue(secondLesion, lesionSortKey);
+      const valueDiff = (firstValue - secondValue) * sortDirectionMultiplier;
+
+      if (valueDiff !== 0) {
+        return valueDiff;
+      }
+
+      return (firstLesion.displayIndex ?? 0) - (secondLesion.displayIndex ?? 0);
+    });
+  }, [filteredLesions, lesionSortDirection, lesionSortKey]);
+  const currentBatchLesions = useMemo(
+    () =>
+      lesionFilter === 'all'
+        ? filteredLesions.filter(lesion => lesion.status === 'candidate')
+        : filteredLesions,
+    [filteredLesions, lesionFilter]
+  );
 
   const handleSelectLesion = lesionId => {
     // [2026-08-25 功能] 点击 lesion 后只触发右侧选中和图像高亮，不执行视图定位
@@ -275,6 +330,52 @@ export default function PanelRoiThresholdSegmentation() {
       lesionId,
       status,
     });
+  };
+
+  const handleSetLesionStatuses = (lesionIds: string[], status) => {
+    // [2026-08-26 功能] 批量 Confirm/Reject：复用当前筛选和勾选状态，减少自动分割后逐个审核成本
+    const targetLesionIds = Array.from(new Set((lesionIds ?? []).filter(Boolean)));
+
+    if (!targetLesionIds.length) {
+      return;
+    }
+
+    commandsManager.runCommand('setTMTVLesionStatuses', {
+      segmentationIds,
+      lesionIds: targetLesionIds,
+      status,
+    });
+    setMergeSelectionIds(previousSelectionIds =>
+      previousSelectionIds.filter(lesionId => !targetLesionIds.includes(lesionId))
+    );
+  };
+
+  const shouldBatchSetLesionStatus = (lesion, status) => {
+    // [2026-08-27 功能] 批量确认只处理 candidate；rejected 需要先恢复，减少误确认
+    if (status === 'confirmed') {
+      return lesion.status === 'candidate';
+    }
+
+    return lesion.status !== status;
+  };
+
+  const handleSetFilteredLesionsStatus = status => {
+    const targetLesionIds = currentBatchLesions
+      .filter(lesion => shouldBatchSetLesionStatus(lesion, status))
+      .map(lesion => lesion.id);
+
+    handleSetLesionStatuses(targetLesionIds, status);
+  };
+
+  const handleSetSelectedLesionsStatus = status => {
+    const selectedLesionIds = lesionState.lesions
+      .filter(
+        lesion =>
+          mergeSelectionIds.includes(lesion.id) && shouldBatchSetLesionStatus(lesion, status)
+      )
+      .map(lesion => lesion.id);
+
+    handleSetLesionStatuses(selectedLesionIds, status);
   };
 
   const handleToggleMergeSelection = (event, lesionId) => {
@@ -299,6 +400,27 @@ export default function PanelRoiThresholdSegmentation() {
     setMergeSelectionIds([]);
   };
 
+  const filteredConfirmCount = currentBatchLesions.filter(
+    lesion => lesion.status === 'candidate'
+  ).length;
+  const filteredRejectCount = currentBatchLesions.filter(
+    lesion => lesion.status !== 'rejected'
+  ).length;
+  const selectedConfirmCount = lesionState.lesions.filter(
+    lesion => mergeSelectionIds.includes(lesion.id) && lesion.status === 'candidate'
+  ).length;
+  const selectedRejectCount = lesionState.lesions.filter(
+    lesion => mergeSelectionIds.includes(lesion.id) && lesion.status !== 'rejected'
+  ).length;
+  const filteredRestoreCount = currentBatchLesions.filter(
+    lesion => lesion.status === 'rejected'
+  ).length;
+  const selectedRestoreCount = lesionState.lesions.filter(
+    lesion => mergeSelectionIds.includes(lesion.id) && lesion.status === 'rejected'
+  ).length;
+  const filteredDeleteCount = filteredRestoreCount;
+  const selectedDeleteCount = selectedRestoreCount;
+
   const handleDeleteLesion = (event, lesionId) => {
     // [2026-08-25 功能] 第二阶段 Delete 才真实修改 Segment 1 voxel；仅从 rejected lesion 暴露，避免误删
     event.stopPropagation();
@@ -319,6 +441,126 @@ export default function PanelRoiThresholdSegmentation() {
       segmentationIds,
       lesionId,
     });
+  };
+
+  const handleRestoreFilteredRejectedLesions = () => {
+    // [2026-08-27 功能] 批量恢复 rejected：只把拒绝态拉回候选，confirmed 不被误改
+    handleSetLesionStatuses(
+      currentBatchLesions.filter(lesion => lesion.status === 'rejected').map(lesion => lesion.id),
+      'candidate'
+    );
+  };
+
+  const handleRestoreSelectedRejectedLesions = () => {
+    // [2026-08-27 功能] 批量恢复勾选 rejected：复用勾选区，减少几十个小病灶逐个恢复成本
+    handleSetLesionStatuses(
+      lesionState.lesions
+        .filter(lesion => mergeSelectionIds.includes(lesion.id) && lesion.status === 'rejected')
+        .map(lesion => lesion.id),
+      'candidate'
+    );
+  };
+
+  const handleDeleteLesions = (lesionIds: string[]) => {
+    // [2026-08-27 功能] 批量删除 rejected：真实清除 Segment 1 voxel，适合替代大范围逐层橡皮擦
+    const targetLesionIds = Array.from(new Set((lesionIds ?? []).filter(Boolean)));
+
+    if (!targetLesionIds.length) {
+      return;
+    }
+
+    const shouldDelete =
+      typeof window === 'undefined' ||
+      window.confirm?.(
+        t('Delete rejected lesions confirmation', {
+          defaultValue: 'Delete selected rejected lesions from Segment 1? This cannot be restored.',
+        })
+      );
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    commandsManager.runCommand('deleteTMTVLesions', {
+      segmentationIds,
+      lesionIds: targetLesionIds,
+    });
+    setMergeSelectionIds(previousSelectionIds =>
+      previousSelectionIds.filter(lesionId => !targetLesionIds.includes(lesionId))
+    );
+  };
+
+  const handleDeleteFilteredRejectedLesions = () => {
+    handleDeleteLesions(
+      currentBatchLesions.filter(lesion => lesion.status === 'rejected').map(lesion => lesion.id)
+    );
+  };
+
+  const handleDeleteSelectedRejectedLesions = () => {
+    handleDeleteLesions(
+      lesionState.lesions
+        .filter(lesion => mergeSelectionIds.includes(lesion.id) && lesion.status === 'rejected')
+        .map(lesion => lesion.id)
+    );
+  };
+
+  const handleRunAutoSegmentation = async () => {
+    // [2026-08-26 功能] 全身 SUV 阈值自动分割入口：写入 Segment 1 后立即复用现有 lesion candidate 刷新链路
+    if (isRunningAutoSegmentation) {
+      return;
+    }
+
+    const shouldOverwrite =
+      autoWriteMode === 'overwrite' &&
+      segmentationIds.length > 0 &&
+      lesionState.lesions.length > 0 &&
+      (typeof window === 'undefined' ||
+        window.confirm?.(
+          t('Overwrite Segment 1 confirmation', {
+            defaultValue:
+              'Overwrite current Segment 1 auto/manual mask? Existing Segment 1 voxels will be cleared.',
+          })
+        ));
+
+    if (
+      autoWriteMode === 'overwrite' &&
+      segmentationIds.length > 0 &&
+      lesionState.lesions.length > 0 &&
+      !shouldOverwrite
+    ) {
+      return;
+    }
+
+    setIsRunningAutoSegmentation(true);
+
+    try {
+      const result = await commandsManager.runCommand('autoSegmentTMTVBySUVThreshold', {
+        segmentationId: segmentationIds[0],
+        threshold: autoSUVThreshold,
+        minVolumeML: autoMinVolumeML,
+        writeMode: autoWriteMode,
+        segmentIndex: SEGMENT_INDEX,
+      });
+
+      if (!result) {
+        setAutoSegmentationSummary('');
+        return;
+      }
+
+      setHasPersistedMask(false);
+      setAutoSegmentationSummary(
+        t('Auto segmentation summary', {
+          defaultValue: 'Kept {{kept}} candidates, filtered {{filtered}}, wrote {{voxels}} voxels.',
+          kept: result.keptComponentCount,
+          filtered: result.filteredComponentCount,
+          voxels: result.voxelCount,
+        })
+      );
+      setIsAutoSegmentationExpanded(false);
+      await refreshTMTVAndLesions(result.segmentationId);
+    } finally {
+      setIsRunningAutoSegmentation(false);
+    }
   };
 
   const getReportLesions = () =>
@@ -414,6 +656,38 @@ export default function PanelRoiThresholdSegmentation() {
     return lesionCount;
   };
 
+  function getSortLabel(sortKey) {
+    if (sortKey === 'suvMax') {
+      return t('SUVmax', { defaultValue: 'SUVmax' });
+    }
+
+    if (sortKey === 'tlg') {
+      return t('TLG', { defaultValue: 'TLG' });
+    }
+
+    if (sortKey === 'displayIndex') {
+      return t('Lesion number', { defaultValue: 'Lesion number' });
+    }
+
+    return t('Volume', { defaultValue: 'Volume' });
+  }
+
+  function getLesionSortValue(lesion, sortKey) {
+    if (sortKey === 'suvMax') {
+      return getSortableNumber(lesion.suvMax);
+    }
+
+    if (sortKey === 'tlg') {
+      return getSortableNumber(lesion.tlg);
+    }
+
+    if (sortKey === 'displayIndex') {
+      return getSortableNumber(lesion.displayIndex);
+    }
+
+    return getSortableNumber(lesion.volume);
+  }
+
   const getStatusAccentClass = lesion => {
     // [2026-08-26 功能] Lesion 视觉层级：用边框和底色表达状态，减少医生阅读负担
     if (lesion.status === 'confirmed') {
@@ -497,10 +771,100 @@ export default function PanelRoiThresholdSegmentation() {
             </div>
           </div>
         </div>
-        <div className="border-border flex flex-shrink-0 items-center justify-between border-t px-2 py-1">
-          <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs font-semibold uppercase">
-            <span>{t('Lesions', { defaultValue: 'Lesions' })}</span>
-            <span>{lesionCount}</span>
+        <div className="border-border bg-background flex flex-shrink-0 flex-col border-t px-2 py-1">
+          {/* [2026-08-26 功能] 自动分割区折叠展示：运行后收起参数，给病灶审核列表让出高度 */}
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              className="text-muted-foreground flex min-w-0 flex-1 items-center gap-1 text-left text-xs font-semibold uppercase"
+              onClick={() => setIsAutoSegmentationExpanded(isExpanded => !isExpanded)}
+            >
+              <span>{isAutoSegmentationExpanded ? '▾' : '▸'}</span>
+              <span>{t('Auto segmentation', { defaultValue: 'Auto segmentation' })}</span>
+              {!isAutoSegmentationExpanded && (
+                <span className="truncate text-[11px] font-normal normal-case">
+                  {`${autoSUVThreshold} / ${autoMinVolumeML} mL / ${t(
+                    autoWriteMode === 'append' ? 'Append' : 'Overwrite',
+                    {
+                      defaultValue: autoWriteMode === 'append' ? 'Append' : 'Overwrite',
+                    }
+                  )}`}
+                </span>
+              )}
+            </button>
+            <Button
+              dataCY="runTmtvAutoSegmentation"
+              size="sm"
+              variant="default"
+              className="h-7 flex-shrink-0 px-2 text-xs"
+              disabled={isRunningAutoSegmentation}
+              onClick={handleRunAutoSegmentation}
+            >
+              <span>
+                {isRunningAutoSegmentation
+                  ? t('Running', { defaultValue: 'Running...' })
+                  : t('Run', { defaultValue: 'Run' })}
+              </span>
+            </Button>
+          </div>
+          {isAutoSegmentationExpanded && (
+            <div className="mt-1 grid grid-cols-[1fr_1fr_1.15fr] gap-1">
+              <label className="text-muted-foreground flex min-w-0 flex-col gap-0.5 text-[11px]">
+                <span>{t('SUV threshold', { defaultValue: 'SUV threshold' })}</span>
+                <input
+                  data-cy="tmtvAutoSUVThreshold"
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  className="border-input bg-popover text-foreground h-7 rounded border px-1.5 text-xs"
+                  value={autoSUVThreshold}
+                  onChange={event =>
+                    setAutoSUVThreshold(getFiniteInputNumber(event.target.value, 2.5))
+                  }
+                />
+              </label>
+              <label className="text-muted-foreground flex min-w-0 flex-col gap-0.5 text-[11px]">
+                <span>{t('Min volume mL', { defaultValue: 'Min volume mL' })}</span>
+                <input
+                  data-cy="tmtvAutoMinVolume"
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  className="border-input bg-popover text-foreground h-7 rounded border px-1.5 text-xs"
+                  value={autoMinVolumeML}
+                  onChange={event =>
+                    setAutoMinVolumeML(getFiniteInputNumber(event.target.value, 0.1))
+                  }
+                />
+              </label>
+              <label className="text-muted-foreground flex min-w-0 flex-col gap-0.5 text-[11px]">
+                <span>{t('Write mode', { defaultValue: 'Write mode' })}</span>
+                <select
+                  data-cy="tmtvAutoWriteMode"
+                  className="border-input bg-popover text-foreground h-7 min-w-0 rounded border px-1.5 text-xs"
+                  value={autoWriteMode}
+                  onChange={event =>
+                    setAutoWriteMode(event.target.value === 'append' ? 'append' : 'overwrite')
+                  }
+                >
+                  <option value="overwrite">{t('Overwrite', { defaultValue: 'Overwrite' })}</option>
+                  <option value="append">{t('Append', { defaultValue: 'Append' })}</option>
+                </select>
+              </label>
+            </div>
+          )}
+          {!!autoSegmentationSummary && (
+            <div className="text-muted-foreground mt-0.5 truncate text-[11px]">
+              {autoSegmentationSummary}
+            </div>
+          )}
+        </div>
+        <div className="border-border flex flex-shrink-0 flex-col gap-1 border-t px-2 py-1">
+          {/* [2026-08-26 功能] 病灶审核头部：计数压缩成一行状态摘要，减少自动分割后右侧面板拥挤 */}
+          <div className="text-muted-foreground flex items-center gap-2 text-xs font-semibold uppercase">
+            <span className="text-foreground">{`${t('Lesions', {
+              defaultValue: 'Lesions',
+            })} ${lesionCount}`}</span>
             <span className="text-green-400">{`${t('Confirmed', {
               defaultValue: 'Confirmed',
             })} ${confirmedCount}`}</span>
@@ -510,38 +874,178 @@ export default function PanelRoiThresholdSegmentation() {
             })} ${rejectedCount}`}</span>
           </div>
         </div>
-        <div className="border-border flex flex-shrink-0 flex-wrap gap-1 border-t px-2 py-1">
+        <div className="border-border flex flex-shrink-0 flex-col gap-1 border-t px-2 py-1">
           {/* [2026-08-25 功能] Lesion 过滤仅改变右侧展示，不触发重新分割或统计，避免额外性能开销 */}
-          {LESION_FILTERS.map(filter => {
-            const isActive = lesionFilter === filter;
+          <div className="flex flex-wrap gap-1">
+            {LESION_FILTERS.map(filter => {
+              const isActive = lesionFilter === filter;
 
-            return (
-              <button
-                key={filter}
-                type="button"
-                className={`rounded px-2 py-0.5 text-[11px] ${
-                  isActive ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
-                }`}
-                onClick={() => setLesionFilter(filter)}
-              >
-                {`${getFilterLabel(filter)} ${getFilterCount(filter)}`}
-              </button>
-            );
-          })}
-          <Button
-            size="sm"
-            variant="ghost"
-            className={`h-6 px-2 text-xs ${
-              mergeSelectionIds.length < 2 ? 'text-muted-foreground opacity-55' : 'text-primary'
-            }`}
-            disabled={mergeSelectionIds.length < 2}
-            onClick={handleMergeSelectedLesions}
-          >
-            {`${t('Merge selected lesions', {
-              defaultValue: 'Merge selected lesions',
-            })} ${mergeSelectionIds.length}`}
-          </Button>
+              return (
+                <button
+                  key={filter}
+                  type="button"
+                  className={`rounded px-2 py-0.5 text-[11px] ${
+                    isActive
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-muted text-muted-foreground'
+                  }`}
+                  onClick={() => setLesionFilter(filter)}
+                >
+                  {`${getFilterLabel(filter)} ${getFilterCount(filter)}`}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-1">
+            <select
+              data-cy="tmtvLesionSort"
+              className="border-input bg-popover text-foreground h-7 min-w-0 flex-1 rounded border px-1.5 text-xs"
+              value={lesionSortKey}
+              onChange={event => setLesionSortKey(event.target.value)}
+            >
+              {LESION_SORT_OPTIONS.map(sortKey => (
+                <option
+                  key={sortKey}
+                  value={sortKey}
+                >
+                  {getSortLabel(sortKey)}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="bg-muted text-muted-foreground h-7 w-12 rounded text-xs"
+              onClick={() =>
+                setLesionSortDirection(direction => (direction === 'asc' ? 'desc' : 'asc'))
+              }
+            >
+              {lesionSortDirection === 'asc'
+                ? t('Ascending', { defaultValue: 'Asc' })
+                : t('Descending', { defaultValue: 'Desc' })}
+            </button>
+          </div>
         </div>
+        {(filteredConfirmCount > 0 ||
+          filteredRejectCount > 0 ||
+          selectedConfirmCount > 0 ||
+          selectedRejectCount > 0 ||
+          filteredRestoreCount > 0 ||
+          selectedRestoreCount > 0 ||
+          filteredDeleteCount > 0 ||
+          selectedDeleteCount > 0 ||
+          mergeSelectionIds.length >= 2) && (
+          <div className="border-border flex flex-shrink-0 flex-wrap gap-1 border-t px-2 py-1">
+            {/* [2026-08-26 功能] 自动分割批量审核：当前筛选和勾选病灶都支持一键 Confirm/Reject */}
+            {filteredConfirmCount > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-xs text-green-400"
+                onClick={() => handleSetFilteredLesionsStatus('confirmed')}
+              >
+                {`${t('Confirm current', {
+                  defaultValue: 'Confirm current',
+                })} ${filteredConfirmCount}`}
+              </Button>
+            )}
+            {filteredRejectCount > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-xs text-red-300"
+                onClick={() => handleSetFilteredLesionsStatus('rejected')}
+              >
+                {`${t('Reject current', {
+                  defaultValue: 'Reject current',
+                })} ${filteredRejectCount}`}
+              </Button>
+            )}
+            {selectedConfirmCount > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-xs text-green-400"
+                onClick={() => handleSetSelectedLesionsStatus('confirmed')}
+              >
+                {`${t('Confirm selected', {
+                  defaultValue: 'Confirm selected',
+                })} ${selectedConfirmCount}`}
+              </Button>
+            )}
+            {selectedRejectCount > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-xs text-red-300"
+                onClick={() => handleSetSelectedLesionsStatus('rejected')}
+              >
+                {`${t('Reject selected', {
+                  defaultValue: 'Reject selected',
+                })} ${selectedRejectCount}`}
+              </Button>
+            )}
+            {filteredRestoreCount > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-primary h-6 px-2 text-xs"
+                onClick={handleRestoreFilteredRejectedLesions}
+              >
+                {`${t('Restore current', {
+                  defaultValue: 'Restore current',
+                })} ${filteredRestoreCount}`}
+              </Button>
+            )}
+            {selectedRestoreCount > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-primary h-6 px-2 text-xs"
+                onClick={handleRestoreSelectedRejectedLesions}
+              >
+                {`${t('Restore selected', {
+                  defaultValue: 'Restore selected',
+                })} ${selectedRestoreCount}`}
+              </Button>
+            )}
+            {filteredDeleteCount > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-xs text-red-400 hover:text-red-300"
+                onClick={handleDeleteFilteredRejectedLesions}
+              >
+                {`${t('Delete current', {
+                  defaultValue: 'Delete current',
+                })} ${filteredDeleteCount}`}
+              </Button>
+            )}
+            {selectedDeleteCount > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-xs text-red-400 hover:text-red-300"
+                onClick={handleDeleteSelectedRejectedLesions}
+              >
+                {`${t('Delete selected', {
+                  defaultValue: 'Delete selected',
+                })} ${selectedDeleteCount}`}
+              </Button>
+            )}
+            {mergeSelectionIds.length >= 2 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-primary h-6 px-2 text-xs"
+                onClick={handleMergeSelectedLesions}
+              >
+                {`${t('Merge selected lesions', {
+                  defaultValue: 'Merge selected lesions',
+                })} ${mergeSelectionIds.length}`}
+              </Button>
+            )}
+          </div>
+        )}
         {/* [2026-08-26 功能] Lesion 列表紧凑显示：减少卡片间距，提升右侧小面板中的可见病灶数量 */}
         <div className="ohif-scrollbar ohif-scrollbar-stable-gutter min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-1.5 py-1">
           {!lesionCount && (
@@ -573,14 +1077,14 @@ export default function PanelRoiThresholdSegmentation() {
               )}
             </div>
           )}
-          {!!lesionCount && !filteredLesions.length && (
+          {!!lesionCount && !visibleLesions.length && (
             <div className="text-muted-foreground py-2 text-sm">
               {t('No lesions match the current filter.', {
                 defaultValue: 'No lesions match the current filter.',
               })}
             </div>
           )}
-          {filteredLesions.map(lesion => {
+          {visibleLesions.map(lesion => {
             const isSelected = lesion.id === selectedLesionId;
             const isConfirmed = lesion.status === 'confirmed';
             const isRejected = lesion.status === 'rejected';

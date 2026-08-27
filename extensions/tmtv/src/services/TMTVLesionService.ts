@@ -81,6 +81,16 @@ type TMTVLesionHistoryEntry =
       afterStatus: TMTVLesionStatus;
     }
   | {
+      type: 'BATCH_STATUS';
+      segmentationIds: string[];
+      changes: Array<{
+        lesionId: string;
+        displayIndex: number;
+        beforeStatus: TMTVLesionStatus;
+        afterStatus: TMTVLesionStatus;
+      }>;
+    }
+  | {
       type: 'LABELMAP';
       segmentationIds: string[];
       segmentationId: string;
@@ -312,6 +322,73 @@ class TMTVLesionService {
     return nextState;
   }
 
+  public setLesionStatuses(
+    segmentationIds: string[],
+    lesionIds: string[],
+    status: TMTVLesionStatus,
+    recordHistory = true
+  ): TMTVLesionState | null {
+    // [2026-08-26 功能] 批量 Confirm/Reject：一次更新多个 lesion 业务状态，避免几十个候选需要逐个点击
+    const groupId = this.getGroupId(segmentationIds);
+    const state = this.getState(segmentationIds);
+    const targetLesionIds = new Set((lesionIds ?? []).filter(Boolean));
+
+    if (!targetLesionIds.size) {
+      return null;
+    }
+
+    const changes = state.lesions
+      .filter(lesion => targetLesionIds.has(lesion.id) && lesion.status !== status)
+      .map(lesion => ({
+        lesionId: lesion.id,
+        displayIndex: lesion.displayIndex,
+        beforeStatus: lesion.status,
+        afterStatus: status,
+      }));
+
+    if (!changes.length) {
+      return null;
+    }
+
+    const changeByLesionId = new Map(changes.map(change => [change.lesionId, change]));
+    const lesions = state.lesions.map(lesion => {
+      const change = changeByLesionId.get(lesion.id);
+
+      return change
+        ? {
+            ...lesion,
+            status: change.afterStatus,
+          }
+        : lesion;
+    });
+    const nextSelectedLesionId =
+      state.selectedLesionId && lesions.some(lesion => lesion.id === state.selectedLesionId)
+        ? state.selectedLesionId
+        : null;
+    const nextState = {
+      ...state,
+      selectedLesionId: nextSelectedLesionId,
+      lesions,
+      totals: computeConfirmedTotals(lesions),
+      updatedAt: Date.now(),
+    };
+
+    if (recordHistory && !this.isApplyingHistory) {
+      this.pushHistory({
+        type: 'BATCH_STATUS',
+        segmentationIds: [...segmentationIds],
+        changes,
+      });
+    }
+
+    this.selectedLesionIdByGroupId.set(groupId, nextSelectedLesionId);
+    this.stateByGroupId.set(groupId, nextState);
+    this.persistState(groupId, nextState);
+    this.notify();
+
+    return nextState;
+  }
+
   public deleteLesion(lesionId: string, segmentIndex = 1): TMTVLesionState | null {
     // [2026-08-24 功能] 删除病灶时真实回写 Segment 1 labelmap，而不是只从 UI 数组移除
     const state = this.findStateForLesion(lesionId);
@@ -362,6 +439,105 @@ class TMTVLesionService {
     );
 
     return nextState;
+  }
+
+  public deleteLesions(
+    segmentationIds: string[],
+    lesionIds: string[],
+    segmentIndex = 1
+  ): TMTVLesionState | null {
+    // [2026-08-27 功能] 批量删除 rejected 病灶：一次清空多个 connected components，避免医生逐层用橡皮擦扫除
+    const state = this.getState(segmentationIds);
+    const targetLesionIds = new Set((lesionIds ?? []).filter(Boolean));
+
+    if (!targetLesionIds.size) {
+      return null;
+    }
+
+    const lesionsToDelete = state.lesions.filter(lesion => targetLesionIds.has(lesion.id));
+
+    if (!lesionsToDelete.length) {
+      return null;
+    }
+
+    const volumeDataBySegmentationId = new Map<
+      string,
+      {
+        segmentationVolume: any;
+        scalarData: ArrayLike<number>;
+        changes: VoxelChange[];
+        voxelIndices: number[];
+      }
+    >();
+    const deletableLesionIds = new Set<string>();
+
+    lesionsToDelete.forEach(lesion => {
+      const segmentationVolume = this.getSegmentationVolume(lesion.segmentationId);
+      const scalarData = getScalarData(segmentationVolume);
+
+      if (!segmentationVolume || !scalarData) {
+        return;
+      }
+
+      let volumeData = volumeDataBySegmentationId.get(lesion.segmentationId);
+
+      if (!volumeData) {
+        volumeData = {
+          segmentationVolume,
+          scalarData,
+          changes: [],
+          voxelIndices: [],
+        };
+        volumeDataBySegmentationId.set(lesion.segmentationId, volumeData);
+      }
+
+      deletableLesionIds.add(lesion.id);
+
+      lesion.voxelIndices.forEach(voxelIndex => {
+        if (scalarData[voxelIndex] !== segmentIndex) {
+          return;
+        }
+
+        volumeData.changes.push({
+          voxelIndex,
+          before: segmentIndex,
+          after: 0,
+        });
+        volumeData.voxelIndices.push(voxelIndex);
+        setScalarValue(segmentationVolume, scalarData, voxelIndex, 0);
+      });
+    });
+
+    if (!volumeDataBySegmentationId.size) {
+      return null;
+    }
+
+    volumeDataBySegmentationId.forEach((volumeData, segmentationId) => {
+      if (!volumeData.changes.length) {
+        return;
+      }
+
+      if (!this.isApplyingHistory) {
+        this.pushHistory({
+          type: 'LABELMAP',
+          segmentationIds: [...state.segmentationIds],
+          segmentationId,
+          segmentIndex,
+          changes: volumeData.changes,
+        });
+        this.updateLabelmapSnapshot(segmentationId, volumeData.scalarData, segmentIndex);
+      }
+
+      this.skipNextFullRefreshSegmentationIds.add(segmentationId);
+      volumeData.segmentationVolume.modified?.();
+      csTools.segmentation.triggerSegmentationEvents.triggerSegmentationDataModified(
+        segmentationId,
+        getModifiedSlices(volumeData.voxelIndices, getDimensions(volumeData.segmentationVolume)),
+        segmentIndex
+      );
+    });
+
+    return this.removeLesionsFromState(state, Array.from(deletableLesionIds));
   }
 
   public mergeLesions(segmentationIds: string[], lesionIds: string[]): TMTVLesionState | null {
@@ -742,6 +918,31 @@ class TMTVLesionService {
     return nextState;
   }
 
+  private removeLesionsFromState(state: TMTVLesionState, lesionIds: string[]): TMTVLesionState {
+    // [2026-08-27 功能] 批量删除后一次性移除右侧列表项和选中态，避免多次 notify 造成面板抖动
+    const groupId = this.getGroupId(state.segmentationIds);
+    const targetLesionIds = new Set(lesionIds);
+    const lesions = state.lesions.filter(lesion => !targetLesionIds.has(lesion.id));
+    const selectedLesionId =
+      state.selectedLesionId && targetLesionIds.has(state.selectedLesionId)
+        ? null
+        : state.selectedLesionId;
+    const nextState = {
+      ...state,
+      selectedLesionId,
+      lesions,
+      totals: computeConfirmedTotals(lesions),
+      updatedAt: Date.now(),
+    };
+
+    this.selectedLesionIdByGroupId.set(groupId, selectedLesionId);
+    this.stateByGroupId.set(groupId, nextState);
+    this.persistState(groupId, nextState);
+    this.notify();
+
+    return nextState;
+  }
+
   private getSegmentationVolume(segmentationId: string) {
     const segmentation = csTools.segmentation.state.getSegmentation(segmentationId);
 
@@ -776,6 +977,10 @@ class TMTVLesionService {
       return this.applyStatusHistory(entry, direction);
     }
 
+    if (entry.type === 'BATCH_STATUS') {
+      return this.applyBatchStatusHistory(entry, direction);
+    }
+
     this.applyLabelmapHistory(entry, direction);
     return true;
   }
@@ -801,6 +1006,70 @@ class TMTVLesionService {
     }
 
     return !!this.setLesionStatus(entry.segmentationIds, targetLesion.id, desiredStatus, false);
+  }
+
+  private applyBatchStatusHistory(
+    entry: Extract<TMTVLesionHistoryEntry, { type: 'BATCH_STATUS' }>,
+    direction: 'undo' | 'redo'
+  ): boolean {
+    // [2026-08-26 功能] 批量状态 Undo/Redo：用 stable UUID 优先、displayIndex 兜底，保持批量审核可回退
+    const state = this.getState(entry.segmentationIds);
+    const targetStatusByLesionId = new Map<string, TMTVLesionStatus>();
+
+    entry.changes.forEach(change => {
+      const targetLesion =
+        state.lesions.find(lesion => lesion.id === change.lesionId) ??
+        state.lesions.find(lesion => lesion.displayIndex === change.displayIndex);
+
+      if (!targetLesion) {
+        return;
+      }
+
+      targetStatusByLesionId.set(
+        targetLesion.id,
+        direction === 'undo' ? change.beforeStatus : change.afterStatus
+      );
+    });
+
+    if (!targetStatusByLesionId.size) {
+      return false;
+    }
+
+    const targetLesionIds = Array.from(targetStatusByLesionId.keys());
+    const uniqueTargetStatuses = new Set(targetStatusByLesionId.values());
+
+    if (uniqueTargetStatuses.size === 1) {
+      return !!this.setLesionStatuses(
+        entry.segmentationIds,
+        targetLesionIds,
+        Array.from(uniqueTargetStatuses)[0],
+        false
+      );
+    }
+
+    const groupId = this.getGroupId(entry.segmentationIds);
+    const lesions = state.lesions.map(lesion => {
+      const status = targetStatusByLesionId.get(lesion.id);
+
+      return status
+        ? {
+            ...lesion,
+            status,
+          }
+        : lesion;
+    });
+    const nextState = {
+      ...state,
+      lesions,
+      totals: computeConfirmedTotals(lesions),
+      updatedAt: Date.now(),
+    };
+
+    this.stateByGroupId.set(groupId, nextState);
+    this.persistState(groupId, nextState);
+    this.notify();
+
+    return true;
   }
 
   private applyPendingStatusHistoryApplication(): void {

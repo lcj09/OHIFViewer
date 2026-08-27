@@ -19,6 +19,7 @@ import crosshairDisplayService from './services/CrosshairDisplayService';
 import tmtvLesionService from './services/TMTVLesionService';
 import tmtvLesionHighlightService from './services/TMTVLesionHighlightService';
 import tmtvSegmentMaskStorageService from './services/TMTVSegmentMaskStorageService';
+import tmtvAutoSegmentationService from './services/TMTVAutoSegmentationService';
 import { createTMTVReportSections } from './services/TMTVReportService';
 import { getDimensions } from './services/TMTVStatisticsService';
 import { toolGroupIds } from '../../../modes/tmtv/src/initToolGroups';
@@ -147,6 +148,61 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
 
     const volumeIds = viewport.getAllVolumeIds();
     return volumeIds.find(id => id.includes(ptDisplaySetMatch.displaySetInstanceUID));
+  }
+
+  function getReferenceVolumeForSegmentationVolume(segmentationVolumeId) {
+    // [2026-08-26 功能] 全身 SUV 阈值自动分割：从 Segment 1 派生 labelmap 反查 PT reference volume，失败时由调用方给出业务提示
+    if (!segmentationVolumeId) {
+      return null;
+    }
+
+    try {
+      return csTools.utilities.segmentation.getReferenceVolumeForSegmentationVolume(
+        segmentationVolumeId
+      );
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function getPrimaryTMTVSegmentationId() {
+    // [2026-08-26 功能] TMTV 分割编辑目标保护：优先使用当前视口的真实 Segment 1，避免 Brush/Eraser 误编辑高亮层
+    const activeViewportId = viewportGridService.getActiveViewportId?.();
+    const activeSegmentation = activeViewportId
+      ? segmentationService.getActiveSegmentation?.(activeViewportId)
+      : null;
+
+    if (
+      activeSegmentation?.segmentationId &&
+      !tmtvLesionHighlightService.isHighlightSegmentationId(activeSegmentation.segmentationId)
+    ) {
+      return activeSegmentation.segmentationId;
+    }
+
+    if (activeViewportId) {
+      const activeViewportRepresentations =
+        segmentationService.getSegmentationRepresentations?.(activeViewportId) ?? [];
+      const activeViewportPrimary = activeViewportRepresentations.find(
+        representation =>
+          !tmtvLesionHighlightService.isHighlightSegmentationId(
+            representation.segmentationId ?? representation.segmentation?.segmentationId
+          )
+      );
+      const activeViewportPrimaryId =
+        activeViewportPrimary?.segmentationId ??
+        activeViewportPrimary?.segmentation?.segmentationId;
+
+      if (activeViewportPrimaryId) {
+        return activeViewportPrimaryId;
+      }
+    }
+
+    return segmentationService
+      .getSegmentations()
+      .find(
+        segmentation =>
+          !tmtvLesionHighlightService.isHighlightSegmentationId(segmentation.segmentationId)
+      )?.segmentationId;
   }
 
   const actions = {
@@ -389,6 +445,124 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         { overwrite: true, segmentIndex, segmentationId }
       );
     },
+    autoSegmentTMTVBySUVThreshold: async ({
+      segmentationId,
+      threshold = 2.5,
+      minVolumeML = 0.1,
+      writeMode = 'overwrite',
+      segmentIndex = 1,
+    } = {}) => {
+      // [2026-08-26 功能] 全身 SUV 阈值自动分割：统一写入 Segment 1，后续 Lesion candidate/统计/报告复用已有刷新链路
+      let targetSegmentationId = segmentationId;
+
+      if (!targetSegmentationId) {
+        const tmtvSegmentations = segmentationService
+          .getSegmentations()
+          .filter(
+            segmentation =>
+              !tmtvLesionHighlightService.isHighlightSegmentationId(segmentation.segmentationId)
+          );
+        targetSegmentationId = tmtvSegmentations[0]?.segmentationId;
+      }
+
+      if (!targetSegmentationId) {
+        targetSegmentationId = await actions.createNewLabelmapFromPT({
+          label: 'TMTV Segmentation',
+        });
+      }
+
+      const segmentation = targetSegmentationId
+        ? segmentationService.getSegmentation(targetSegmentationId)
+        : null;
+      const labelmapData =
+        segmentation?.representationData?.[SegmentationRepresentations.Labelmap] ??
+        segmentation?.representationData?.Labelmap;
+      const segmentationVolumeId = labelmapData?.volumeId;
+      const segmentationVolume = segmentationVolumeId
+        ? cs.cache.getVolume(segmentationVolumeId)
+        : null;
+      const referenceVolume = getReferenceVolumeForSegmentationVolume(segmentationVolumeId);
+
+      if (!segmentation || !segmentationVolume || !referenceVolume) {
+        uiNotificationService.show({
+          title: 'TMTV Auto Segmentation',
+          message: 'Create Segment 1 from the PT volume before running auto segmentation.',
+          type: 'error',
+        });
+        return null;
+      }
+
+      try {
+        const result = tmtvAutoSegmentationService.runSUVThresholdSegmentation({
+          segmentationId: targetSegmentationId,
+          segmentationVolume,
+          referenceVolume,
+          segmentIndex,
+          threshold,
+          minVolumeML,
+          writeMode: writeMode === 'append' ? 'append' : 'overwrite',
+        });
+
+        segmentationService.setActiveSegment?.(targetSegmentationId, segmentIndex);
+        uiNotificationService.show({
+          title: 'TMTV Auto Segmentation',
+          message: `Generated ${result.keptComponentCount} candidates, filtered ${result.filteredComponentCount} small components.`,
+          type: result.voxelCount ? 'success' : 'warning',
+        });
+
+        return result;
+      } catch (error) {
+        console.error('autoSegmentTMTVBySUVThreshold failed', error);
+        uiNotificationService.show({
+          title: 'TMTV Auto Segmentation',
+          message: error instanceof Error ? error.message : 'Auto segmentation failed.',
+          type: 'error',
+        });
+        return null;
+      }
+    },
+    ensurePrimaryTMTVSegmentationActive: ({ clearSelection = false } = {}) => {
+      // [2026-08-26 功能] TMTV Brush/Eraser 前恢复真实 Segment 1 为 active，避免擦除高亮层后 lesion 列表不刷新
+      const primarySegmentationId = getPrimaryTMTVSegmentationId();
+
+      if (!primarySegmentationId) {
+        return null;
+      }
+
+      const segmentationIds = segmentationService
+        .getSegmentations()
+        .map(segmentation => segmentation?.segmentationId)
+        .filter(
+          segmentationId =>
+            segmentationId && !tmtvLesionHighlightService.isHighlightSegmentationId(segmentationId)
+        );
+      const viewportIds =
+        cornerstoneViewportService?.getViewportIds?.() ??
+        viewportGridService?.getViewportIds?.() ??
+        Array.from(viewportGridService?.getState?.()?.viewports?.keys?.() ?? []);
+
+      segmentationService.setActiveSegment?.(primarySegmentationId, 1);
+
+      viewportIds.forEach(viewportId => {
+        const representations = segmentationService.getSegmentationRepresentations?.(viewportId, {
+          segmentationId: primarySegmentationId,
+          type: SegmentationRepresentations.Labelmap,
+        });
+
+        if (!representations?.length) {
+          return;
+        }
+
+        segmentationService.setActiveSegmentation?.(viewportId, primarySegmentationId);
+      });
+
+      if (clearSelection) {
+        tmtvLesionService.selectLesion(segmentationIds, null);
+        tmtvLesionHighlightService.clearHighlight(segmentationIds);
+      }
+
+      return primarySegmentationId;
+    },
     calculateTMTV: async ({ segmentations }) => {
       const segmentationIds = segmentations.map(segmentation => segmentation.segmentationId);
 
@@ -401,10 +575,38 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       return stats;
     },
     selectTMTVLesion: async ({ segmentationIds, lesionId }) => {
-      // [2026-08-25 功能] 单击 lesion 只更新右侧 selected 状态和独立高亮层，不移动 viewport/crosshair
+      // [2026-08-27 功能] 单击 lesion 时同步定位到病灶中心层，避免小病灶只在列表高亮但图像页不可见
       const lesion = tmtvLesionService.selectLesion(segmentationIds, lesionId);
 
       await tmtvLesionHighlightService.highlightLesion(segmentationIds, lesion);
+
+      if (lesion?.centroid?.length === 3) {
+        const lesionCentroid = lesion.centroid as [number, number, number];
+
+        if (crosshairDisplayService.isVisible?.()) {
+          tmtvCrosshairService.setPosition(lesionCentroid);
+        }
+
+        const viewportIds =
+          segmentationService.getViewportIdsWithSegmentation?.(lesion.segmentationId) ??
+          viewportGridService?.getViewportIds?.() ??
+          [];
+
+        viewportIds.forEach(viewportId => {
+          try {
+            const viewport = cornerstoneViewportService.getCornerstoneViewport(viewportId);
+
+            if (!viewport?.jumpToWorld) {
+              return;
+            }
+
+            viewport.jumpToWorld(lesionCentroid);
+            viewport.render?.();
+          } catch (error) {
+            console.warn('selectTMTVLesion: jump to lesion failed', viewportId, error);
+          }
+        });
+      }
 
       const activeViewportId = viewportGridService.getActiveViewportId?.();
       if (activeViewportId) {
@@ -429,9 +631,40 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         });
       }
     },
+    deleteTMTVLesions: ({ segmentationIds = [], lesionIds = [] }) => {
+      // [2026-08-27 功能] 批量 Delete rejected 病灶：真实清空 Segment 1 连通域，替代逐层橡皮擦清除
+      const previousLesionState = tmtvLesionService.getState(segmentationIds);
+      const targetLesionIds = new Set((lesionIds ?? []).filter(Boolean));
+      const shouldClearHighlight =
+        !!previousLesionState.selectedLesionId &&
+        targetLesionIds.has(previousLesionState.selectedLesionId);
+      const lesionState = tmtvLesionService.deleteLesions(segmentationIds, lesionIds, 1);
+
+      if (lesionState) {
+        if (shouldClearHighlight) {
+          tmtvLesionHighlightService.clearHighlight(lesionState.segmentationIds);
+        }
+
+        segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
+          tmtv: lesionState.totals.tmtv,
+          tlg: lesionState.totals.tlg,
+        });
+      }
+    },
     setTMTVLesionStatus: ({ segmentationIds = [], lesionId, status }) => {
       // [2026-08-25 功能] 第一阶段 Lesion 确认/拒绝只更新业务状态，TMTV/TLG 只汇总 confirmed lesions
       const lesionState = tmtvLesionService.setLesionStatus(segmentationIds, lesionId, status);
+
+      if (lesionState) {
+        segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
+          tmtv: lesionState.totals.tmtv,
+          tlg: lesionState.totals.tlg,
+        });
+      }
+    },
+    setTMTVLesionStatuses: ({ segmentationIds = [], lesionIds = [], status }) => {
+      // [2026-08-26 功能] 批量 Lesion 审核：一次确认/拒绝多个候选，只更新业务状态和 confirmed totals
+      const lesionState = tmtvLesionService.setLesionStatuses(segmentationIds, lesionIds, status);
 
       if (lesionState) {
         segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
@@ -455,7 +688,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       // [2026-08-26 功能] TMTV 专用撤销命令，避免覆盖测量/标注等全局 undo 行为
       const historyEntry = tmtvLesionService.undo();
 
-      if (historyEntry?.type === 'STATUS') {
+      if (historyEntry?.type === 'STATUS' || historyEntry?.type === 'BATCH_STATUS') {
         const lesionState = tmtvLesionService.getState(historyEntry.segmentationIds);
         segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
           tmtv: lesionState.totals.tmtv,
@@ -467,7 +700,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       // [2026-08-26 功能] TMTV 专用重做命令，避免覆盖测量/标注等全局 redo 行为
       const historyEntry = tmtvLesionService.redo();
 
-      if (historyEntry?.type === 'STATUS') {
+      if (historyEntry?.type === 'STATUS' || historyEntry?.type === 'BATCH_STATUS') {
         const lesionState = tmtvLesionService.getState(historyEntry.segmentationIds);
         segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
           tmtv: lesionState.totals.tmtv,
@@ -1174,6 +1407,12 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     thresholdSegmentationByRectangleROITool: {
       commandFn: actions.thresholdSegmentationByRectangleROITool,
     },
+    autoSegmentTMTVBySUVThreshold: {
+      commandFn: actions.autoSegmentTMTVBySUVThreshold,
+    },
+    ensurePrimaryTMTVSegmentationActive: {
+      commandFn: actions.ensurePrimaryTMTVSegmentationActive,
+    },
     calculateTMTV: {
       commandFn: actions.calculateTMTV,
     },
@@ -1183,8 +1422,14 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     deleteTMTVLesion: {
       commandFn: actions.deleteTMTVLesion,
     },
+    deleteTMTVLesions: {
+      commandFn: actions.deleteTMTVLesions,
+    },
     setTMTVLesionStatus: {
       commandFn: actions.setTMTVLesionStatus,
+    },
+    setTMTVLesionStatuses: {
+      commandFn: actions.setTMTVLesionStatuses,
     },
     mergeTMTVLesions: {
       commandFn: actions.mergeTMTVLesions,
