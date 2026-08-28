@@ -125,8 +125,9 @@ export default function initCornerstoneTools(configuration = {}) {
   addTool(SplineContourSegmentationTool);
   addTool(LabelMapEditWithContourTool);
   // Modify annotation tools to use dashed lines on SR
+  // [2026-08-21 修改] 测量结果文本字体从 15px 改为 12px
   const annotationStyle = {
-    textBoxFontSize: '15px',
+    textBoxFontSize: '12px',
     lineWidth: '1.5',
   };
 
