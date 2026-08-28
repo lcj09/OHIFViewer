@@ -538,7 +538,12 @@ function WorkList({
               onChange={setFilterValues}
               clearFilters={() => setFilterValues(defaultFilterValues)}
               isFiltering={isFiltering(filterValues, defaultFilterValues)}
-              onUploadClick={uploadProps ? () => show(uploadProps) : undefined}
+              // [2026-08-28 屏蔽] 隐藏查询界面上传按钮
+              onUploadClick={undefined}
+              // [2026-08-28 新增] 对比按钮（占位，功能待实现）
+              onCompareClick={() => {
+                console.warn('对比功能暂未实现');
+              }}
               getDataSourceConfigurationComponent={
                 dataSourceConfigurationComponent
                   ? () => dataSourceConfigurationComponent()

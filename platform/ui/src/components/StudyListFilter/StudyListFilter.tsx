@@ -15,6 +15,7 @@ const StudyListFilter = ({
   isFiltering,
   numOfStudies,
   onUploadClick,
+  onCompareClick,
   getDataSourceConfigurationComponent,
 }) => {
   const { t } = useTranslation('StudyList');
@@ -42,6 +43,16 @@ const StudyListFilter = ({
                   {t('StudyList')}
                 </Typography>
                 {getDataSourceConfigurationComponent && getDataSourceConfigurationComponent()}
+                {/* [2026-08-28 新增] 对比按钮（占位） */}
+                {onCompareClick && (
+                  <div
+                    className="text-primary-active flex cursor-pointer items-center gap-2 self-center text-lg font-semibold"
+                    onClick={onCompareClick}
+                  >
+                    <Icons.ByName name="link" />
+                    <span>对比</span>
+                  </div>
+                )}
                 {onUploadClick && (
                   <div
                     className="text-primary-active flex cursor-pointer items-center gap-2 self-center text-lg font-semibold"
@@ -138,6 +149,7 @@ StudyListFilter.propTypes = {
   clearFilters: PropTypes.func.isRequired,
   isFiltering: PropTypes.bool.isRequired,
   onUploadClick: PropTypes.func,
+  onCompareClick: PropTypes.func,
   getDataSourceConfigurationComponent: PropTypes.func,
 };
 
