@@ -18,9 +18,12 @@ type HighlightState = {
 class TMTVLesionHighlightService {
   private servicesManager;
   private stateByGroupId = new Map<string, HighlightState>();
+  private generation = 0;
+  private requestIdByGroupId = new Map<string, number>();
 
   public init(servicesManager): void {
     this.servicesManager = servicesManager;
+    this.generation++;
   }
 
   public isHighlightSegmentationId(segmentationId?: string): boolean {
@@ -38,6 +41,9 @@ class TMTVLesionHighlightService {
     }
 
     const groupId = this.getGroupId(segmentationIds);
+    const requestGeneration = this.generation;
+    const requestId = (this.requestIdByGroupId.get(groupId) ?? 0) + 1;
+    this.requestIdByGroupId.set(groupId, requestId);
     const sourceSegmentationVolumeId = this.getSegmentationVolumeId(lesion.segmentationId);
 
     if (!sourceSegmentationVolumeId) {
@@ -54,8 +60,18 @@ class TMTVLesionHighlightService {
     const highlightState = await this.ensureHighlightState(
       groupId,
       sourceSegmentationVolumeId,
-      sourceScalarData.length
+      sourceScalarData.length,
+      requestGeneration
     );
+
+    if (
+      !highlightState ||
+      requestGeneration !== this.generation ||
+      this.requestIdByGroupId.get(groupId) !== requestId
+    ) {
+      return;
+    }
+
     const highlightVolume = getCachedVolume(highlightState.volumeId);
     const highlightScalarData = getScalarData(highlightVolume);
 
@@ -80,9 +96,29 @@ class TMTVLesionHighlightService {
     this.renderHighlight(highlightState.segmentationId, highlightVolume, lesion.voxelIndices);
   }
 
+  public reset(): void {
+    // [2026-08-28 功能] TMTV 模式退出时释放临时高亮 segmentation/derived volume，避免单例跨病例持有大体素数组
+    this.generation++;
+
+    const states = Array.from(this.stateByGroupId.values());
+
+    states.forEach(highlightState => {
+      highlightState.previousVoxelIndices = [];
+      this.removeHighlightFromViewports(highlightState.segmentationId);
+      this.removeHighlightSegmentation(highlightState.segmentationId);
+      this.removeCachedVolume(highlightState.volumeId);
+    });
+
+    this.stateByGroupId.clear();
+    this.requestIdByGroupId.clear();
+    this.servicesManager = null;
+  }
+
   public clearHighlight(segmentationIds: string[]): void {
     // [2026-08-25 功能] 取消选中时清空高亮层，保留真实 Segment 1 和统计结果不变
     const groupId = this.getGroupId(segmentationIds);
+    this.requestIdByGroupId.set(groupId, (this.requestIdByGroupId.get(groupId) ?? 0) + 1);
+
     const highlightState = this.stateByGroupId.get(groupId);
 
     if (!highlightState) {
@@ -129,8 +165,9 @@ class TMTVLesionHighlightService {
   private async ensureHighlightState(
     groupId: string,
     sourceSegmentationVolumeId: string,
-    scalarLength: number
-  ): Promise<HighlightState> {
+    scalarLength: number,
+    requestGeneration: number
+  ): Promise<HighlightState | null> {
     const existingState = this.stateByGroupId.get(groupId);
 
     if (existingState && getCachedVolume(existingState.volumeId)) {
@@ -150,9 +187,20 @@ class TMTVLesionHighlightService {
           },
         }
       );
+
+      if (requestGeneration !== this.generation || !this.servicesManager) {
+        this.removeCachedVolume(volumeId);
+        return null;
+      }
+
       const emptyScalarData = new Uint8Array(scalarLength);
       highlightVolume.voxelManager?.setCompleteScalarDataArray?.(emptyScalarData);
       highlightVolume.loadStatus = { loaded: true };
+    }
+
+    if (requestGeneration !== this.generation || !this.servicesManager) {
+      this.removeCachedVolume(volumeId);
+      return null;
     }
 
     this.registerHighlightSegmentation(segmentationId, volumeId);
@@ -168,6 +216,10 @@ class TMTVLesionHighlightService {
   }
 
   private registerHighlightSegmentation(segmentationId: string, volumeId: string): void {
+    if (!this.servicesManager?.services) {
+      return;
+    }
+
     const { segmentationService } = this.servicesManager.services;
 
     if (segmentationService.getSegmentation(segmentationId)) {
@@ -200,6 +252,10 @@ class TMTVLesionHighlightService {
     highlightSegmentationId: string,
     sourceSegmentationId: string
   ): Promise<void> {
+    if (!this.servicesManager?.services) {
+      return;
+    }
+
     const { cornerstoneViewportService, segmentationService, viewportGridService } =
       this.servicesManager.services;
     const viewportIds =
@@ -282,6 +338,10 @@ class TMTVLesionHighlightService {
   }
 
   private renderViewports(): void {
+    if (!this.servicesManager?.services) {
+      return;
+    }
+
     const { cornerstoneViewportService, viewportGridService } = this.servicesManager.services;
     const viewportIds =
       cornerstoneViewportService.getViewportIds?.() ??
@@ -294,6 +354,10 @@ class TMTVLesionHighlightService {
   }
 
   private removeHighlightFromViewports(highlightSegmentationId: string): void {
+    if (!this.servicesManager?.services) {
+      return;
+    }
+
     const { cornerstoneViewportService, segmentationService, viewportGridService } =
       this.servicesManager.services;
     const viewportIds =
@@ -308,6 +372,40 @@ class TMTVLesionHighlightService {
       });
       cornerstoneViewportService.getCornerstoneViewport(viewportId)?.render?.();
     });
+  }
+
+  private removeHighlightSegmentation(highlightSegmentationId: string): void {
+    try {
+      const removeSegmentation = this.servicesManager?.services?.segmentationService?.remove;
+
+      if (typeof removeSegmentation === 'function') {
+        removeSegmentation.call(
+          this.servicesManager.services.segmentationService,
+          highlightSegmentationId
+        );
+        return;
+      }
+    } catch {}
+
+    try {
+      csTools.segmentation.state.removeSegmentation(highlightSegmentationId);
+    } catch {}
+  }
+
+  private removeCachedVolume(volumeId: string): void {
+    const cachedVolume = getCachedVolume(volumeId);
+
+    try {
+      cachedVolume?.imageData?.delete?.();
+    } catch {}
+
+    try {
+      cache.removeVolumeLoadObject(volumeId);
+    } catch {
+      try {
+        (cache as any)._volumeCache?.delete?.(volumeId);
+      } catch {}
+    }
   }
 
   private clearVoxelIndices(volume, scalarData: ArrayLike<number>, voxelIndices: number[]): void {

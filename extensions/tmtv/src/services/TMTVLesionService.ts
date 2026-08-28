@@ -145,6 +145,7 @@ class TMTVLesionService {
   private pendingStatusHistoryApplication: PendingStatusHistoryApplication | null = null;
   private mergeGroupByGroupId = new Map<string, Map<string, string>>();
   private asyncExtractionRequestIdByGroupId = new Map<string, number>();
+  private generation = 0;
 
   public subscribe(listener: () => void): Subscription {
     this.listeners.add(listener);
@@ -234,27 +235,42 @@ class TMTVLesionService {
       .filter(Boolean);
     const groupId = this.getGroupId(segmentationIds);
     const requestId = (this.asyncExtractionRequestIdByGroupId.get(groupId) ?? 0) + 1;
+    const requestGeneration = this.generation;
 
     this.asyncExtractionRequestIdByGroupId.set(groupId, requestId);
 
     if (options.restorePersistedMask) {
       await Promise.all(
         segmentations.map(segmentation =>
-          this.restorePersistedSegmentMaskIfNeeded(segmentation, segmentIndex)
+          this.restorePersistedSegmentMaskIfNeeded(segmentation, segmentIndex, requestGeneration)
         )
       );
+    }
+
+    if (
+      this.generation !== requestGeneration ||
+      this.asyncExtractionRequestIdByGroupId.get(groupId) !== requestId
+    ) {
+      return this.getState(segmentationIds);
     }
 
     const lesionGroups = await Promise.all(
       segmentations.map(async segmentation => {
         this.recordLabelmapHistoryFromSegmentation(segmentation, segmentIndex, segmentationIds);
-        const lesions = await this.extractLesionsForSegmentationAsync(segmentation, segmentIndex);
+        const lesions = await this.extractLesionsForSegmentationAsync(
+          segmentation,
+          segmentIndex,
+          requestGeneration
+        );
         return lesions;
       })
     );
     const lesions = lesionGroups.flat();
 
-    if (this.asyncExtractionRequestIdByGroupId.get(groupId) !== requestId) {
+    if (
+      this.generation !== requestGeneration ||
+      this.asyncExtractionRequestIdByGroupId.get(groupId) !== requestId
+    ) {
       return this.getState(segmentationIds);
     }
 
@@ -629,24 +645,41 @@ class TMTVLesionService {
   }
 
   public reset(segmentationIds?: string[]): void {
+    // [2026-08-28 功能] 重置指定 TMTV lesion 状态，并同步释放 snapshot/history 中的大体素索引引用
     if (segmentationIds?.length) {
+      this.generation++;
       const groupId = this.getGroupId(segmentationIds);
+      const segmentationIdSet = new Set(segmentationIds);
+
       this.stateByGroupId.delete(groupId);
       this.mergeGroupByGroupId.delete(groupId);
-      this.asyncExtractionRequestIdByGroupId.delete(groupId);
+      this.selectedLesionIdByGroupId.delete(groupId);
+      this.asyncExtractionRequestIdByGroupId.set(
+        groupId,
+        (this.asyncExtractionRequestIdByGroupId.get(groupId) ?? 0) + 1
+      );
       segmentationIds.forEach(segmentationId => {
+        this.skipNextFullRefreshSegmentationIds.delete(segmentationId);
         this.labelmapSnapshotBySegmentationId.delete(segmentationId);
       });
+      this.historyStack = this.historyStack.filter(
+        entry => !doesHistoryEntryTouchSegmentations(entry, segmentationIdSet)
+      );
+      this.redoStack = this.redoStack.filter(
+        entry => !doesHistoryEntryTouchSegmentations(entry, segmentationIdSet)
+      );
+      this.asyncExtractionRequestIdByGroupId.delete(groupId);
     } else {
-      this.stateByGroupId.clear();
-      this.mergeGroupByGroupId.clear();
-      this.labelmapSnapshotBySegmentationId.clear();
-      this.historyStack = [];
-      this.redoStack = [];
-      this.asyncExtractionRequestIdByGroupId.clear();
+      this.clearState();
     }
 
     this.notify();
+  }
+
+  public destroy(): void {
+    // [2026-08-28 功能] TMTV 模式退出时释放单例持有的 listener 闭包、lesion voxelIndices、labelmap snapshot 和 undo/redo diff
+    this.clearState();
+    this.listeners.clear();
   }
 
   public undo(): TMTVLesionHistoryEntry | null {
@@ -811,7 +844,8 @@ class TMTVLesionService {
 
   private async extractLesionsForSegmentationAsync(
     segmentation: any,
-    segmentIndex: number
+    segmentIndex: number,
+    requestGeneration: number
   ): Promise<TMTVLesion[]> {
     // [2026-08-26 功能] Web Worker 加速：connected components 在 worker 执行，SUV/World 统计仍留主线程访问 Cornerstone volume
     const segmentationData = this.getSegmentationExtractionData(segmentation);
@@ -833,6 +867,10 @@ class TMTVLesionService {
       segmentIndex,
     });
 
+    if (this.generation !== requestGeneration) {
+      return [];
+    }
+
     return this.createLesionsFromComponents({
       components,
       segmentationId,
@@ -845,7 +883,8 @@ class TMTVLesionService {
 
   private async restorePersistedSegmentMaskIfNeeded(
     segmentation: any,
-    segmentIndex: number
+    segmentIndex: number,
+    requestGeneration: number
   ): Promise<void> {
     // [2026-08-26 功能] IndexedDB 稀疏保存/恢复 Segment 1 mask：仅当当前 Segment 1 为空时恢复，避免覆盖医生已重新绘制的分割
     const segmentationData = this.getSegmentationExtractionData(segmentation);
@@ -874,7 +913,7 @@ class TMTVLesionService {
       dimensions,
     });
 
-    if (!persistedMask?.voxelIndices?.length) {
+    if (this.generation !== requestGeneration || !persistedMask?.voxelIndices?.length) {
       return;
     }
 
@@ -1022,6 +1061,20 @@ class TMTVLesionService {
     }
 
     return getCachedVolume(segmentationVolumeId);
+  }
+
+  private clearState(): void {
+    this.generation++;
+    this.stateByGroupId.clear();
+    this.selectedLesionIdByGroupId.clear();
+    this.skipNextFullRefreshSegmentationIds.clear();
+    this.labelmapSnapshotBySegmentationId.clear();
+    this.historyStack = [];
+    this.redoStack = [];
+    this.isApplyingHistory = false;
+    this.pendingStatusHistoryApplication = null;
+    this.mergeGroupByGroupId.clear();
+    this.asyncExtractionRequestIdByGroupId.clear();
   }
 
   private notify(): void {
@@ -1479,6 +1532,17 @@ class TMTVLesionService {
 function computeConfirmedTotals(lesions: TMTVLesion[]): TMTVLesionState['totals'] {
   // [2026-08-25 功能] 第三阶段患者级 TMTV/TLG 由统计服务统一计算，只纳入 confirmed lesions
   return computePatientTotals(lesions);
+}
+
+function doesHistoryEntryTouchSegmentations(
+  entry: TMTVLesionHistoryEntry,
+  segmentationIds: Set<string>
+): boolean {
+  if (entry.type === 'LABELMAP') {
+    return segmentationIds.has(entry.segmentationId);
+  }
+
+  return entry.segmentationIds.some(segmentationId => segmentationIds.has(segmentationId));
 }
 
 function mergeLesionGroup(lesions: TMTVLesion[]): TMTVLesion {

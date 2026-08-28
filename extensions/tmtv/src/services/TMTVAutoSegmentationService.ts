@@ -90,11 +90,22 @@ class TMTVAutoSegmentationService {
     }
 
     return {
-      ...thresholdResult,
+      ...this.releaseThresholdVoxelArrays(thresholdResult),
       segmentationId,
       segmentIndex,
       writeMode,
       ...writeResult,
+    };
+  }
+
+  private releaseThresholdVoxelArrays(
+    thresholdResult: AutoSegmentBySUVThresholdResult
+  ): AutoSegmentBySUVThresholdResult {
+    // [2026-08-28 功能] 自动分割写入后 UI 只需要统计摘要，避免把候选/写入 voxel 下标大数组跨命令返回并延长保留时间
+    return {
+      ...thresholdResult,
+      candidateVoxelIndices: [],
+      voxelIndices: [],
     };
   }
 

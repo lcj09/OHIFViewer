@@ -51,6 +51,7 @@ const MAX_PERSISTED_SEGMENT_VOXELS = 300000;
 class TMTVSegmentMaskStorageService {
   private dbPromise: Promise<IDBDatabase | null> | null = null;
   private saveTimeoutByKey = new Map<string, ReturnType<typeof setTimeout>>();
+  private generation = 0;
 
   public async loadSegmentMask(context: SegmentMaskContext): Promise<PersistedSegmentMask | null> {
     // [2026-08-26 功能] IndexedDB 稀疏保存/恢复 Segment 1 mask：读取时校验维度，避免恢复到不匹配的图像
@@ -163,9 +164,10 @@ class TMTVSegmentMaskStorageService {
 
     this.clearScheduledSaves(storageKeys);
 
+    const requestGeneration = this.generation;
     const timeout = setTimeout(() => {
       this.saveTimeoutByKey.delete(primaryStorageKey);
-      this.persistSegmentMask(input, storageKeys);
+      this.persistSegmentMask(input, storageKeys, requestGeneration);
     }, SAVE_DEBOUNCE_MS);
 
     this.saveTimeoutByKey.set(primaryStorageKey, timeout);
@@ -180,16 +182,26 @@ class TMTVSegmentMaskStorageService {
     }
 
     this.clearScheduledSaves(storageKeys);
-    await this.persistSegmentMask(input, storageKeys);
+    await this.persistSegmentMask(input, storageKeys, this.generation);
+  }
+
+  public reset(): void {
+    // [2026-08-28 功能] TMTV 模式退出时取消待保存任务，释放定时器闭包持有的 segmentationVolume/scalarData 大对象
+    this.generation++;
+    this.saveTimeoutByKey.forEach(timeout => {
+      clearTimeout(timeout);
+    });
+    this.saveTimeoutByKey.clear();
   }
 
   private async persistSegmentMask(
     input: SaveSegmentMaskInput,
-    storageKeys: string[]
+    storageKeys: string[],
+    requestGeneration: number
   ): Promise<void> {
     const db = await this.getDatabase();
 
-    if (!db) {
+    if (!db || requestGeneration !== this.generation) {
       return;
     }
 

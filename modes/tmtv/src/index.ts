@@ -5,6 +5,11 @@ import initToolGroups from './initToolGroups.js';
 import setCrosshairsConfiguration from './utils/setCrosshairsConfiguration.js';
 import setFusionActiveVolume from './utils/setFusionActiveVolume.js';
 import i18n from 'i18next';
+import tmtvLesionService from '../../../extensions/tmtv/src/services/TMTVLesionService';
+import tmtvLesionHighlightService from '../../../extensions/tmtv/src/services/TMTVLesionHighlightService';
+import tmtvSegmentMaskStorageService from '../../../extensions/tmtv/src/services/TMTVSegmentMaskStorageService';
+import tmtvCrosshairService from '../../../extensions/tmtv/src/services/TMTVCrosshairService';
+import crosshairDisplayService from '../../../extensions/tmtv/src/services/CrosshairDisplayService';
 
 const { MetadataProvider } = classes;
 
@@ -88,7 +93,7 @@ function modeFactory({ modeConfiguration }) {
 
       // Init Default and SR ToolGroups  1初始化工作组（PT  CT FUSION MIP）
       initToolGroups(toolNames, Enums, toolGroupService, commandsManager);
-//监听视口添加事件，2设置十字线配置和Fusion视口的活动体积
+      //监听视口添加事件，2设置十字线配置和Fusion视口的活动体积
       const { unsubscribe } = toolGroupService.subscribe(
         toolGroupService.EVENTS.VIEWPORT_ADDED,
         () => {
@@ -96,14 +101,14 @@ function modeFactory({ modeConfiguration }) {
           // since in the fusion viewport we don't want both PT and CT to render MIP
           // when slabThickness is modified
           const { displaySetMatchDetails } = hangingProtocolService.getMatchDetails();
-         //配置十字线工具（仅对CT体积生效）
+          //配置十字线工具（仅对CT体积生效）
           setCrosshairsConfiguration(
             displaySetMatchDetails,
             toolNames,
             toolGroupService,
             displaySetService
           );
-           //配置融合活动体积（窗宽窗位控制CT，椭圆ROI控制PT）
+          //配置融合活动体积（窗宽窗位控制CT，椭圆ROI控制PT）
           setFusionActiveVolume(
             displaySetMatchDetails,
             toolNames,
@@ -129,7 +134,7 @@ function modeFactory({ modeConfiguration }) {
       );
       unsubscriptions.push(protocolUnsubscribe);
 
-    // 3. 注册工具栏按钮
+      // 3. 注册工具栏按钮
       toolbarService.register(toolbarButtons);
 
       // [2026-04-29] TMTV模式主工具栏布局配置
@@ -149,24 +154,24 @@ function modeFactory({ modeConfiguration }) {
       //   原因: 探针是高频使用功能，需要快速访问，不应隐藏在菜单里
       //
       toolbarService.updateSection(toolbarService.sections.primary, [
-        'ResetTMTV',          // [2026-05-08 新增] 完全重置按钮 (最前面)
-        'Rotate90',           // [2026-08-17 新增] 顺时针旋转90°
-        'FlipHorizontal',     // [2026-08-18 修改] 水平翻转（原系统的Flip Horizontal功能，替代180°旋转）
-        'Save',               // 保存下拉菜单（图像/序列）
-        'MeasurementTools',   // 测量工具组 (下拉菜单)
-        'Zoom',               // 缩放工具
-        'Pan',                // 平移工具
-        'WindowLevel',        // 窗宽窗位调节
-        'Crosshairs',         // 十字线定位
-        'SingleSliceLine',    // [2026-05-19 新增] 单切线旋转（仅影响一条参考线对应视口）
-        'FusionAdjust',       // [2026-05-22 新增] 手动微调菜单（融合图像位置调整）
-        'Overlay',            // [2026-07-01 新增] 覆盖层菜单（十字线/患者信息显示切换）
-        'Colormap',           // [2026-07-06 新增] 伪彩色菜单（切换PT伪彩色映射）
-        'SuvThreshold',       // [2026-07-08 新增] SUV阈值菜单（设置PET窗位）
-        'TrackballRotate',    // [2026-05-11 新增] 3D旋转（仅MIP视口可用）
-        'TmtvLayout',         // [2026-04-28] TMTV布局选择器 (2x1/1x2/MPR等)
-        'SyncMenu',           // [2026-08-06 新增] 同步设置菜单（控制方位切换是否同步到其他视口）
-        'Probe',              // [2026-04-29] 探针功能 (独立于测量区域)
+        'ResetTMTV', // [2026-05-08 新增] 完全重置按钮 (最前面)
+        'Rotate90', // [2026-08-17 新增] 顺时针旋转90°
+        'FlipHorizontal', // [2026-08-18 修改] 水平翻转（原系统的Flip Horizontal功能，替代180°旋转）
+        'Save', // 保存下拉菜单（图像/序列）
+        'MeasurementTools', // 测量工具组 (下拉菜单)
+        'Zoom', // 缩放工具
+        'Pan', // 平移工具
+        'WindowLevel', // 窗宽窗位调节
+        'Crosshairs', // 十字线定位
+        'SingleSliceLine', // [2026-05-19 新增] 单切线旋转（仅影响一条参考线对应视口）
+        'FusionAdjust', // [2026-05-22 新增] 手动微调菜单（融合图像位置调整）
+        'Overlay', // [2026-07-01 新增] 覆盖层菜单（十字线/患者信息显示切换）
+        'Colormap', // [2026-07-06 新增] 伪彩色菜单（切换PT伪彩色映射）
+        'SuvThreshold', // [2026-07-08 新增] SUV阈值菜单（设置PET窗位）
+        'TrackballRotate', // [2026-05-11 新增] 3D旋转（仅MIP视口可用）
+        'TmtvLayout', // [2026-04-28] TMTV布局选择器 (2x1/1x2/MPR等)
+        'SyncMenu', // [2026-08-06 新增] 同步设置菜单（控制方位切换是否同步到其他视口）
+        'Probe', // [2026-04-29] 探针功能 (独立于测量区域)
       ]);
 
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.topLeft, [
@@ -193,8 +198,8 @@ function modeFactory({ modeConfiguration }) {
 
       toolbarService.updateSection(toolbarService.sections.viewportActionMenu.bottomLeft, [
         // [2026-08-20 修改] 左下角按钮顺序：方位切换 → 窗位 → 数据叠加(仍屏蔽)
-        'orientationMenu',   // 方位切换（放在窗位前面）
-        'windowLevelMenu',   // 窗位
+        'orientationMenu', // 方位切换（放在窗位前面）
+        'windowLevelMenu', // 窗位
         // 'dataOverlayMenu', // [2026-07-06] 数据叠加（放在窗位后面，仍屏蔽）
       ]);
 
@@ -205,19 +210,19 @@ function modeFactory({ modeConfiguration }) {
         'Bidirectional',
         'ArrowAnnotate',
         'EllipticalROI',
-        'RectangleROI',  // [2026-08-17 新增] 矩形测量工具 - 用于规则矩形ROI测量
+        'RectangleROI', // [2026-08-17 新增] 矩形测量工具 - 用于规则矩形ROI测量
         'PlanarFreehandROI',
         'CircleROI',
-        'SphereROI',     // [2026-06-26 新增] 球体测量工具 - SUV Max/Min/Mean + 面积 + 体积
-        'Angle',        // [2026-05-15 新增] 角度测量工具 - 通过三点绘制角度
-        'CobbAngle',    // [2026-05-15 新增] Cobb角测量工具 - 通过四点绘制Cobb角，用于脊柱侧弯测量
+        'SphereROI', // [2026-06-26 新增] 球体测量工具 - SUV Max/Min/Mean + 面积 + 体积
+        'Angle', // [2026-05-15 新增] 角度测量工具 - 通过三点绘制角度
+        'CobbAngle', // [2026-05-15 新增] Cobb角测量工具 - 通过四点绘制Cobb角，用于脊柱侧弯测量
         'ClearMeasurements',
       ]);
 
       toolbarService.updateSection('ROIThresholdToolbox', ['SegmentationTools']);
       toolbarService.updateSection('SegmentationTools', [
         'RectangleROIStartEndThreshold',
-        'RegionSegmentPlus',   // [2026-06-08 新增] 打点分割（一键点击分割）
+        'RegionSegmentPlus', // [2026-06-08 新增] 打点分割（一键点击分割）
         'BrushTools',
       ]);
 
@@ -234,7 +239,9 @@ function modeFactory({ modeConfiguration }) {
         },
         'tmtv.imageUpload': {
           // 从 default.js 配置文件读取上传地址，部署时只需修改配置文件
-          apiUrl: (window.config?.customizationService?.['tmtv.imageUpload'] as { apiUrl?: string })?.apiUrl || 'http://localhost:8028/api/fileUpload',
+          apiUrl:
+            (window.config?.customizationService?.['tmtv.imageUpload'] as { apiUrl?: string })
+              ?.apiUrl || 'http://localhost:8028/api/fileUpload',
         },
         // [2026-07-06] TMTV模式下屏蔽 orientationMenu 下拉框中的 Reformat 选项
         orientationMenu: {
@@ -266,8 +273,7 @@ function modeFactory({ modeConfiguration }) {
             // [2026-08-20 修改] 不显示"性别"标签，仅显示值
             title: 'Sex Age',
             condition: ({ referenceInstance }) =>
-              referenceInstance &&
-              (referenceInstance.PatientSex || referenceInstance.PatientAge),
+              referenceInstance && (referenceInstance.PatientSex || referenceInstance.PatientAge),
             contentF: ({ referenceInstance }) =>
               [referenceInstance.PatientSex, referenceInstance.PatientAge]
                 .filter(Boolean)
@@ -289,7 +295,8 @@ function modeFactory({ modeConfiguration }) {
       // code the window level in the hanging protocol but we add a custom
       // attribute to the hanging protocol that will be used to get the
       // window level based on the metadata
-      hangingProtocolService.addCustomAttribute(//PT voi 范围自定义属性，窗宽窗位计算
+      hangingProtocolService.addCustomAttribute(
+        //PT voi 范围自定义属性，窗宽窗位计算
         'getPTVOIRange',
         'get PT VOI based on corrected or not',
         props => {
@@ -348,7 +355,9 @@ function modeFactory({ modeConfiguration }) {
             // Disconnect all ResizeObservers (OrientationMarkerTool creates one per viewport)
             if (tool._resizeObservers && tool._resizeObservers.size > 0) {
               tool._resizeObservers.forEach((ro: any) => {
-                try { ro.disconnect(); } catch {}
+                try {
+                  ro.disconnect();
+                } catch {}
               });
               tool._resizeObservers.clear();
             }
@@ -369,7 +378,9 @@ function modeFactory({ modeConfiguration }) {
               tool.updatingOrientationMarker = {};
             }
             // Call the tool's own cleanup method if available
-            try { tool.cleanUpData?.(); } catch {}
+            try {
+              tool.cleanUpData?.();
+            } catch {}
           });
           // CRITICAL: Clear _toolInstances and toolOptions AFTER cleanup.
           // toolGroupService.destroy() only removes toolGroups from state.toolGroups
@@ -382,6 +393,17 @@ function modeFactory({ modeConfiguration }) {
         });
       } catch (e) {
         console.warn('[tmtv-mode] Tool instance cleanup failed', e);
+      }
+
+      // [2026-08-28 功能] 退出 TMTV 时释放扩展层单例状态，避免 lesion voxel 索引、临时高亮 volume、SVG/viewport 引用跨病例保留
+      try {
+        tmtvLesionHighlightService.reset();
+        tmtvLesionService.destroy();
+        tmtvSegmentMaskStorageService.reset();
+        tmtvCrosshairService.reset();
+        crosshairDisplayService.reset();
+      } catch (e) {
+        console.warn('[tmtv-mode] TMTV singleton cleanup failed', e);
       }
 
       toolGroupService.destroy();
@@ -399,7 +421,9 @@ function modeFactory({ modeConfiguration }) {
       // 10s is enough for most in-flight requests; cancelled in onModeEnter if user re-enters.
       if (metadataClearTimer) clearTimeout(metadataClearTimer);
       metadataClearTimer = setTimeout(() => {
-        try { DicomMetadataStore.clear(); } catch {}
+        try {
+          DicomMetadataStore.clear();
+        } catch {}
         // Also clear the StudyMetaDataPromises cache in the DicomWebDataSource.
         // This Map caches retrieval Promises whose resolved results (DICOM tag
         // data: {Value, vr} objects, ~89,000+ per study) are retained via
@@ -409,7 +433,9 @@ function modeFactory({ modeConfiguration }) {
           // getActiveDataSource() returns an array of data sources
           const dataSources = extensionManager?.getActiveDataSource?.() || [];
           dataSources.forEach(ds => {
-            try { ds?.clearStudyMetadataPromises?.(); } catch {}
+            try {
+              ds?.clearStudyMetadataPromises?.();
+            } catch {}
           });
         } catch {}
         metadataClearTimer = null;
