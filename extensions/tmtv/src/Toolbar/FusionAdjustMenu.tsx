@@ -6,9 +6,13 @@
 //   1. 重置微调 - 重置PET图像偏移到原始位置
 //   2. 微调操作说明 - 点击弹出操作说明对话框
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import PropTypes from 'prop-types';
 import { Popover, PopoverTrigger, PopoverContent, Button, Icons, Tooltip, TooltipTrigger, TooltipContent } from '@ohif/ui-next';
+
+// [2026-08-21] 与 FusionAdjustTool 中 FUSION_ADJUST_DEACTIVATE_EVENT 保持同步
+// 不直接 import 避免跨扩展源码路径依赖
+const FUSION_ADJUST_DEACTIVATE_EVENT = 'fusionadjust:deactivate';
 
 function FusionAdjustMenu({ commandsManager, servicesManager, ...props }) {
   const [showDialog, setShowDialog] = useState(false);
@@ -35,6 +39,48 @@ function FusionAdjustMenu({ commandsManager, servicesManager, ...props }) {
     setIsToolActive(checkToolActive());
   }, [checkToolActive]);
 
+  // [2026-08-21 新增] 停用微调工具（抽取为独立函数，供 handleToggleTool 和右键双击事件复用）
+  const deactivateTool = useCallback(() => {
+    try {
+      const toolGroup = toolGroupService.getToolGroup('fusionToolGroup');
+      if (toolGroup) {
+        const csToolGroup = toolGroup._toolGroup || toolGroup;
+        // 先将FusionAdjust设为passive释放所有绑定
+        csToolGroup.setToolPassive('FusionAdjust');
+      }
+    } catch (e) {
+      // 忽略
+    }
+
+    // 恢复WindowLevel（左键）
+    commandsManager.runCommand('setToolActiveToolbar', {
+      toolName: 'WindowLevel',
+      toolGroupIds: ['fusionToolGroup'],
+    });
+    // 恢复Zoom（右键）
+    commandsManager.runCommand('setToolActiveToolbar', {
+      toolName: 'Zoom',
+      toolGroupIds: ['fusionToolGroup'],
+      bindings: [{ mouseButton: 2 }], // Secondary(右键)
+    });
+
+    setIsToolActive(false);
+  }, [toolGroupService, commandsManager]);
+
+  // [2026-08-21 新增] 监听右键双击退出微调模式事件
+  // FusionAdjustTool 检测到右键双击时派发 FUSION_ADJUST_DEACTIVATE_EVENT
+  useEffect(() => {
+    const handler = () => {
+      if (checkToolActive()) {
+        deactivateTool();
+      }
+    };
+    document.addEventListener(FUSION_ADJUST_DEACTIVATE_EVENT, handler);
+    return () => {
+      document.removeEventListener(FUSION_ADJUST_DEACTIVATE_EVENT, handler);
+    };
+  }, [checkToolActive, deactivateTool]);
+
   // 激活/停用微调工具
   const handleToggleTool = () => {
     setIsMenuOpen(false);
@@ -42,30 +88,7 @@ function FusionAdjustMenu({ commandsManager, servicesManager, ...props }) {
     const currentlyActive = checkToolActive();
 
     if (currentlyActive) {
-      // 停用FusionAdjustTool，恢复默认工具绑定
-      // 左键→WindowLevel, 右键→Zoom, 中键→Pan
-      try {
-        const toolGroup = toolGroupService.getToolGroup('fusionToolGroup');
-        if (toolGroup) {
-          const csToolGroup = toolGroup._toolGroup || toolGroup;
-          // 先将FusionAdjust设为passive释放所有绑定
-          csToolGroup.setToolPassive('FusionAdjust');
-        }
-      } catch (e) {
-        // 忽略
-      }
-
-      // 恢复WindowLevel（左键）
-      commandsManager.runCommand('setToolActiveToolbar', {
-        toolName: 'WindowLevel',
-        toolGroupIds: ['fusionToolGroup'],
-      });
-      // 恢复Zoom（右键）
-      commandsManager.runCommand('setToolActiveToolbar', {
-        toolName: 'Zoom',
-        toolGroupIds: ['fusionToolGroup'],
-        bindings: [{ mouseButton: 2 }], // Secondary(右键)
-      });
+      deactivateTool();
     } else {
       // 激活FusionAdjustTool前，必须先禁用Zoom释放右键绑定
       // setToolPassive只移除Primary绑定，Zoom绑定的是Secondary，所以必须用setToolDisabled

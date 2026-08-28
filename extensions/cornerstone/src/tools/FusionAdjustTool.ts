@@ -3,6 +3,7 @@
 // 功能：在融合视口中：
 //   - 左键拖拽平移PET图像，不影响CT图像
 //   - 右键拖拽旋转PET图像（绕视图平面法线方向旋转）
+//   - 右键双击：退出微调模式（停用工具）
 //   同时同步变换到同方向的PT独立视口
 //   不同步MIP视口和其他截面的PET图像
 //
@@ -25,6 +26,12 @@ import { BaseTool } from '@cornerstonejs/tools';
 import { getEnabledElement, getRenderingEngines } from '@cornerstonejs/core';
 import { mat4 } from 'gl-matrix';
 
+// [2026-08-21 新增] 右键双击退出微调模式的自定义事件名
+export const FUSION_ADJUST_DEACTIVATE_EVENT = 'fusionadjust:deactivate';
+
+// 右键双击间隔阈值（毫秒）
+const RIGHT_DOUBLE_CLICK_INTERVAL = 400;
+
 class FusionAdjustTool extends BaseTool {
   static toolName = 'FusionAdjust';
 
@@ -37,6 +44,9 @@ class FusionAdjustTool extends BaseTool {
   private _onMouseDown: ((e: MouseEvent) => void) | null = null;
   private _onMouseUp: (() => void) | null = null;
 
+  // [2026-08-21 新增] 右键双击检测：记录上次右键点击时间
+  private _lastRightClickTime: number = 0;
+
   constructor(toolProps = {}, defaultToolProps = {
     supportedInteractionTypes: ['Mouse'],
     configuration: {
@@ -48,6 +58,25 @@ class FusionAdjustTool extends BaseTool {
     if (typeof document !== 'undefined') {
       this._onMouseDown = (e: MouseEvent) => {
         this._activeButton = e.button;
+
+        // [2026-08-21 新增] 右键双击检测：两次右键点击间隔 <= 阈值则判定为双击
+        // 派发 FUSION_ADJUST_DEACTIVATE_EVENT 通知 FusionAdjustMenu 停用工具
+        if (e.button === 2) {
+          const now = Date.now();
+          if (now - this._lastRightClickTime <= RIGHT_DOUBLE_CLICK_INTERVAL) {
+            this._lastRightClickTime = 0; // 重置，避免三击再触发
+            try {
+              document.dispatchEvent(new CustomEvent(FUSION_ADJUST_DEACTIVATE_EVENT));
+            } catch (e) {
+              // ignore
+            }
+          } else {
+            this._lastRightClickTime = now;
+          }
+        } else {
+          // 非右键点击重置计时，确保只有连续两次右键才算双击
+          this._lastRightClickTime = 0;
+        }
       };
       this._onMouseUp = () => {
         this._activeButton = 0;
@@ -104,8 +133,13 @@ class FusionAdjustTool extends BaseTool {
     const actors = viewport.getActors();
     if (actors.length < 2) return;
 
-    const sensitivity = (this.configuration as any).rotationSensitivity || 0.3;
-    const angleDegrees = deltaPointsCanvas[0] * sensitivity;
+    // [2026-08-21 修复] 旋转角度计算
+    // 原实现 angleDegrees = deltaPointsCanvas[0] * 0.3，仅用水平分量且灵敏度极低
+    // （每像素仅旋转 0.3° × π/180 ≈ 0.005 rad），导致只能缓慢单方向旋转
+    // 修复：增大灵敏度到 1.0 度/像素，取反使旋转方向与鼠标移动方向一致
+    // 向右拖 → dx > 0 → 取负 → 逆时针（图像向右转），向左拖 → dx < 0 → 取正 → 顺时针
+    const sensitivity = (this.configuration as any).rotationSensitivity || 1.0;
+    const angleDegrees = -deltaPointsCanvas[0] * sensitivity;
     const angleRadians = angleDegrees * (Math.PI / 180);
 
     if (Math.abs(angleRadians) < 0.0001) return;
@@ -311,6 +345,7 @@ class FusionAdjustTool extends BaseTool {
     }
     this._transforms.clear();
     this._activeButton = 0;
+    this._lastRightClickTime = 0;
   }
 }
 
