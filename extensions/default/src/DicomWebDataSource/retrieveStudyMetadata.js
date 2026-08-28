@@ -5,6 +5,38 @@ const moduleName = 'RetrieveStudyMetadata';
 // Cache for promises. Prevents unnecessary subsequent calls to the server
 const StudyMetaDataPromises = new Map();
 
+const firstValue = value => (Array.isArray(value) ? value[0] : value);
+
+/**
+ * [2026-08-28 功能] TMTV 对比模式按 study 注入各自选中的 CT/PET series，避免跨 study 过滤造成失败重试。
+ */
+function getEffectiveFilters(StudyInstanceUID, filters = {}) {
+  const baselineStudyInstanceUID = firstValue(filters.tmtvbaselinestudyinstanceuid);
+  const followupStudyInstanceUID = firstValue(filters.tmtvfollowupstudyinstanceuid);
+
+  if (
+    StudyInstanceUID === baselineStudyInstanceUID &&
+    Array.isArray(filters.tmtvbaselineseriesinstanceuids)
+  ) {
+    return {
+      ...filters,
+      seriesInstanceUID: filters.tmtvbaselineseriesinstanceuids,
+    };
+  }
+
+  if (
+    StudyInstanceUID === followupStudyInstanceUID &&
+    Array.isArray(filters.tmtvfollowupseriesinstanceuids)
+  ) {
+    return {
+      ...filters,
+      seriesInstanceUID: filters.tmtvfollowupseriesinstanceuids,
+    };
+  }
+
+  return filters;
+}
+
 /**
  * Retrieves study metadata.
  *
@@ -38,7 +70,12 @@ export function retrieveStudyMetadata(
     throw new Error(`${moduleName}: Required 'StudyInstanceUID' parameter not provided.`);
   }
 
-  const promiseId = `${dicomWebConfig.name}:${StudyInstanceUID}`;
+  const effectiveFilters = getEffectiveFilters(StudyInstanceUID, filters);
+  const seriesFilterKey =
+    effectiveFilters && Array.isArray(effectiveFilters.seriesInstanceUID)
+      ? effectiveFilters.seriesInstanceUID.slice().sort().join('\\')
+      : 'all';
+  const promiseId = `${dicomWebConfig.name}:${StudyInstanceUID}:${seriesFilterKey}`;
 
   // Already waiting on result? Return cached promise
   if (StudyMetaDataPromises.has(promiseId)) {
@@ -47,12 +84,16 @@ export function retrieveStudyMetadata(
 
   let promise;
 
-  if (filters && filters.seriesInstanceUID && Array.isArray(filters.seriesInstanceUID)) {
+  if (
+    effectiveFilters &&
+    effectiveFilters.seriesInstanceUID &&
+    Array.isArray(effectiveFilters.seriesInstanceUID)
+  ) {
     promise = retrieveMetadataFiltered(
       dicomWebClient,
       StudyInstanceUID,
       enableStudyLazyLoad,
-      filters,
+      effectiveFilters,
       sortCriteria,
       sortFunction
     );
@@ -63,7 +104,7 @@ export function retrieveStudyMetadata(
         dicomWebClient,
         StudyInstanceUID,
         enableStudyLazyLoad,
-        filters,
+        effectiveFilters,
         sortCriteria,
         sortFunction
       ).then(function (data) {
@@ -85,10 +126,10 @@ export function retrieveStudyMetadata(
  * @param {String} StudyInstanceUID The UID of the Study to be removed from cache
  */
 export function deleteStudyMetadataPromise(StudyInstanceUID) {
-  // Keys are stored as `${dicomWebConfig.name}:${StudyInstanceUID}` (see line 41),
-  // so a direct has(StudyInstanceUID) lookup never matches. Search by suffix.
+  // Keys include the data source, StudyInstanceUID and optional series filter,
+  // so a direct has(StudyInstanceUID) lookup never matches. Search by study segment.
   for (const key of StudyMetaDataPromises.keys()) {
-    if (key.endsWith(`:${StudyInstanceUID}`)) {
+    if (key.endsWith(`:${StudyInstanceUID}`) || key.includes(`:${StudyInstanceUID}:`)) {
       StudyMetaDataPromises.delete(key);
     }
   }

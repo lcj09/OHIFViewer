@@ -252,6 +252,37 @@ function modeFactory({ modeConfiguration }) {
         'viewportOverlay.fontSize': 'text-xs leading-4',
         // [2026-08-20 新增] TMTV模式顶部叠加层上移，消除顶部留白（默认 .overlay-top 为 2.15rem）
         'viewportOverlay.topOffset': '0',
+        'viewportOverlay.topLeft': [
+          {
+            id: 'TMTVComparisonRole',
+            inheritsFrom: 'ohif.overlayItem',
+            title: 'TMTV comparison role',
+            condition: ({ viewportId }) =>
+              viewportId?.startsWith('baseline') || viewportId?.startsWith('followup'),
+            // [2026-08-28 功能] 对比布局左上角显示 Baseline/Follow-up 和 CT/PT/Fusion 标签。
+            contentF: ({ viewportData }) => {
+              const props = viewportData?.viewportOptions?.customViewportProps;
+              return [props?.tmtvComparisonSide, props?.tmtvComparisonModality]
+                .filter(Boolean)
+                .join(' ');
+            },
+          },
+          {
+            id: 'StudyDate',
+            inheritsFrom: 'ohif.overlayItem',
+            title: 'Study date',
+            condition: ({ referenceInstance }) => referenceInstance?.StudyDate,
+            contentF: ({ referenceInstance, formatters: { formatDate } }) =>
+              formatDate(referenceInstance.StudyDate),
+          },
+          {
+            id: 'SeriesDescription',
+            inheritsFrom: 'ohif.overlayItem',
+            title: 'Series description',
+            condition: ({ referenceInstance }) => referenceInstance?.SeriesDescription,
+            contentF: ({ referenceInstance }) => referenceInstance.SeriesDescription,
+          },
+        ],
         // [2026-08-20 新增] TMTV模式右上角叠加患者信息
         // 模式级定制覆盖默认的 viewportOverlay.topRight（默认为空数组），
         // 显示：姓名、性别-年龄、登记号

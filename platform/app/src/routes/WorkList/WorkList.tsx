@@ -185,6 +185,101 @@ function WorkList({
     }
   };
 
+  const showCompareWarning = (message: string) => {
+    const { uiNotificationService } = servicesManager.services;
+    uiNotificationService?.show?.({
+      title: 'TMTV 对比',
+      message,
+      type: 'warning',
+      duration: 3000,
+    });
+    console.warn(`[TMTV Compare] ${message}`);
+  };
+
+  /**
+   * [2026-08-28 功能] 启动 TMTV 两次检查对比，只加载两个检查各自选中的 CT/PET 序列。
+   */
+  const handleLaunchTMTVCompare = () => {
+    const selectedStudies = Array.from(selectedSeriesMap.entries())
+      .map(([studyInstanceUid, selectedSeries]) => {
+        const seriesList = seriesInStudiesMap.get(studyInstanceUid) || [];
+        const selectedSeriesUids = Array.from(selectedSeries || []);
+        const selectedSeriesRows = selectedSeriesUids
+          .map(seriesInstanceUid =>
+            seriesList.find(series => series.seriesInstanceUid === seriesInstanceUid)
+          )
+          .filter(Boolean);
+        const ctSeries = selectedSeriesRows.find(series => series.modality === 'CT');
+        const ptSeries = selectedSeriesRows.find(series => series.modality === 'PT');
+        const study = sortedStudies.find(study => study.studyInstanceUid === studyInstanceUid);
+
+        return {
+          studyInstanceUid,
+          studyDate: study?.date || '',
+          selectedSeriesUids,
+          ctSeriesUid: ctSeries?.seriesInstanceUid,
+          ptSeriesUid: ptSeries?.seriesInstanceUid,
+        };
+      })
+      .filter(study => study.selectedSeriesUids.length > 0);
+
+    if (selectedStudies.length !== 2) {
+      showCompareWarning('请在两个检查中分别选择 1 个 CT 和 1 个 PET 序列后再点击对比。');
+      return;
+    }
+
+    const invalidStudy = selectedStudies.find(
+      study => study.selectedSeriesUids.length !== 2 || !study.ctSeriesUid || !study.ptSeriesUid
+    );
+
+    if (invalidStudy) {
+      showCompareWarning('每个检查必须且只能选择 1 个 CT 和 1 个 PET 序列。');
+      return;
+    }
+
+    const [baselineStudy, followupStudy] = [...selectedStudies].sort((a, b) => {
+      if (!a.studyDate || !b.studyDate || a.studyDate === b.studyDate) {
+        return 0;
+      }
+      return a.studyDate.localeCompare(b.studyDate);
+    });
+
+    const selectedSeriesUids = [
+      baselineStudy.ctSeriesUid,
+      baselineStudy.ptSeriesUid,
+      followupStudy.ctSeriesUid,
+      followupStudy.ptSeriesUid,
+    ].filter(Boolean);
+
+    const query = new URLSearchParams();
+    if (filterValues.configUrl) {
+      query.append('configUrl', filterValues.configUrl);
+    }
+    query.append(
+      'StudyInstanceUIDs',
+      `${baselineStudy.studyInstanceUid},${followupStudy.studyInstanceUid}`
+    );
+    query.append('initialSeriesInstanceUID', selectedSeriesUids.join(','));
+    query.append('tmtvbaselinestudyinstanceuid', baselineStudy.studyInstanceUid);
+    query.append(
+      'tmtvbaselineseriesinstanceuids',
+      [baselineStudy.ctSeriesUid, baselineStudy.ptSeriesUid].filter(Boolean).join(',')
+    );
+    query.append('tmtvfollowupstudyinstanceuid', followupStudy.studyInstanceUid);
+    query.append(
+      'tmtvfollowupseriesinstanceuids',
+      [followupStudy.ctSeriesUid, followupStudy.ptSeriesUid].filter(Boolean).join(',')
+    );
+    query.append('hangingProtocolId', '@ohif/extension-tmtv.hangingProtocolModule.ptCTCompare');
+    query.append('stageId', 'tmtv-comparison-2x3');
+    preserveQueryParameters(query);
+
+    const tmtvMode = appConfig.loadedModes?.find(m => m.routeName === 'tmtv');
+    if (tmtvMode) {
+      window.location.href = `${tmtvMode.routeName}${dataPath || ''}?${query.toString()}`;
+    }
+  };
+
   const setFilterValues = val => {
     if (filterValues.pageNumber === val.pageNumber) {
       val.pageNumber = 1;
@@ -414,8 +509,12 @@ function WorkList({
             instances: t('StudyList:Instances'),
           }}
           selectedSeries={selectedSeriesMap.get(studyInstanceUid) || new Set()}
-          onSeriesToggle={(seriesInstanceUid) => handleSeriesToggle(studyInstanceUid, seriesInstanceUid)}
-          onLaunchTMTV={(selectedSeriesUids) => handleLaunchTMTV(studyInstanceUid, selectedSeriesUids)}
+          onSeriesToggle={seriesInstanceUid =>
+            handleSeriesToggle(studyInstanceUid, seriesInstanceUid)
+          }
+          onLaunchTMTV={selectedSeriesUids =>
+            handleLaunchTMTV(studyInstanceUid, selectedSeriesUids)
+          }
           seriesTableDataSource={
             seriesInStudiesMap.has(studyInstanceUid)
               ? seriesInStudiesMap.get(studyInstanceUid).map(s => {
@@ -540,10 +639,8 @@ function WorkList({
               isFiltering={isFiltering(filterValues, defaultFilterValues)}
               // [2026-08-28 屏蔽] 隐藏查询界面上传按钮
               onUploadClick={undefined}
-              // [2026-08-28 新增] 对比按钮（占位，功能待实现）
-              onCompareClick={() => {
-                console.warn('对比功能暂未实现');
-              }}
+              // [2026-08-28 功能] 两次检查对比入口：两个检查各选 CT/PET 后进入 TMTV 对比布局
+              onCompareClick={handleLaunchTMTVCompare}
               getDataSourceConfigurationComponent={
                 dataSourceConfigurationComponent
                   ? () => dataSourceConfigurationComponent()

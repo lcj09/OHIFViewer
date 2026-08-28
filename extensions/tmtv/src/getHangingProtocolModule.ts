@@ -5,13 +5,184 @@ import {
   fusionAXIAL,
   fusionCORONAL,
   fusionSAGITTAL,
-  mipAXIAL,    // [2026-05-11 新增] MIP轴位视图，用于轴位2x2布局
-  mipCORONAL,  // [2026-05-11 新增] MIP冠状位视图，用于冠状位2x2布局
+  mipAXIAL, // [2026-05-11 新增] MIP轴位视图，用于轴位2x2布局
+  mipCORONAL, // [2026-05-11 新增] MIP冠状位视图，用于冠状位2x2布局
   mipSAGITTAL,
   ptAXIAL,
   ptCORONAL,
   ptSAGITTAL,
 } from './utils/hpViewports';
+
+const tmtvCompareProtocolId = '@ohif/extension-tmtv.hangingProtocolModule.ptCTCompare';
+
+const studyIndexMatchingRule = (studyInstanceUIDsIndex: number) => ({
+  attribute: 'studyInstanceUIDsIndex',
+  from: 'options',
+  required: true,
+  constraint: {
+    equals: { value: studyInstanceUIDsIndex },
+  },
+});
+
+const reconstructableModalityRule = (modality: 'CT' | 'PT') => ({
+  attribute: 'Modality',
+  required: true,
+  constraint: {
+    equals: {
+      value: modality,
+    },
+  },
+});
+
+const reconstructableRule = {
+  attribute: 'isReconstructable',
+  required: true,
+  constraint: {
+    equals: {
+      value: true,
+    },
+  },
+};
+
+const preferredUrlSeriesRule = {
+  attribute: 'isDisplaySetFromUrl',
+  weight: 20,
+  constraint: {
+    equals: true,
+  },
+};
+
+const createStudyModalitySelector = (studyInstanceUIDsIndex: number, modality: 'CT' | 'PT') => ({
+  studyMatchingRules: [studyIndexMatchingRule(studyInstanceUIDsIndex)],
+  seriesMatchingRules: [
+    reconstructableModalityRule(modality),
+    reconstructableRule,
+    preferredUrlSeriesRule,
+  ],
+});
+
+const createCompareVolumeViewport = ({
+  viewportId,
+  side,
+  modality,
+  orientation = 'axial',
+  displaySets,
+}) => ({
+  viewportOptions: {
+    viewportId,
+    viewportType: 'volume',
+    orientation,
+    toolGroupId:
+      modality === 'CT' ? 'ctToolGroup' : modality === 'PT' ? 'ptToolGroup' : 'fusionToolGroup',
+    ...(modality === 'PT' ? { background: [1, 1, 1] } : {}),
+    initialImageOptions: {
+      preset: modality === 'Fusion' ? 'middle' : 'first',
+    },
+    // [2026-08-28 功能] 标记对比视口归属，供覆盖层和后续工具作用对象隔离复用。
+    customViewportProps: {
+      tmtvComparisonSide: side,
+      tmtvComparisonModality: modality,
+    },
+  },
+  displaySets,
+});
+
+const ptCompareDisplaySetOptions = {
+  voi: {
+    custom: 'getPTVOIRange',
+  },
+  voiInverted: true,
+};
+
+const fusionComparePTDisplaySetOptions = {
+  colormap: {
+    name: 'hsv',
+    opacity: [
+      { value: 0, opacity: 0 },
+      { value: 0.1, opacity: 0.8 },
+      { value: 1, opacity: 0.9 },
+    ],
+  },
+  voi: {
+    custom: 'getPTVOIRange',
+  },
+};
+
+const baselineCTCompare = createCompareVolumeViewport({
+  viewportId: 'baselineCTAxial',
+  side: 'Baseline',
+  modality: 'CT',
+  displaySets: [{ id: 'baselineCTDisplaySet' }],
+});
+
+const followupCTCompare = createCompareVolumeViewport({
+  viewportId: 'followupCTAxial',
+  side: 'Follow-up',
+  modality: 'CT',
+  displaySets: [{ id: 'followupCTDisplaySet' }],
+});
+
+const baselinePTCompare = createCompareVolumeViewport({
+  viewportId: 'baselinePTAxial',
+  side: 'Baseline',
+  modality: 'PT',
+  displaySets: [{ id: 'baselinePTDisplaySet', options: ptCompareDisplaySetOptions }],
+});
+
+const followupPTCompare = createCompareVolumeViewport({
+  viewportId: 'followupPTAxial',
+  side: 'Follow-up',
+  modality: 'PT',
+  displaySets: [{ id: 'followupPTDisplaySet', options: ptCompareDisplaySetOptions }],
+});
+
+const baselineFusionCompare = createCompareVolumeViewport({
+  viewportId: 'baselineFusionAxial',
+  side: 'Baseline',
+  modality: 'Fusion',
+  displaySets: [
+    { id: 'baselineCTDisplaySet' },
+    { id: 'baselinePTDisplaySet', options: fusionComparePTDisplaySetOptions },
+  ],
+});
+
+const followupFusionCompare = createCompareVolumeViewport({
+  viewportId: 'followupFusionAxial',
+  side: 'Follow-up',
+  modality: 'Fusion',
+  displaySets: [
+    { id: 'followupCTDisplaySet' },
+    { id: 'followupPTDisplaySet', options: fusionComparePTDisplaySetOptions },
+  ],
+});
+
+/**
+ * [2026-08-28 功能] TMTV 两次检查对比第一步布局：只加载 Baseline/Follow-up 的 CT、PT 和 Fusion。
+ */
+const compareStage2x3: AppTypes.HangingProtocol.ProtocolStage = {
+  name: 'TMTV Compare 2x3',
+  id: 'tmtv-comparison-2x3',
+  stageActivation: {
+    enabled: {
+      minViewportsMatched: 6,
+    },
+  },
+  viewportStructure: {
+    layoutType: 'grid',
+    properties: {
+      rows: 3,
+      columns: 2,
+    },
+  },
+  viewports: [
+    baselineCTCompare,
+    followupCTCompare,
+    baselinePTCompare,
+    followupPTCompare,
+    baselineFusionCompare,
+    followupFusionCompare,
+  ],
+};
 
 /**
  * represents a 3x4 viewport layout configuration. The layout displays CT axial, sagittal, and coronal
@@ -337,7 +508,7 @@ const ptCT: AppTypes.HangingProtocol.Protocol = {
       },
     },
   ],
-   // DisplaySet 选择器
+  // DisplaySet 选择器
   displaySetSelectors: {
     ctDisplaySet: {
       seriesMatchingRules: [
@@ -416,11 +587,51 @@ const ptCT: AppTypes.HangingProtocol.Protocol = {
   numberOfPriorsReferenced: -1,
 };
 
+/**
+ * [2026-08-28 功能] TMTV 两次检查对比协议，复用 basic hpCompare 的 studyInstanceUIDsIndex 分流思路。
+ */
+const ptCTCompare: AppTypes.HangingProtocol.Protocol = {
+  id: tmtvCompareProtocolId,
+  locked: true,
+  name: 'TMTV Compare',
+  description: 'Compare two PET/CT studies in TMTV',
+  createdDate: '2026-08-28T00:00:00.000Z',
+  modifiedDate: '2026-08-28T00:00:00.000Z',
+  availableTo: {},
+  editableBy: {},
+  imageLoadStrategy: 'interleaveTopToBottom',
+  numberOfPriorsReferenced: 1,
+  protocolMatchingRules: [
+    {
+      id: 'Two PET CT Studies',
+      weight: 1000,
+      attribute: 'StudyInstanceUID',
+      from: 'prior',
+      required: true,
+      constraint: {
+        notNull: true,
+      },
+    },
+  ],
+  toolGroupIds: ['ctToolGroup', 'ptToolGroup', 'fusionToolGroup'],
+  displaySetSelectors: {
+    baselineCTDisplaySet: createStudyModalitySelector(0, 'CT'),
+    baselinePTDisplaySet: createStudyModalitySelector(0, 'PT'),
+    followupCTDisplaySet: createStudyModalitySelector(1, 'CT'),
+    followupPTDisplaySet: createStudyModalitySelector(1, 'PT'),
+  },
+  stages: [compareStage2x3],
+};
+
 function getHangingProtocolModule() {
   return [
     {
       name: ptCT.id,
       protocol: ptCT,
+    },
+    {
+      name: ptCTCompare.id,
+      protocol: ptCTCompare,
     },
   ];
 }
