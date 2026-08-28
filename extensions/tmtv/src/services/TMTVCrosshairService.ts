@@ -44,8 +44,8 @@
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const CROSSHAIR_COLOR = 'rgb(0, 200, 0)';
 const CROSSHAIR_LINE_WIDTH = 1;
-// [2026-08-05] 十字线中心空白半径（像素）：中心两侧各留此长度的间隙，形成空心中心
-const CROSSHAIR_CENTER_GAP = 12;
+// [2026-08-21 修改] 十字线中心空白半径（像素）：中心两侧各留此长度的间隙，形成空心中心
+const CROSSHAIR_CENTER_GAP = 16;
 // [2026-08-05 第四阶段] 旋转相关常量
 const ROTATION_LINE_HIT_THRESHOLD = 8; // 鼠标到十字线的距离阈值（像素），在此范围内可触发旋转
 const HANDLE_DISTANCE = 50; // 旋转手柄距十字线中心的距离（像素）
@@ -176,6 +176,11 @@ class TMTVCrosshairService {
   // 旋转期间需要临时禁用 cameraPosition 同步器，防止 setCamera 触发同步器
   // 把 target 的 camera（含方位）同步到同组其他视口（包括 source）。
   private servicesManager: any = null;
+
+  // [2026-08-21 修改] 手柄 hover 状态：鼠标接近十字线时显示手柄，离开时隐藏
+  // 与原系统 CrosshairsTool 行为一致：默认不显示手柄，仅鼠标接近时才显示
+  private handleHoverViewportId: string | null = null;
+  private handleHoverHandlers = new Map<string, (evt: MouseEvent) => void>();
 
   /**
    * [2026-08-10 修复同步器干扰] 注入 servicesManager
@@ -700,6 +705,8 @@ class TMTVCrosshairService {
     this.renderEventHandlers.clear();
     this.mouseDownHandlers.clear();
     this.handles.clear();
+    this.handleHoverHandlers.clear();
+    this.handleHoverViewportId = null;
     // [2026-08-07 Step1] 清空方向识别缓存，布局切换后由 addViewport 重新识别
     this.lastOrientationMap.clear();
     // [第四阶段] 重置方向状态，布局切换后由 addViewport 重新初始化
@@ -1634,9 +1641,14 @@ class TMTVCrosshairService {
    *   4. handleMouseDown 卡死恢复
    */
   private _endRotation(): void {
-    // [2026-08-05] 旋转结束时手柄恢复空心圆
-    if (this.rotationActiveViewport) {
-      this._setHandlesSolid(this.rotationActiveViewport, false);
+    // [2026-08-21 修改] 旋转结束时手柄恢复空心圆并隐藏（鼠标可能已离开十字线）
+    const vpId = this.rotationActiveViewport;
+    if (vpId) {
+      this._setHandlesSolid(vpId, false);
+      // 若鼠标不在十字线附近，隐藏手柄
+      if (this.handleHoverViewportId !== vpId) {
+        this._updateHandleDisplay(vpId, false);
+      }
     }
 
     this.rotating = false;
@@ -2266,8 +2278,13 @@ class TMTVCrosshairService {
    * [Step2 新增] 清理 target viewport 相关状态
    */
   private _endSingleLineRotation(): void {
-    if (this.singleLineActiveViewport) {
-      this._setHandlesSolid(this.singleLineActiveViewport, false);
+    // [2026-08-21 修改] 旋转结束时手柄恢复空心圆并隐藏（鼠标可能已离开十字线）
+    const vpId = this.singleLineActiveViewport;
+    if (vpId) {
+      this._setHandlesSolid(vpId, false);
+      if (this.handleHoverViewportId !== vpId) {
+        this._updateHandleDisplay(vpId, false);
+      }
     }
 
     this.singleLineRotating = false;
@@ -2442,6 +2459,73 @@ class TMTVCrosshairService {
     } catch (e) {
       console.debug(`[TMTVCrosshairService] 无法注册 mousedown 事件 (${viewportId})`, e);
     }
+
+    // [2026-08-21 修改] 注册 mousemove hover 处理器
+    // 鼠标接近十字线时显示手柄（空心圈），离开时隐藏
+    // 旋转中不处理 hover（手柄由旋转状态控制显示）
+    try {
+      const hoverHandler = (evt: MouseEvent) => {
+        // 十字线未显示、正在拖动/旋转中时不处理 hover
+        if (!this.visible || this.dragging || this.rotating || this.singleLineRotating) {
+          return;
+        }
+        const vp = this.viewports.get(viewportId);
+        if (!vp || !vp.canvas || !this.worldPosition) {
+          return;
+        }
+        try {
+          const rect = vp.canvas.getBoundingClientRect();
+          const mx = evt.clientX - rect.left;
+          const my = evt.clientY - rect.top;
+          const center = vp.worldToCanvas(this.worldPosition);
+          if (!center || !Number.isFinite(center[0]) || !Number.isFinite(center[1])) {
+            return;
+          }
+          const dx = mx - center[0];
+          const dy = my - center[1];
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          // 排除中心区域（由拖动处理），仅检测线段区域
+          const nearLine = dist >= CROSSHAIR_CENTER_GAP && dist <= HANDLE_DISTANCE + HANDLE_RADIUS + 5 &&
+            this._isPointOnCrosshairLine([mx, my], [center[0], center[1]]);
+
+          if (nearLine) {
+            if (this.handleHoverViewportId !== viewportId) {
+              this.handleHoverViewportId = viewportId;
+              this._updateHandleDisplay(viewportId, true);
+            }
+          } else {
+            if (this.handleHoverViewportId === viewportId) {
+              this.handleHoverViewportId = null;
+              this._updateHandleDisplay(viewportId, false);
+            }
+          }
+        } catch (e) {
+          // ignore
+        }
+      };
+      element.addEventListener('mousemove', hoverHandler);
+      this.handleHoverHandlers.set(viewportId, hoverHandler);
+    } catch (e) {
+      console.debug(`[TMTVCrosshairService] 无法注册 mousemove hover 事件 (${viewportId})`, e);
+    }
+  }
+
+  /**
+   * [2026-08-21 新增] 直接更新手柄 display 属性（不调用 render，避免性能开销）
+   * @param viewportId - viewport ID
+   * @param show - true=显示, false=隐藏
+   */
+  private _updateHandleDisplay(viewportId: string, show: boolean): void {
+    const handleArr = this.handles.get(viewportId);
+    if (!handleArr) return;
+    const display = show ? '' : 'none';
+    handleArr.forEach(h => {
+      try {
+        h.style.display = display;
+      } catch (e) {
+        // ignore
+      }
+    });
   }
 
   /**
@@ -2506,6 +2590,18 @@ class TMTVCrosshairService {
       // ignore
     }
 
+    // 3.1 [2026-08-21 新增] 移除 mousemove hover 监听
+    try {
+      const handler = this.handleHoverHandlers.get(viewportId);
+      const element = this.elements.get(viewportId);
+      if (handler && element) {
+        element.removeEventListener('mousemove', handler);
+      }
+      this.handleHoverHandlers.delete(viewportId);
+    } catch (e) {
+      // ignore
+    }
+
     // 4. 移除 SVG 元素（连同其中的横竖线子节点）
     try {
       const svg = this.svgLayers.get(viewportId);
@@ -2524,6 +2620,12 @@ class TMTVCrosshairService {
     this.vLineTops.delete(viewportId);
     this.vLineBottoms.delete(viewportId);
     this.handles.delete(viewportId);
+    this.handleHoverHandlers.delete(viewportId);
+
+    // [2026-08-21] 清理 hover 状态，防止移除视口后 hover 状态残留
+    if (this.handleHoverViewportId === viewportId) {
+      this.handleHoverViewportId = null;
+    }
   }
 
   /**
@@ -2621,11 +2723,17 @@ class TMTVCrosshairService {
       vBottom.setAttribute('y2', String(cy + L * d2Cos));
     }
 
-    // 定位旋转手柄（4个圆点）
-    // 仅非 MIP viewport 显示手柄（MIP 不支持旋转）
+    // [2026-08-21 修改] 手柄默认隐藏，仅以下情况显示：
+    //   1. 鼠标接近十字线（handleHoverViewportId 匹配）
+    //   2. 正在旋转（双切线/单切线，旋转视口匹配）
+    // 与原系统 CrosshairsTool 行为一致
     const handleArr = this.handles.get(viewportId);
     if (handleArr && handleArr.length === 4) {
-      const showHandles = !isMip;
+      const showHandles = !isMip && (
+        this.handleHoverViewportId === viewportId ||
+        (this.rotating && this.rotationActiveViewport === viewportId) ||
+        (this.singleLineRotating && this.singleLineActiveViewport === viewportId)
+      );
       const hd = HANDLE_DISTANCE;
       const display = showHandles ? '' : 'none';
 
