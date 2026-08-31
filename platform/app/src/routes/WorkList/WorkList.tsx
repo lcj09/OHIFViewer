@@ -271,7 +271,7 @@ function WorkList({
       [followupStudy.ctSeriesUid, followupStudy.ptSeriesUid].filter(Boolean).join(',')
     );
     query.append('hangingProtocolId', '@ohif/extension-tmtv.hangingProtocolModule.ptCTCompare');
-    query.append('stageId', 'tmtv-comparison-2x3');
+    query.append('stageId', 'tmtv-comparison-2x4');
     preserveQueryParameters(query);
 
     const tmtvMode = appConfig.loadedModes?.find(m => m.routeName === 'tmtv');
