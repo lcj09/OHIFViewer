@@ -21,7 +21,9 @@ function ComparisonSideSelector({ servicesManager }) {
     }
 
     tmtvComparisonService.syncFromActiveViewport(servicesManager);
-    const subscription = tmtvComparisonService.subscribe(setComparisonState);
+    const subscription = tmtvComparisonService.subscribe(state => {
+      setComparisonState(state);
+    });
 
     return () => {
       try {

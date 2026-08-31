@@ -41,6 +41,9 @@
 //     |-- canvas (Cornerstone 渲染)
 //     +-- svg (十字线 overlay, pointer-events: none)
 
+import tmtvComparisonService, { VIEWPORT_IDS_BY_SIDE } from './TMTVComparisonService';
+import type { TMTVComparisonSide } from './TMTVComparisonService';
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const CROSSHAIR_COLOR = 'rgb(0, 200, 0)';
 const CROSSHAIR_LINE_WIDTH = 1;
@@ -83,6 +86,7 @@ const TMTV_STAGE_IDS = new Set([
   '2x3-layout', // AXIAL
   '2x4-layout', // Sagittal
   'coronal-mip-layout', // Coronal
+  'tmtv-comparison-2x4',
 ]);
 
 // 每个 TMTV 布局对应的 viewportId 列表
@@ -94,9 +98,89 @@ const TMTV_VIEWPORT_IDS_BY_STAGE: Record<string, string[]> = {
   '2x3-layout': ['ctAXIAL', 'ptAXIAL', 'fusionAXIAL', 'mipSagittal'],
   '2x4-layout': ['ctSAGITTAL', 'ptSAGITTAL', 'fusionSAGITTAL', 'mipSagittal'],
   'coronal-mip-layout': ['ctCORONAL', 'ptCORONAL', 'fusionCoronal', 'mipCoronal'],
+  'tmtv-comparison-2x4': [...VIEWPORT_IDS_BY_SIDE.baseline, ...VIEWPORT_IDS_BY_SIDE.followup],
 };
 
 class TMTVCrosshairService {
+  private comparisonServices = new Map<TMTVComparisonSide, TMTVCrosshairService>();
+  private onPositionChanged: ((
+    position: [number, number, number],
+    previous: [number, number, number] | null
+  ) => void) | null = null;
+
+  /** 2026-08-31 功能说明：对比检查使用独立实例保存坐标和旋转状态，复用现有绘制及清理逻辑。 */
+  constructor(private comparisonSide: TMTVComparisonSide | null = null) {}
+
+  /** 2026-08-31 功能说明：按视口归属获取检查侧实例，子实例不再继续分派。 */
+  private getComparisonService(viewportId: string, create = false): TMTVCrosshairService | null {
+    if (this.comparisonSide) return null;
+    const side = tmtvComparisonService.getSideForViewportId(viewportId);
+    if (!side) return null;
+    let service = this.comparisonServices.get(side);
+    if (!service && create) {
+      service = new TMTVCrosshairService(side);
+      service.setServicesManager(this.servicesManager);
+      service.setStageId(this.currentStageId || 'tmtv-comparison-2x4');
+      service.setMode(this.mode);
+      service.setVisible(this.visible);
+      service.onPositionChanged = (position, previous) => {
+        this.syncComparisonPosition(side, position, previous);
+      };
+      this.comparisonServices.set(side, service);
+    }
+    return service || null;
+  }
+
+  /** 2026-08-31 功能说明：无视口参数的定位和旋转命令只作用于当前检查。 */
+  private getActiveComparisonService(): TMTVCrosshairService | null {
+    return this.comparisonServices.get(tmtvComparisonService.getActiveSide()) || null;
+  }
+
+  /** 2026-08-31 功能说明：读取当前检查的参考坐标系，不同或未知坐标系不直接复制世界坐标。 */
+  private getReferenceFrameUID(): string | null {
+    for (const viewport of this.viewports.values()) {
+      try {
+        const uid = viewport.getFrameOfReferenceUID?.();
+        if (typeof uid === 'string' && uid) return uid;
+      } catch {
+        // 视口可能正在销毁，尝试同侧其他视口。
+      }
+    }
+    return null;
+  }
+
+  /** 2026-08-31 功能说明：按同步开关联动另一检查的十字线，同坐标系使用绝对位置，否则同步相对位移。 */
+  private syncComparisonPosition(
+    side: TMTVComparisonSide,
+    position: [number, number, number],
+    previous: [number, number, number] | null
+  ): void {
+    if (
+      this.currentStageId !== 'tmtv-comparison-2x4' ||
+      !tmtvComparisonService.isComparisonProtocolActive(this.servicesManager) ||
+      !tmtvComparisonService.isComparisonStudySyncEnabled(this.servicesManager)
+    ) return;
+
+    const source = this.comparisonServices.get(side);
+    const target = this.comparisonServices.get(side === 'baseline' ? 'followup' : 'baseline');
+    if (!source || !target || !target.viewports.size || !target.worldPosition) return;
+
+    const sourceFrame = source.getReferenceFrameUID();
+    const sameFrame = sourceFrame && sourceFrame === target.getReferenceFrameUID();
+    let targetPosition: [number, number, number] = [...position];
+    if (!sameFrame) {
+      if (!previous) return;
+      targetPosition = [
+        target.worldPosition[0] + position[0] - previous[0],
+        target.worldPosition[1] + position[1] - previous[1],
+        target.worldPosition[2] + position[2] - previous[2],
+      ];
+    }
+
+    // 目标只更新显示，不再次通知源侧，避免双向回传和重复渲染。
+    target.setPosition(targetPosition, false);
+  }
+
   private visible = false;
   private worldPosition: [number, number, number] | null = null;
   // [2026-08-05 第四阶段] 旋转状态：只改变方向，不改变位置
@@ -188,6 +272,7 @@ class TMTVCrosshairService {
    */
   setServicesManager(servicesManager: any): void {
     this.servicesManager = servicesManager;
+    this.comparisonServices.forEach(service => service.setServicesManager(servicesManager));
   }
 
   /**
@@ -209,7 +294,7 @@ class TMTVCrosshairService {
       if (!syncGroupService) return [];
 
       const disabledSyncs: any[] = [];
-      const viewportIds = TMTV_VIEWPORT_IDS_BY_STAGE[this.currentStageId];
+      const viewportIds = this.getViewportIdsForStage(this.currentStageId);
       if (!viewportIds) return [];
 
       const seen = new Set<any>(); // 去重（同一同步器可能被多个 viewport 共享）
@@ -289,15 +374,18 @@ class TMTVCrosshairService {
    * 获取指定 TMTV 布局的 viewportId 列表
    */
   getViewportIdsForStage(stageId: string): string[] {
-    return TMTV_VIEWPORT_IDS_BY_STAGE[stageId] || [];
+    const viewportIds = TMTV_VIEWPORT_IDS_BY_STAGE[stageId] || [];
+    return this.comparisonSide
+      ? viewportIds.filter(id => VIEWPORT_IDS_BY_SIDE[this.comparisonSide].includes(id))
+      : viewportIds;
   }
 
   /**
    * [2026-08-05 第四阶段] 判断 viewport 是否为 MIP（不参与旋转）
-   * MIP viewportId 以 'mip' 开头（mipSagittal / mipCoronal）
+   * 2026-08-31 功能说明：兼容普通 mipSagittal 和对比 baselineMIPSagittal 等视口名。
    */
   private _isMipViewport(viewportId: string): boolean {
-    return viewportId.startsWith('mip');
+    return viewportId.toLowerCase().includes('mip');
   }
 
   /**
@@ -374,6 +462,8 @@ class TMTVCrosshairService {
    *       - viewport 未注册或方向无法识别时返回 null
    */
   getViewportOrientation(viewportId: string): ViewportOrientation | null {
+    const comparisonService = this.getComparisonService(viewportId);
+    if (comparisonService) return comparisonService.getViewportOrientation(viewportId);
     const viewport = this.viewports.get(viewportId);
     if (!viewport) return null;
     return this._getOrientationFromCamera(viewport);
@@ -389,6 +479,7 @@ class TMTVCrosshairService {
    * 参数：stageId - 当前 hanging protocol stage ID
    */
   setStageId(stageId: string): void {
+    this.comparisonServices.forEach(service => service.setStageId(stageId));
     this.currentStageId = stageId;
   }
 
@@ -485,7 +576,7 @@ class TMTVCrosshairService {
     lineType: 'horizontal' | 'vertical'
   ): string[] {
     if (!this.currentStageId) return [];
-    const viewportIds = TMTV_VIEWPORT_IDS_BY_STAGE[this.currentStageId];
+    const viewportIds = this.getViewportIdsForStage(this.currentStageId);
     if (!viewportIds) return [];
 
     // 计算目标方位
@@ -612,6 +703,12 @@ class TMTVCrosshairService {
       return;
     }
 
+    const comparisonService = this.getComparisonService(viewportId, true);
+    if (comparisonService) {
+      comparisonService.addViewport(viewportId, viewport);
+      return;
+    }
+
     // 如果已存在，先移除旧的
     if (this.viewports.has(viewportId)) {
       this.removeViewport(viewportId);
@@ -661,6 +758,11 @@ class TMTVCrosshairService {
    * 防止 Map 持有已销毁 viewport 的 ID 字符串导致内存泄漏（虽然字符串开销极小，但保持一致性）。
    */
   removeViewport(viewportId: string): void {
+    const comparisonService = this.getComparisonService(viewportId);
+    if (comparisonService) {
+      comparisonService.removeViewport(viewportId);
+      return;
+    }
     this._removeSvgLayer(viewportId);
     this.viewports.delete(viewportId);
     this.lastOrientationMap.delete(viewportId);
@@ -683,6 +785,9 @@ class TMTVCrosshairService {
    * addViewport 重新从新 viewport 的 camera 初始化。
    */
   clear(): void {
+    // 2026-08-31 功能说明：切布局时释放两侧的 SVG、Observer、document 事件和服务引用。
+    this.comparisonServices.forEach(service => service.reset());
+    this.comparisonServices.clear();
     // [第三阶段] 先结束拖动，移除 document 监听，防止清理后回调执行引发错误
     this._endDrag();
     // [第四阶段] 结束双切线旋转
@@ -724,6 +829,7 @@ class TMTVCrosshairService {
    *   下次进入 TMTV 模式时由 commandsModule 重新注入。
    */
   reset(): void {
+    this.onPositionChanged = null;
     this.clear();
     this.worldPosition = null;
     this.visible = false;
@@ -755,7 +861,12 @@ class TMTVCrosshairService {
    *   - 可见性保持不变
    *   - servicesManager 引用保持不变
    */
-  resetRotationAngles(): void {
+  resetRotationAngles(side?: TMTVComparisonSide): void {
+    if (side && !this.comparisonSide) {
+      this.comparisonServices.get(side)?.resetRotationAngles();
+      return;
+    }
+    this.comparisonServices.forEach(service => service.resetRotationAngles());
     // 双切线旋转角度
     this.rotationAngle = 0;
     // 单切线旋转角度
@@ -800,11 +911,18 @@ class TMTVCrosshairService {
     this.render();
   }
 
-  /**
-   * 设置十字线可见性
-   */
+  /** 2026-08-31 功能说明：重置前结束拖动和旋转，释放 document 监听并恢复临时禁用的同步器。 */
+  stopInteractions(): void {
+    this.comparisonServices.forEach(service => service.stopInteractions());
+    this._endDrag();
+    this._endRotation();
+    this._endSingleLineRotation();
+  }
+
+  /** 设置十字线可见性。 */
   setVisible(value: boolean): void {
     this.visible = value;
+    this.comparisonServices.forEach(service => service.setVisible(value));
     this.render();
   }
 
@@ -815,6 +933,7 @@ class TMTVCrosshairService {
    */
   setMode(mode: 'normal' | 'singleLineRotate'): void {
     this.mode = mode;
+    this.comparisonServices.forEach(service => service.setMode(mode));
     // 切换到非单切线模式时重置单切线角度
     if (mode !== 'singleLineRotate') {
       this.singleLineHorizontalAngle = 0;
@@ -831,21 +950,35 @@ class TMTVCrosshairService {
   }
 
   /**
-   * 设置十字线世界坐标位置
+   * 2026-08-31 功能说明：更新十字线位置，点击或拖动时通知对比检查；接收同步时禁止回传。
    */
-  setPosition(worldPoint: [number, number, number]): void {
+  setPosition(worldPoint: [number, number, number], synchronizeComparison = true): void {
+    if (!worldPoint || worldPoint.length !== 3 || !worldPoint.every(Number.isFinite)) return;
+    const comparisonService = this.getActiveComparisonService();
+    if (comparisonService) {
+      comparisonService.setPosition(worldPoint, synchronizeComparison);
+      return;
+    }
+    const previous: [number, number, number] | null = this.worldPosition
+      ? [...this.worldPosition]
+      : null;
     this.worldPosition = [
       worldPoint[0],
       worldPoint[1],
       worldPoint[2],
     ];
     this.render();
+    if (synchronizeComparison) {
+      this.onPositionChanged?.([...worldPoint], previous);
+    }
   }
 
   /**
    * 获取当前世界坐标位置
    */
   getPosition(): [number, number, number] | null {
+    const comparisonService = this.getActiveComparisonService();
+    if (comparisonService) return comparisonService.getPosition();
     return this.worldPosition;
   }
 
@@ -854,6 +987,8 @@ class TMTVCrosshairService {
    * 用于调试和测试
    */
   getRotationAngle(): number {
+    const comparisonService = this.getActiveComparisonService();
+    if (comparisonService) return comparisonService.getRotationAngle();
     return this.rotationAngle;
   }
 
@@ -883,6 +1018,11 @@ class TMTVCrosshairService {
    *   旋转方式：基于各 target 的 initialCamera 旋转累计角度，避免浮点误差累积
    */
   rotateCrosshair(deltaDegrees: number): void {
+    const comparisonService = this.getActiveComparisonService();
+    if (comparisonService) {
+      comparisonService.rotateCrosshair(deltaDegrees);
+      return;
+    }
     if (!this.viewPlaneNormal || !this.viewUp) {
       console.warn('[TMTVCrosshairService] rotateCrosshair: 方向状态未初始化');
       return;
@@ -1178,6 +1318,8 @@ class TMTVCrosshairService {
    * 获取已注册的 viewport 实例
    */
   getViewport(viewportId: string): any {
+    const comparisonService = this.getComparisonService(viewportId);
+    if (comparisonService) return comparisonService.getViewport(viewportId);
     return this.viewports.get(viewportId);
   }
 
@@ -1185,6 +1327,7 @@ class TMTVCrosshairService {
    * 渲染十字线到所有注册的 viewport
    */
   render(): void {
+    this.comparisonServices.forEach(service => service.render());
     if (!this.visible || !this.worldPosition) {
       // 隐藏所有 SVG 层
       this.svgLayers.forEach(svg => {
@@ -1529,7 +1672,7 @@ class TMTVCrosshairService {
       : null;
 
     if (sourceOrientation && this.currentStageId) {
-      const viewportIds = TMTV_VIEWPORT_IDS_BY_STAGE[this.currentStageId];
+      const viewportIds = this.getViewportIdsForStage(this.currentStageId);
       if (viewportIds) {
         for (const vpId of viewportIds) {
           if (vpId === viewportId) continue;          // 跳过 source

@@ -151,7 +151,8 @@ const createCompareVolumeViewport = ({
         : 'fusionToolGroup',
     ...(modality === 'PT' || modality === 'MIP' ? { background: [1, 1, 1] } : {}),
     initialImageOptions: {
-      preset: modality === 'Fusion' ? 'middle' : 'first',
+      // 2026-08-31 功能说明：MIP 围绕体积中心旋转，不能像普通切片一样定位在首层。
+      preset: modality === 'Fusion' || modality === 'MIP' ? 'middle' : 'first',
     },
     // [2026-08-28 修复] 补充 syncGroups，确保同侧 CT/PT/Fusion 缩放率一致
     syncGroups: buildCompareSyncGroups(side, modality),

@@ -9,6 +9,7 @@ import tmtvLesionService from '../../../extensions/tmtv/src/services/TMTVLesionS
 import tmtvLesionHighlightService from '../../../extensions/tmtv/src/services/TMTVLesionHighlightService';
 import tmtvSegmentMaskStorageService from '../../../extensions/tmtv/src/services/TMTVSegmentMaskStorageService';
 import tmtvCrosshairService from '../../../extensions/tmtv/src/services/TMTVCrosshairService';
+import ensureMIPWheelBinding from '../../../extensions/tmtv/src/utils/ensureMIPWheelBinding';
 import crosshairDisplayService from '../../../extensions/tmtv/src/services/CrosshairDisplayService';
 import tmtvComparisonService from '../../../extensions/tmtv/src/services/TMTVComparisonService';
 import ComparisonSideSelector from '../../../extensions/tmtv/src/Panels/ComparisonSideSelector';
@@ -98,10 +99,13 @@ function modeFactory({ modeConfiguration }) {
 
       // Init Default and SR ToolGroups  1初始化工作组（PT  CT FUSION MIP）
       initToolGroups(toolNames, Enums, toolGroupService, commandsManager);
+      ensureMIPWheelBinding(toolGroupService, toolNames, Enums);
       //监听视口添加事件，2设置十字线配置和Fusion视口的活动体积
       const { unsubscribe } = toolGroupService.subscribe(
         toolGroupService.EVENTS.VIEWPORT_ADDED,
         () => {
+          // 2026-08-31 功能说明：布局重建后恢复 MIP 滚轮旋转，沿用现有订阅及退出清理。
+          ensureMIPWheelBinding(toolGroupService, toolNames, Enums);
           // For fusion toolGroup we need to add the volumeIds for the crosshairs
           // since in the fusion viewport we don't want both PT and CT to render MIP
           // when slabThickness is modified

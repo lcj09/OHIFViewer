@@ -16,6 +16,7 @@ import { Enums } from '@cornerstonejs/tools';
 import { utils } from '@ohif/core';
 import tmtvCrosshairService from './services/TMTVCrosshairService';
 import crosshairDisplayService from './services/CrosshairDisplayService';
+import resetComparisonViewports from './utils/resetComparisonViewports';
 import tmtvLesionService from './services/TMTVLesionService';
 import tmtvLesionHighlightService from './services/TMTVLesionHighlightService';
 import tmtvSegmentMaskStorageService from './services/TMTVSegmentMaskStorageService';
@@ -1091,6 +1092,8 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     //
     // ============================================================================
     resetTMTVViewport: () => {
+      // 2026-08-31 功能说明：对比检查按各自 Volume 重置，期间隔离相机和调窗同步。
+      if (resetComparisonViewports(servicesManager, metadataProvider)) return;
       const enabledElement = _getActiveViewportsEnabledElement();
       if (!enabledElement) return;
 
@@ -1358,6 +1361,8 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     // ============================================================================
     toggleTMTVCrosshairs: () => {
       const stageId = hangingProtocolService?._getCurrentStageModel?.()?.id || '';
+      // 2026-08-31 功能说明：点击时同步布局，保证对比视口的自定义十字线使用当前检查组。
+      tmtvCrosshairService.setStageId(stageId);
       const isTmtv = tmtvCrosshairService.isTmtvLayout(stageId);
 
       // [2026-08-06] 如果当前是单切线模式，切换到十字线时应保持可见（不 toggle off）

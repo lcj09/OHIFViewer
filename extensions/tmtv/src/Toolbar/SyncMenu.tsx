@@ -5,9 +5,10 @@
 //   1. 同步方位切换 - 控制方位切换是否同步到同组其他视口（cameraPosition 同步器）
 //   2. 同步调窗变化 - 控制窗宽窗位变化是否同步（voi 同步器）
 //   3. 同步缩放     - 控制缩放是否同步（zoomSync 同步器，懒创建）
+//   4. 同步两次检查 - 仅对比模式显示，控制首次检查与随访检查的同模态同步
 //
 // 状态存储：使用 customizationService 的 'syncSettings' 存储
-//   { orientationSync: true, voiSync: true, zoomSync: false }
+//   { orientationSync: true, voiSync: true, zoomSync: false, comparisonStudySync: false }
 //
 // [2026-08-20 修复] 缩放同步必须"懒创建"，不能静态注册到 hangingProtocol：
 //   之前把 zoompan 同步组静态加入 hpViewports 的 syncGroups，视口创建即挂接
@@ -34,12 +35,18 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '@ohif/ui-next';
+import tmtvComparisonService, { COMPARISON_SYNC_IDS } from '../services/TMTVComparisonService';
+import { belongsToComparisonCameraGroup } from '../utils/ensureMIPWheelBinding';
 
 function SyncMenu({ servicesManager, ...props }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [orientationSync, setOrientationSync] = useState(true);
   const [voiSync, setVoiSync] = useState(true);
   const [zoomSync, setZoomSync] = useState(false);
+  const [comparisonStudySync, setComparisonStudySync] = useState(false);
+  const [isComparisonMode, setIsComparisonMode] = useState(() =>
+    tmtvComparisonService.isComparisonProtocolActive(servicesManager)
+  );
 
   const { customizationService } = servicesManager.services;
 
@@ -59,7 +66,9 @@ function SyncMenu({ servicesManager, ...props }) {
         syncs.forEach(s => {
           try {
             s.setEnabled(enabled);
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         });
       } catch (e) {
         console.warn('[SyncMenu] 设置同步器状态失败', e);
@@ -91,7 +100,9 @@ function SyncMenu({ servicesManager, ...props }) {
                 options,
               },
             ]);
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         });
       } catch (e) {
         console.warn(`[SyncMenu] 创建同步器 ${syncId} 失败`, e);
@@ -118,10 +129,12 @@ function SyncMenu({ servicesManager, ...props }) {
       } else {
         applySyncEnabled(null, 'zoomSync', false);
       }
+
+      tmtvComparisonService.applyComparisonStudySyncFromSettings(servicesManager);
     } catch (e) {
       console.warn('[SyncMenu] 应用同步设置失败', e);
     }
-  }, [applySyncEnabled, ensureZoomPanSync, customizationService]);
+  }, [applySyncEnabled, ensureZoomPanSync, customizationService, servicesManager]);
 
   // [2026-08-20 新增] 持久化同步设置（必须写完整对象，见文件头注释）
   const persistSyncSettings = useCallback(
@@ -132,6 +145,7 @@ function SyncMenu({ servicesManager, ...props }) {
             orientationSync,
             voiSync,
             zoomSync,
+            comparisonStudySync,
             ...next,
           },
         });
@@ -139,13 +153,14 @@ function SyncMenu({ servicesManager, ...props }) {
         console.warn('[SyncMenu] 保存同步状态失败', e);
       }
     },
-    [orientationSync, voiSync, zoomSync, customizationService]
+    [orientationSync, voiSync, zoomSync, comparisonStudySync, customizationService]
   );
 
   // [2026-08-06, 2026-08-20 修改] 初始化：从 customizationService 读取同步状态并应用到同步器
   useEffect(() => {
     try {
       const syncSettings = customizationService.getCustomization('syncSettings');
+      setIsComparisonMode(tmtvComparisonService.isComparisonProtocolActive(servicesManager));
       if (syncSettings) {
         if (typeof syncSettings.orientationSync === 'boolean') {
           setOrientationSync(syncSettings.orientationSync);
@@ -156,12 +171,16 @@ function SyncMenu({ servicesManager, ...props }) {
         if (typeof syncSettings.zoomSync === 'boolean') {
           setZoomSync(syncSettings.zoomSync);
         }
+        if (typeof syncSettings.comparisonStudySync === 'boolean') {
+          setComparisonStudySync(syncSettings.comparisonStudySync);
+        }
       } else {
         customizationService.setCustomizations({
           syncSettings: {
             orientationSync: true,
             voiSync: true,
             zoomSync: false,
+            comparisonStudySync: false,
           },
         });
       }
@@ -171,6 +190,26 @@ function SyncMenu({ servicesManager, ...props }) {
       console.warn('[SyncMenu] 初始化同步状态失败', e);
     }
   }, [customizationService, applyCurrentSyncSettings]);
+
+  // 2026-08-31 功能说明：监听对比模式与同步状态变化，更新同步菜单的选项和勾选状态。
+  useEffect(() => {
+    if (!servicesManager) {
+      return;
+    }
+
+    const subscription = tmtvComparisonService.subscribe(state => {
+      setIsComparisonMode(state.isComparisonMode);
+      setComparisonStudySync(tmtvComparisonService.isComparisonStudySyncEnabled(servicesManager));
+    });
+
+    return () => {
+      try {
+        subscription.unsubscribe();
+      } catch {
+        // ignore cleanup errors
+      }
+    };
+  }, [servicesManager]);
 
   // [2026-08-20 新增] 布局切换（PROTOCOL_CHANGED）后视口重新创建，重新应用同步器开关状态
   useEffect(() => {
@@ -187,6 +226,7 @@ function SyncMenu({ servicesManager, ...props }) {
           if (timer) clearTimeout(timer);
           timer = setTimeout(() => {
             timer = null;
+            setIsComparisonMode(tmtvComparisonService.isComparisonProtocolActive(servicesManager));
             applyCurrentSyncSettings();
           }, 300);
         }
@@ -200,7 +240,9 @@ function SyncMenu({ servicesManager, ...props }) {
       if (timer) clearTimeout(timer);
       try {
         unsub?.();
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     };
   }, [servicesManager, applyCurrentSyncSettings]);
 
@@ -227,30 +269,50 @@ function SyncMenu({ servicesManager, ...props }) {
       //   而非 getSynchronizersForViewport（后者只返回视口当前所在的同步器，
       //   已被 remove 的视口会返回空数组）。
       if (newState) {
-        const { syncGroupService, cornerstoneViewportService } =
-          servicesManager.services;
+        const { syncGroupService, cornerstoneViewportService } = servicesManager.services;
         try {
           const vpIds = cornerstoneViewportService.getViewportIds() || [];
           // 获取所有 cameraPosition 同步器
           const camSyncs = syncGroupService.getSynchronizersOfType('cameraPosition') || [];
           camSyncs.forEach(s => {
+            const syncId = s.id || s._id;
+            if (COMPARISON_SYNC_IDS.includes(syncId)) {
+              return;
+            }
+
             // 启用同步器
-            try { s.setEnabled(true); } catch { /* ignore */ }
+            try {
+              s.setEnabled(true);
+            } catch {
+              /* ignore */
+            }
             // 遍历所有视口，把被移除的加回去
             vpIds.forEach(vpId => {
-              const renderingEngine =
-                getRenderingEngines().find(re =>
-                  re.getViewports().some(vp => vp.id === vpId)
-                );
+              // 2026-08-31 功能说明：保持两检查和 MIP 的分组边界，防止旋转相机被切片同步覆盖。
+              if (!belongsToComparisonCameraGroup(syncId, vpId)) return;
+              const renderingEngine = getRenderingEngines().find(re =>
+                re.getViewports().some(vp => vp.id === vpId)
+              );
               if (!renderingEngine) return;
               const viewportInfo = { renderingEngineId: renderingEngine.id, viewportId: vpId };
               // 如果该视口既不在 source 也不在 target，重新加回去
-              if (!s.hasSourceViewport(renderingEngine.id, vpId) &&
-                  !s.hasTargetViewport(renderingEngine.id, vpId)) {
-                try { s.add(viewportInfo); } catch { /* ignore */ }
+              if (
+                !s.hasSourceViewport(renderingEngine.id, vpId) &&
+                !s.hasTargetViewport(renderingEngine.id, vpId)
+              ) {
+                try {
+                  s.add(viewportInfo);
+                } catch {
+                  /* ignore */
+                }
               }
             });
           });
+          if (comparisonStudySync) {
+            tmtvComparisonService.ensureComparisonStudySync(servicesManager, voiSync);
+          } else {
+            tmtvComparisonService.removeComparisonStudySync(servicesManager);
+          }
         } catch (e) {
           console.warn('[SyncMenu] 恢复同步器失败', e);
         }
@@ -258,7 +320,7 @@ function SyncMenu({ servicesManager, ...props }) {
     } catch (e) {
       console.warn('[SyncMenu] 保存同步状态失败', e);
     }
-  }, [orientationSync, persistSyncSettings, servicesManager]);
+  }, [orientationSync, comparisonStudySync, voiSync, persistSyncSettings, servicesManager]);
 
   // [2026-08-20 新增] 切换调窗同步开关（作用于已注册的 voi 同步器，安全）
   const handleToggleVoiSync = useCallback(() => {
@@ -267,10 +329,18 @@ function SyncMenu({ servicesManager, ...props }) {
     try {
       persistSyncSettings({ voiSync: newState });
       applySyncEnabled('voi', null, newState);
+      if (comparisonStudySync) {
+        if (newState) {
+          tmtvComparisonService.ensureComparisonStudySync(servicesManager, true);
+        } else {
+          tmtvComparisonService.removeComparisonStudySync(servicesManager);
+          tmtvComparisonService.ensureComparisonStudySync(servicesManager, false);
+        }
+      }
     } catch (e) {
       console.warn('[SyncMenu] 切换调窗同步失败', e);
     }
-  }, [voiSync, persistSyncSettings, applySyncEnabled]);
+  }, [voiSync, comparisonStudySync, persistSyncSettings, applySyncEnabled, servicesManager]);
 
   // [2026-08-20 新增] 切换缩放同步开关（懒创建 zoompan 同步器，避免影响图像加载）
   const handleToggleZoomSync = useCallback(() => {
@@ -289,11 +359,22 @@ function SyncMenu({ servicesManager, ...props }) {
     }
   }, [zoomSync, persistSyncSettings, ensureZoomPanSync, applySyncEnabled]);
 
+  // 2026-08-31 功能说明：手动开启/关闭两次检查之间的同模态同步。
+  const handleToggleComparisonStudySync = useCallback(() => {
+    const newState = !comparisonStudySync;
+    setComparisonStudySync(newState);
+    try {
+      tmtvComparisonService.setComparisonStudySyncEnabled(newState, servicesManager, voiSync);
+    } catch (e) {
+      console.warn('[SyncMenu] 切换两次检查同步失败', e);
+    }
+  }, [comparisonStudySync, servicesManager, voiSync]);
+
   // [2026-08-20 新增] 渲染单个同步开关项，保持菜单项样式统一
   const renderToggleItem = (checked, label, onClick) => (
     <Button
       variant="ghost"
-      className={`flex h-8 w-full items-center justify-start px-2 py-1 text-sm hover:bg-primary-dark ${
+      className={`hover:bg-primary-dark flex h-8 w-full items-center justify-start px-2 py-1 text-sm ${
         checked ? 'text-highlight' : 'text-gray-400'
       }`}
       onClick={onClick}
@@ -305,8 +386,14 @@ function SyncMenu({ servicesManager, ...props }) {
   );
 
   return (
-    <div id="SyncMenu" data-cy="SyncMenu">
-      <Popover open={isMenuOpen} onOpenChange={setIsMenuOpen}>
+    <div
+      id="SyncMenu"
+      data-cy="SyncMenu"
+    >
+      <Popover
+        open={isMenuOpen}
+        onOpenChange={setIsMenuOpen}
+      >
         <Tooltip>
           <TooltipTrigger asChild>
             <PopoverTrigger asChild>
@@ -314,14 +401,15 @@ function SyncMenu({ servicesManager, ...props }) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-transparent text-foreground/80 hover:bg-background hover:text-highlight"
+                  className="text-foreground/80 hover:bg-background hover:text-highlight inline-flex h-10 w-10 items-center justify-center rounded-lg bg-transparent"
                   aria-label="同步设置"
                 >
-                  <Icons.ByName name="icon-sync" className="h-7 w-7" />
+                  <Icons.ByName
+                    name="icon-sync"
+                    className="h-7 w-7"
+                  />
                 </Button>
-                <span className="text-[12px] leading-tight text-white whitespace-nowrap">
-                  同步
-                </span>
+                <span className="whitespace-nowrap text-[12px] leading-tight text-white">同步</span>
               </div>
             </PopoverTrigger>
           </TooltipTrigger>
@@ -344,6 +432,12 @@ function SyncMenu({ servicesManager, ...props }) {
             {renderToggleItem(voiSync, '同步调窗变化', handleToggleVoiSync)}
             {/* [2026-08-20 新增] 同步缩放 */}
             {renderToggleItem(zoomSync, '同步缩放', handleToggleZoomSync)}
+            {isComparisonMode &&
+              renderToggleItem(
+                comparisonStudySync,
+                '同步两次检查',
+                handleToggleComparisonStudySync
+              )}
           </div>
         </PopoverContent>
       </Popover>
