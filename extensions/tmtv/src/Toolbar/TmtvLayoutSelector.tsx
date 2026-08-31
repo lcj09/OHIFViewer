@@ -4,40 +4,69 @@ import PropTypes from 'prop-types';
 import { CommandsManager } from '@ohif/core';
 import { LayoutSelector } from '@ohif/ui-next';
 import { useTranslation } from 'react-i18next';
+import { TMTV_COMPARE_PROTOCOL_ID } from '../services/TMTVComparisonService';
 
 /**
  * TMTV 模式专用布局选择器组件
  * 功能：仅显示融合相关布局按钮及三维布局按钮
  * 日期：2026-04-29
  */
-function TmtvLayoutSelectorWithServices({
-  commandsManager,
-  servicesManager,
-  ...props
-}) {
+function TmtvLayoutSelectorWithServices({ commandsManager, servicesManager, ...props }) {
   const { t } = useTranslation('ToolbarLayoutSelector');
   const [activeProtocolId, setActiveProtocolId] = useState('');
   const [activeStageId, setActiveStageId] = useState('');
 
-  // 2026-04-29 - 获取当前活动的hanging protocol信息
+  // 2026-08-31 功能说明：获取并订阅当前活动的 hanging protocol 信息，包含对比协议状态
   useEffect(() => {
-    if (servicesManager) {
-      const { hangingProtocolService } = servicesManager.services;
-      if (hangingProtocolService) {
-        const protocol = hangingProtocolService.getProtocol?.();
-        if (protocol) {
-          setActiveProtocolId(protocol.id);
-          const currentStage = hangingProtocolService._getCurrentStageModel?.();
-          setActiveStageId(currentStage?.id || '');
-        }
-      }
+    if (!servicesManager) {
+      return;
     }
+
+    const { hangingProtocolService } = servicesManager.services;
+    if (!hangingProtocolService) {
+      return;
+    }
+
+    const updateActiveProtocol = () => {
+      const protocol = hangingProtocolService.getProtocol?.();
+      setActiveProtocolId(protocol?.id || '');
+      const currentStage = hangingProtocolService._getCurrentStageModel?.();
+      setActiveStageId(currentStage?.id || '');
+    };
+
+    updateActiveProtocol();
+
+    const subscription = hangingProtocolService.subscribe?.(
+      hangingProtocolService.EVENTS.PROTOCOL_CHANGED,
+      updateActiveProtocol
+    );
+
+    return () => {
+      try {
+        subscription?.unsubscribe?.();
+      } catch {
+        // ignore cleanup errors
+      }
+    };
   }, [servicesManager]);
 
   // 2026-05-11 - TMTV专用布局预设
   // 2x2布局（Axial/Sagittal/Coronal）：十字线不崩溃但不会画参考线
   // 2x3/2x4布局：十字线正常工作
   const tmtvPresets = [
+    // [2026-08-31 新增] 两次检查对比布局：Baseline 与 Follow-up 各自显示 CT/PT/Fusion/MIP
+    {
+      title: 'Compare',
+      icon: 'layout-advanced-3d-four-up',
+      commandOptions: {
+        protocolId: TMTV_COMPARE_PROTOCOL_ID,
+        stageId: 'tmtv-comparison-2x4',
+      },
+      disabled: false,
+      isPreset: true,
+      isActive:
+        activeProtocolId === TMTV_COMPARE_PROTOCOL_ID && activeStageId === 'tmtv-comparison-2x4',
+    },
     {
       title: '3x4',
       icon: 'layout-common-2x3',
@@ -47,7 +76,9 @@ function TmtvLayoutSelectorWithServices({
       },
       disabled: false,
       isPreset: true,
-      isActive: activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' && activeStageId === 'default',
+      isActive:
+        activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' &&
+        activeStageId === 'default',
     },
     // [2026-05-11] 轴位 2x2: CT轴位 + PET轴位 + Fusion轴位 + MIP
     {
@@ -59,7 +90,9 @@ function TmtvLayoutSelectorWithServices({
       },
       disabled: false,
       isPreset: true,
-      isActive: activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' && activeStageId === '2x3-layout',
+      isActive:
+        activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' &&
+        activeStageId === '2x3-layout',
     },
     // [2026-05-11] 矢状位 2x2: CT矢状位 + PET矢状位 + Fusion矢状位 + MIP
     {
@@ -71,7 +104,9 @@ function TmtvLayoutSelectorWithServices({
       },
       disabled: false,
       isPreset: true,
-      isActive: activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' && activeStageId === '2x4-layout',
+      isActive:
+        activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' &&
+        activeStageId === '2x4-layout',
     },
     // [2026-05-11 新增] 冠状位 2x2: CT冠状位 + PET冠状位 + Fusion冠状位 + MIP
     {
@@ -83,7 +118,9 @@ function TmtvLayoutSelectorWithServices({
       },
       disabled: false,
       isPreset: true,
-      isActive: activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' && activeStageId === 'coronal-mip-layout',
+      isActive:
+        activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' &&
+        activeStageId === 'coronal-mip-layout',
     },
     // [2026-05-11 恢复] 原始2x3布局（CT+PT三视图，十字线正常）
     {
@@ -95,7 +132,9 @@ function TmtvLayoutSelectorWithServices({
       },
       disabled: false,
       isPreset: true,
-      isActive: activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' && activeStageId === '2x3-original-layout',
+      isActive:
+        activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' &&
+        activeStageId === '2x3-original-layout',
     },
     // [2026-05-11 恢复] 原始2x4布局（PT+MIP+Fusion，十字线正常）
     {
@@ -107,7 +146,9 @@ function TmtvLayoutSelectorWithServices({
       },
       disabled: false,
       isPreset: true,
-      isActive: activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' && activeStageId === '2x4-original-layout',
+      isActive:
+        activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' &&
+        activeStageId === '2x4-original-layout',
     },
     // [2026-05-11 修改] TMTV专用MPR布局（Fusion三视图+十字线）
     // 使用 TMTV 专用的 tmtv-mpr-layout，所有视口加载 Fusion 图像
@@ -121,7 +162,9 @@ function TmtvLayoutSelectorWithServices({
       },
       disabled: false,
       isPreset: true,
-      isActive: activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' && activeStageId === 'tmtv-mpr-layout',
+      isActive:
+        activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCT' &&
+        activeStageId === 'tmtv-mpr-layout',
     },
     // 2026-04-29 - 三维布局：使用 only3D protocol 确保真正的3D视图
     {
@@ -168,15 +211,21 @@ function TmtvLayoutSelectorWithServices({
   );
 
   return (
-    <div id="TmtvLayout" data-cy="TmtvLayout">
+    <div
+      id="TmtvLayout"
+      data-cy="TmtvLayout"
+    >
       <LayoutSelector
         onSelectionChange={handleSelectionChange}
         {...props}
       >
-        <LayoutSelector.Trigger tooltip={t('Change layout')} label="布局" />
+        <LayoutSelector.Trigger
+          tooltip={t('Change layout')}
+          label="布局"
+        />
         <LayoutSelector.Content>
           {/* TMTV专用布局预设区域 */}
-          <div className="bg-popover flex flex-col gap-2.5 rounded-lg p-2 w-48">
+          <div className="bg-popover flex w-48 flex-col gap-2.5 rounded-lg p-2">
             <LayoutSelector.PresetSection title={t('PET/CT Layouts')}>
               {tmtvPresets.map((preset, index) => (
                 <LayoutSelector.Preset

@@ -2,7 +2,16 @@ import React, { useEffect, useState, useCallback } from 'react';
 import PropTypes from 'prop-types';
 import i18n from 'i18next';
 
-import { InvestigationalUseDialog, Button, Icons, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, useModal } from '@ohif/ui-next';
+import {
+  InvestigationalUseDialog,
+  Button,
+  Icons,
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  useModal,
+} from '@ohif/ui-next';
 import { HangingProtocolService, CommandsManager } from '@ohif/core';
 import { useAppConfig } from '@state';
 import ViewerHeader from './ViewerHeader';
@@ -35,7 +44,11 @@ function ViewerLayout({
 }: withAppTypes): React.FunctionComponent {
   const [appConfig] = useAppConfig();
 
-  const { panelService, hangingProtocolService, customizationService, displaySetService } = servicesManager.services;
+  const { panelService, hangingProtocolService, customizationService, displaySetService } =
+    servicesManager.services;
+  const TopBarComparisonSideSelector = customizationService.getCustomization(
+    'tmtv.comparisonSideSelector'
+  ) as React.ComponentType<{ servicesManager: any }> | null;
   const { patientInfo } = usePatientInfo();
 
   // 获取检查号(AccessionNumber)
@@ -182,22 +195,40 @@ function ViewerLayout({
   return (
     <div>
       {/* 顶部患者信息导航栏 */}
-      <div className="bg-topbar flex h-[32px] items-center justify-between border-b border-background px-4">
+      <div className="bg-topbar border-background flex h-[32px] items-center justify-between border-b px-4">
         <div className="flex items-center gap-6">
           {/* 东华医为 Logo */}
-          <span className="font-bold text-white" style={{ fontSize: '18px' }}>东华医为</span>
+          <span
+            className="font-bold text-white"
+            style={{ fontSize: '18px' }}
+          >
+            东华医为
+          </span>
           {/* 患者姓名 */}
           <span className="text-sm text-white">{patientInfo.PatientName || '-'}</span>
           {/* 性别/出生日期 */}
-          <span className="text-sm text-gray-300">{patientInfo.PatientSex || '-'} / {patientInfo.PatientDOB || '-'}</span>
+          <span className="text-sm text-gray-300">
+            {patientInfo.PatientSex || '-'} / {patientInfo.PatientDOB || '-'}
+          </span>
         </div>
         <div className="flex items-center gap-4">
           {/* 患者编号 */}
-          <span className="text-sm text-gray-300">患者编号：<span className="text-white">{patientInfo.PatientID || '-'}</span></span>
+          <span className="text-sm text-gray-300">
+            患者编号：<span className="text-white">{patientInfo.PatientID || '-'}</span>
+          </span>
           {/* 检查号 */}
-          <span className="text-sm text-gray-300">检查号：<span className="text-white">{accessionNumber || '-'}</span></span>
+          <span className="text-sm text-gray-300">
+            检查号：<span className="text-white">{accessionNumber || '-'}</span>
+          </span>
+          {/* 2026-08-31 功能说明：TMTV 对比模式当前检查切换插槽，普通模式不渲染。 */}
+          {TopBarComparisonSideSelector && (
+            <TopBarComparisonSideSelector servicesManager={servicesManager} />
+          )}
           {/* 语言切换、患者信息、设置 - 从工具栏移至此处 */}
-          <TopBarActions servicesManager={servicesManager} appConfig={appConfig} />
+          <TopBarActions
+            servicesManager={servicesManager}
+            appConfig={appConfig}
+          />
         </div>
       </div>
       <ViewerHeader
@@ -207,11 +238,13 @@ function ViewerLayout({
         appConfig={appConfig}
       />
       <div
-        className="relative flex w-full flex-row flex-nowrap items-stretch overflow-hidden bg-background"
+        className="bg-background relative flex w-full flex-row flex-nowrap items-stretch overflow-hidden"
         style={{ height: 'calc(100vh - 88px)' }}
       >
         <React.Fragment>
-          {showLoadingIndicator && <LoadingIndicatorProgress className="h-full w-full bg-background" />}
+          {showLoadingIndicator && (
+            <LoadingIndicatorProgress className="bg-background h-full w-full" />
+          )}
           <ResizablePanelGroup {...resizablePanelGroupProps}>
             {/* LEFT SIDEPANELS */}
             {hasLeftPanels ? (
@@ -235,7 +268,7 @@ function ViewerLayout({
             <ResizablePanel {...resizableViewportGridPanelProps}>
               <div className="flex h-full flex-1 flex-col">
                 <div
-                  className="relative flex h-full flex-1 items-center justify-center overflow-hidden bg-background"
+                  className="bg-background relative flex h-full flex-1 items-center justify-center overflow-hidden"
                   onMouseEnter={handleMouseEnter}
                 >
                   <ViewportGridComp
@@ -273,7 +306,15 @@ function ViewerLayout({
 }
 
 // 顶部导航栏右侧操作组件（语言切换、患者信息、设置）
-function TopBarActions({ servicesManager, appConfig, hideSettings = false }: { servicesManager: any; appConfig: any; hideSettings?: boolean }) {
+function TopBarActions({
+  servicesManager,
+  appConfig,
+  hideSettings = false,
+}: {
+  servicesManager: any;
+  appConfig: any;
+  hideSettings?: boolean;
+}) {
   const { customizationService } = servicesManager.services;
   const { show } = useModal();
   const currentLanguage = i18n.language || 'en-US';
@@ -286,12 +327,12 @@ function TopBarActions({ servicesManager, appConfig, hideSettings = false }: { s
   return (
     <div className="flex items-center gap-3">
       {/* 语言切换 */}
-      <div className="flex items-center gap-1 rounded border border-primary-light/30 px-2 py-0.5">
-        <span className="text-xs text-primary-light">语</span>
+      <div className="border-primary-light/30 flex items-center gap-1 rounded border px-2 py-0.5">
+        <span className="text-primary-light text-xs">语</span>
         <button
           onClick={() => handleLanguageChange('zh')}
           className={`rounded px-1.5 py-0.5 text-xs font-medium transition-colors ${
-            (currentLanguage === 'zh' || currentLanguage.startsWith('zh'))
+            currentLanguage === 'zh' || currentLanguage.startsWith('zh')
               ? 'bg-primary-active text-white'
               : 'text-primary-light hover:text-white'
           }`}
@@ -312,21 +353,30 @@ function TopBarActions({ servicesManager, appConfig, hideSettings = false }: { s
 
       {/* 患者信息 */}
       {appConfig.showPatientInfo !== PatientInfoVisibility.DISABLED && (
-        <HeaderPatientInfo servicesManager={servicesManager} appConfig={appConfig} />
+        <HeaderPatientInfo
+          servicesManager={servicesManager}
+          appConfig={appConfig}
+        />
       )}
 
       {/* 设置（可选隐藏） */}
       {!hideSettings && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-primary-light hover:text-white">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-primary-light h-8 w-8 hover:text-white"
+            >
               <Icons.GearSettings />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {/* 偏好 */}
             {(() => {
-              const UserPreferencesModal = customizationService.getCustomization('ohif.userPreferencesModal');
+              const UserPreferencesModal = customizationService.getCustomization(
+                'ohif.userPreferencesModal'
+              );
               return UserPreferencesModal ? (
                 <DropdownMenuItem
                   onSelect={() =>

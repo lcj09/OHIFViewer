@@ -10,6 +10,8 @@ import tmtvLesionHighlightService from '../../../extensions/tmtv/src/services/TM
 import tmtvSegmentMaskStorageService from '../../../extensions/tmtv/src/services/TMTVSegmentMaskStorageService';
 import tmtvCrosshairService from '../../../extensions/tmtv/src/services/TMTVCrosshairService';
 import crosshairDisplayService from '../../../extensions/tmtv/src/services/CrosshairDisplayService';
+import tmtvComparisonService from '../../../extensions/tmtv/src/services/TMTVComparisonService';
+import ComparisonSideSelector from '../../../extensions/tmtv/src/Panels/ComparisonSideSelector';
 
 const { MetadataProvider } = classes;
 
@@ -91,6 +93,9 @@ function modeFactory({ modeConfiguration }) {
 
       const { toolNames, Enums } = utilityModule.exports;
 
+      // 2026-08-31 功能说明：初始化两次检查对比上下文，供工具栏识别当前操作侧
+      tmtvComparisonService.init(servicesManager);
+
       // Init Default and SR ToolGroups  1初始化工作组（PT  CT FUSION MIP）
       initToolGroups(toolNames, Enums, toolGroupService, commandsManager);
       //监听视口添加事件，2设置十字线配置和Fusion视口的活动体积
@@ -133,6 +138,33 @@ function modeFactory({ modeConfiguration }) {
         }
       );
       unsubscriptions.push(protocolUnsubscribe);
+
+      // 2026-08-31 功能说明：跟随 active viewport 和布局变化维护 Baseline/Follow-up 当前操作侧
+      const syncComparisonState = ({ viewportId }: { viewportId?: string } = {}) => {
+        if (viewportId) {
+          tmtvComparisonService.syncFromViewport(viewportId, servicesManager);
+          return;
+        }
+        tmtvComparisonService.syncFromActiveViewport(servicesManager);
+      };
+
+      const { unsubscribe: comparisonViewportUnsubscribe } = viewportGridService.subscribe(
+        viewportGridService.EVENTS.ACTIVE_VIEWPORT_ID_CHANGED,
+        syncComparisonState
+      );
+      unsubscriptions.push(comparisonViewportUnsubscribe);
+
+      const { unsubscribe: comparisonGridUnsubscribe } = viewportGridService.subscribe(
+        viewportGridService.EVENTS.GRID_STATE_CHANGED,
+        () => syncComparisonState()
+      );
+      unsubscriptions.push(comparisonGridUnsubscribe);
+
+      const { unsubscribe: comparisonProtocolUnsubscribe } = hangingProtocolService.subscribe(
+        hangingProtocolService.EVENTS.PROTOCOL_CHANGED,
+        () => syncComparisonState()
+      );
+      unsubscriptions.push(comparisonProtocolUnsubscribe);
 
       // 3. 注册工具栏按钮
       toolbarService.register(toolbarButtons);
@@ -252,6 +284,10 @@ function modeFactory({ modeConfiguration }) {
         'viewportOverlay.fontSize': 'text-xs leading-4',
         // [2026-08-20 新增] TMTV模式顶部叠加层上移，消除顶部留白（默认 .overlay-top 为 2.15rem）
         'viewportOverlay.topOffset': '0',
+        // 2026-08-31 功能说明：将对比模式当前检查切换注入顶部患者信息栏，避免挤占主工具栏和右侧分割面板。
+        'tmtv.comparisonSideSelector': {
+          $set: ComparisonSideSelector,
+        },
         'viewportOverlay.topLeft': [
           {
             id: 'TMTVComparisonRole',
@@ -363,7 +399,15 @@ function modeFactory({ modeConfiguration }) {
         uiModalService,
       } = servicesManager.services;
 
-      unsubscriptions.forEach(unsubscribe => unsubscribe());
+      // 2026-08-31 功能说明：执行并清空模式级订阅，避免 unsubscribe 闭包跨病例保留 service 引用。
+      unsubscriptions.forEach(unsubscribe => {
+        try {
+          unsubscribe();
+        } catch (e) {
+          console.warn('[tmtv-mode] 取消订阅失败', e);
+        }
+      });
+      unsubscriptions.length = 0;
       uiDialogService.hideAll();
       uiModalService.hide();
 
@@ -433,6 +477,7 @@ function modeFactory({ modeConfiguration }) {
         tmtvSegmentMaskStorageService.reset();
         tmtvCrosshairService.reset();
         crosshairDisplayService.reset();
+        tmtvComparisonService.reset();
       } catch (e) {
         console.warn('[tmtv-mode] TMTV singleton cleanup failed', e);
       }
