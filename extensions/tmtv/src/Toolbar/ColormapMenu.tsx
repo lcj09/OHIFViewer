@@ -22,27 +22,68 @@ import { cache, BaseVolumeViewport } from '@cornerstonejs/core';
 const COLORMAPS = [
   { name: 'Grayscale', label: 'Grayscale', gradient: 'linear-gradient(to right, #000, #fff)' },
   { name: 'X Ray', label: 'X Ray', gradient: 'linear-gradient(to right, #fff, #000)' },
-  { name: 'Isodose', label: 'Isodose', gradient: 'linear-gradient(to right, #00f, #5f0, #ff0, #f60, #f30, #f00)' },
-  { name: 'hsv', label: 'HSV', gradient: 'linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)' },
-  { name: 'hot_iron', label: 'Hot Iron', gradient: 'linear-gradient(to right, #000, #800, #f00, #ff0, #fff)' },
-  { name: 'red_hot', label: 'Red Hot', gradient: 'linear-gradient(to right, #000, #f00, #ff0, #fff)' },
-  { name: 's_pet', label: 'PET', gradient: 'linear-gradient(to right, #000, #066, #0cc, #fc0, #f60, #f00)' },
-  { name: 'perfusion', label: 'Perfusion', gradient: 'linear-gradient(to right, #00f, #0ff, #0f0, #ff0, #f00)' },
-  { name: 'rainbow_2', label: 'Rainbow', gradient: 'linear-gradient(to right, #00f, #0ff, #0f0, #ff0, #f00)' },
-  { name: 'suv', label: 'SUV', gradient: 'linear-gradient(to right, #000, #00f, #0ff, #0f0, #ff0, #f00)' },
-  { name: 'ge_256', label: 'GE 256', gradient: 'linear-gradient(to right, #000, #00f, #0ff, #0f0, #ff0, #f00, #fff)' },
-  { name: 'ge', label: 'GE', gradient: 'linear-gradient(to right, #000, #00f, #0ff, #0f0, #ff0, #f00)' },
-  { name: 'siemens', label: 'Siemens', gradient: 'linear-gradient(to right, #000, #00f, #0ff, #0f0, #ff0, #f00, #fff)' },
+  {
+    name: 'Isodose',
+    label: 'Isodose',
+    gradient: 'linear-gradient(to right, #00f, #5f0, #ff0, #f60, #f30, #f00)',
+  },
+  {
+    name: 'hsv',
+    label: 'HSV',
+    gradient: 'linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)',
+  },
+  {
+    name: 'hot_iron',
+    label: 'Hot Iron',
+    gradient: 'linear-gradient(to right, #000, #800, #f00, #ff0, #fff)',
+  },
+  {
+    name: 'red_hot',
+    label: 'Red Hot',
+    gradient: 'linear-gradient(to right, #000, #f00, #ff0, #fff)',
+  },
+  {
+    name: 's_pet',
+    label: 'PET',
+    gradient: 'linear-gradient(to right, #000, #066, #0cc, #fc0, #f60, #f00)',
+  },
+  {
+    name: 'perfusion',
+    label: 'Perfusion',
+    gradient: 'linear-gradient(to right, #00f, #0ff, #0f0, #ff0, #f00)',
+  },
+  {
+    name: 'rainbow_2',
+    label: 'Rainbow',
+    gradient: 'linear-gradient(to right, #00f, #0ff, #0f0, #ff0, #f00)',
+  },
+  {
+    name: 'suv',
+    label: 'SUV',
+    gradient: 'linear-gradient(to right, #000, #00f, #0ff, #0f0, #ff0, #f00)',
+  },
+  {
+    name: 'ge_256',
+    label: 'GE 256',
+    gradient: 'linear-gradient(to right, #000, #00f, #0ff, #0f0, #ff0, #f00, #fff)',
+  },
+  {
+    name: 'ge',
+    label: 'GE',
+    gradient: 'linear-gradient(to right, #000, #00f, #0ff, #0f0, #ff0, #f00)',
+  },
+  {
+    name: 'siemens',
+    label: 'Siemens',
+    gradient: 'linear-gradient(to right, #000, #00f, #0ff, #0f0, #ff0, #f00, #fff)',
+  },
 ];
 
 function ColormapMenu({ commandsManager, servicesManager, ...props }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [currentColormap, setCurrentColormap] = useState('hsv');
 
-  const {
-    cornerstoneViewportService,
-    viewportGridService,
-  } = servicesManager.services;
+  const { cornerstoneViewportService, viewportGridService } = servicesManager.services;
 
   // 获取当前选中视口的 colormap
   const getCurrentColormap = useCallback(() => {
@@ -79,8 +120,25 @@ function ColormapMenu({ commandsManager, servicesManager, ...props }) {
     getCurrentColormap();
   }, [getCurrentColormap]);
 
+  // 2026-08-31 功能说明：对比模式切换 active viewport 后刷新当前伪彩色状态，避免菜单状态停留在上一侧。
+  useEffect(() => {
+    const eventName = viewportGridService?.EVENTS?.ACTIVE_VIEWPORT_ID_CHANGED;
+    if (!eventName || !viewportGridService?.subscribe) {
+      return;
+    }
+
+    const subscription = viewportGridService.subscribe(eventName, getCurrentColormap);
+    return () => {
+      try {
+        subscription?.unsubscribe?.();
+      } catch {
+        // ignore cleanup errors
+      }
+    };
+  }, [getCurrentColormap, viewportGridService]);
+
   // 切换 colormap
-  const handleSelectColormap = (colormapName) => {
+  const handleSelectColormap = colormapName => {
     setIsMenuOpen(false);
 
     try {
@@ -131,8 +189,14 @@ function ColormapMenu({ commandsManager, servicesManager, ...props }) {
   };
 
   return (
-    <div id="ColormapMenu" data-cy="ColormapMenu">
-      <Popover open={isMenuOpen} onOpenChange={setIsMenuOpen}>
+    <div
+      id="ColormapMenu"
+      data-cy="ColormapMenu"
+    >
+      <Popover
+        open={isMenuOpen}
+        onOpenChange={setIsMenuOpen}
+      >
         <Tooltip>
           <TooltipTrigger asChild>
             <PopoverTrigger asChild>
@@ -140,12 +204,15 @@ function ColormapMenu({ commandsManager, servicesManager, ...props }) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={`inline-flex h-10 w-10 items-center justify-center rounded-lg text-foreground/80 hover:bg-background hover:text-highlight`}
+                  className={`text-foreground/80 hover:bg-background hover:text-highlight inline-flex h-10 w-10 items-center justify-center rounded-lg`}
                   aria-label="伪彩色"
                 >
-                  <Icons.ByName name="IconColorLUT" className="h-7 w-7" />
+                  <Icons.ByName
+                    name="IconColorLUT"
+                    className="h-7 w-7"
+                  />
                 </Button>
-                <span className="text-[12px] leading-tight text-white whitespace-nowrap">
+                <span className="whitespace-nowrap text-[12px] leading-tight text-white">
                   伪彩色
                 </span>
               </div>
@@ -163,13 +230,15 @@ function ColormapMenu({ commandsManager, servicesManager, ...props }) {
           onMouseDown={e => e.stopPropagation()}
           onClick={e => e.stopPropagation()}
         >
-          <div className="flex flex-col gap-0.5 max-h-72 overflow-y-auto">
+          <div className="flex max-h-72 flex-col gap-0.5 overflow-y-auto">
             {COLORMAPS.map(colormap => (
               <Button
                 key={colormap.name}
                 variant="ghost"
-                className={`flex h-9 w-full items-center justify-between px-3 py-1.5 text-sm hover:bg-primary-dark ${
-                  currentColormap === colormap.name ? 'text-common-bright bg-primary/20' : 'text-gray-400'
+                className={`hover:bg-primary-dark flex h-9 w-full items-center justify-between px-3 py-1.5 text-sm ${
+                  currentColormap === colormap.name
+                    ? 'text-common-bright bg-primary/20'
+                    : 'text-gray-400'
                 }`}
                 onClick={() => handleSelectColormap(colormap.name)}
                 onPointerDown={e => e.stopPropagation()}

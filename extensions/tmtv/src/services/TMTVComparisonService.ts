@@ -1,4 +1,5 @@
 export type TMTVComparisonSide = 'baseline' | 'followup';
+type TMTVComparisonModality = 'CT' | 'PT' | 'Fusion' | 'MIP';
 
 type TMTVComparisonState = {
   isComparisonMode: boolean;
@@ -15,6 +16,24 @@ const VIEWPORT_IDS_BY_SIDE: Record<TMTVComparisonSide, string[]> = {
   followup: ['followupCTAxial', 'followupPTAxial', 'followupFusionAxial', 'followupMIPSagittal'],
 };
 
+const VIEWPORT_IDS_BY_SIDE_AND_MODALITY: Record<
+  TMTVComparisonSide,
+  Record<TMTVComparisonModality, string>
+> = {
+  baseline: {
+    CT: 'baselineCTAxial',
+    PT: 'baselinePTAxial',
+    Fusion: 'baselineFusionAxial',
+    MIP: 'baselineMIPSagittal',
+  },
+  followup: {
+    CT: 'followupCTAxial',
+    PT: 'followupPTAxial',
+    Fusion: 'followupFusionAxial',
+    MIP: 'followupMIPSagittal',
+  },
+};
+
 const normalizeSide = (side?: string | null): TMTVComparisonSide | null => {
   if (!side) {
     return null;
@@ -26,6 +45,28 @@ const normalizeSide = (side?: string | null): TMTVComparisonSide | null => {
   }
   if (normalized === 'followup') {
     return 'followup';
+  }
+
+  return null;
+};
+
+const normalizeModality = (modality?: string | null): TMTVComparisonModality | null => {
+  if (!modality) {
+    return null;
+  }
+
+  const normalized = modality.toLowerCase();
+  if (normalized === 'ct') {
+    return 'CT';
+  }
+  if (normalized === 'pt' || normalized === 'pet') {
+    return 'PT';
+  }
+  if (normalized === 'fusion') {
+    return 'Fusion';
+  }
+  if (normalized === 'mip') {
+    return 'MIP';
   }
 
   return null;
@@ -107,6 +148,30 @@ class TMTVComparisonService {
     return normalizeSide(typeof side === 'string' ? side : null);
   }
 
+  public getModalityForViewportId(viewportId?: string | null): TMTVComparisonModality | null {
+    if (!viewportId) {
+      return null;
+    }
+
+    const lowerViewportId = viewportId.toLowerCase();
+    if (lowerViewportId.includes('fusion')) {
+      return 'Fusion';
+    }
+    if (lowerViewportId.includes('mip')) {
+      return 'MIP';
+    }
+    if (lowerViewportId.includes('pt')) {
+      return 'PT';
+    }
+    if (lowerViewportId.includes('ct')) {
+      return 'CT';
+    }
+
+    const viewportState = this.getViewportState(viewportId);
+    const modality = viewportState?.viewportOptions?.customViewportProps?.tmtvComparisonModality;
+    return normalizeModality(typeof modality === 'string' ? modality : null);
+  }
+
   /**
    * 2026-08-31 功能说明：根据当前 active viewport 推导正在操作的 Baseline/Follow-up 侧。
    */
@@ -152,8 +217,9 @@ class TMTVComparisonService {
       return;
     }
 
+    const currentModality = this.getModalityForViewportId(this.state.activeViewportId);
     const targetViewportId = options.activateViewport
-      ? this.getPreferredViewportIdForSide(nextSide)
+      ? this.getPreferredViewportIdForSide(nextSide, currentModality)
       : null;
 
     if (targetViewportId) {
@@ -192,7 +258,10 @@ class TMTVComparisonService {
     }
   }
 
-  private getPreferredViewportIdForSide(side: TMTVComparisonSide): string | null {
+  private getPreferredViewportIdForSide(
+    side: TMTVComparisonSide,
+    preferredModality?: TMTVComparisonModality | null
+  ): string | null {
     const viewportGridService = this.servicesManager?.services?.viewportGridService;
     const state = viewportGridService?.getState?.();
     const viewports = state?.viewports;
@@ -200,6 +269,14 @@ class TMTVComparisonService {
 
     if (!viewports || typeof viewports.has !== 'function') {
       return null;
+    }
+
+    const preferredViewportId = preferredModality
+      ? VIEWPORT_IDS_BY_SIDE_AND_MODALITY[side]?.[preferredModality]
+      : null;
+
+    if (preferredViewportId && viewports.has(preferredViewportId)) {
+      return preferredViewportId;
     }
 
     return candidates.find(viewportId => viewports.has(viewportId)) || null;
