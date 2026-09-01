@@ -5,6 +5,8 @@ import comparison, {
 } from './TMTVComparisonService';
 import { TMTVCrosshairService } from './TMTVCrosshairService';
 
+jest.mock('@cornerstonejs/tools', () => ({ SynchronizerManager: { createSynchronizer: jest.fn() } }));
+
 jest.mock('@cornerstonejs/core', () => ({
   cache: { getVolume: jest.fn() },
   Enums: { Events: { VOI_MODIFIED: 'CORNERSTONE_VOI_MODIFIED' } },
@@ -121,6 +123,18 @@ describe('TMTV comparison interactions', () => {
     expect(comparison.isComparisonProtocolActive()).toBe(true);
     protocolId = 'default';
     expect(comparison.isComparisonProtocolActive()).toBe(false);
+  });
+
+  it('pauses comparison camera groups for crosshair rotation without enabling previously disabled groups', () => {
+    const active = { setEnabled: jest.fn(), isDisabled: () => false };
+    const inactive = { setEnabled: jest.fn(), isDisabled: () => true };
+    servicesManager.services.syncGroupService.getSynchronizersForViewport = () => [active, inactive];
+    servicesManager.services.syncGroupService.getSynchronizerType = () => 'tmtvComparisonCamera';
+    const suspended = (crosshairs as any)._disableSynchronizers();
+    expect(suspended).toEqual([active]);
+    (crosshairs as any)._restoreSynchronizers(suspended);
+    expect(active.setEnabled.mock.calls).toEqual([[false], [true]]);
+    expect(inactive.setEnabled).not.toHaveBeenCalled();
   });
 
   it.each(['baseline', 'followup'])(

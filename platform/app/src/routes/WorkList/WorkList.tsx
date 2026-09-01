@@ -276,15 +276,9 @@ function WorkList({
 
     const tmtvMode = appConfig.loadedModes?.find(m => m.routeName === 'tmtv');
     if (tmtvMode) {
-      // 2026-08-31 功能说明：TMTV 对比在新页签打开，保留查询页和已勾选序列状态。
+      // 2026-09-01 功能说明：在当前页签进入对比模式，使返回查询页时能真实验证模式卸载和资源释放。
       const compareUrl = `${tmtvMode.routeName}${dataPath || ''}?${query.toString()}`;
-      const compareWindow = window.open(compareUrl, '_blank');
-
-      if (compareWindow) {
-        compareWindow.opener = null;
-      } else {
-        window.location.href = compareUrl;
-      }
+      navigate(compareUrl);
     }
   };
 

@@ -55,6 +55,7 @@ import { EasingFunctionEnum } from './utils/transitions';
 import { createSegmentationForViewport } from './utils/createSegmentationForViewport';
 import { utilities as segmentationUtilities } from '@cornerstonejs/tools/segmentation';
 import i18n from '@ohif/i18n';
+import setOrientationPreservingScale from './utils/setOrientationPreservingScale';
 
 const { add, intersect, subtract, copy } = cstUtils.contourSegmentation;
 
@@ -2209,7 +2210,10 @@ function commandsModule({
           const syncs = syncGroupService.getSynchronizersForViewport(viewportId);
           const camPosSyncs = syncs.filter(s => {
             const type = syncGroupService.getSynchronizerType(s);
-            return type && type.toLowerCase() === 'cameraposition';
+            return (
+              type &&
+              ['cameraposition', 'tmtvsamestudycamera'].includes(type.toLowerCase())
+            );
           });
           // 临时禁用同步器，防止 setOrientation() 内部触发同步
           disabledSynchronizers = camPosSyncs;
@@ -2222,7 +2226,17 @@ function commandsModule({
       }
 
       try {
-        viewport.setOrientation(orientation);
+        const activeProtocolId = hangingProtocolService.getActiveProtocol?.()?.protocol?.id;
+        const isTMTVComparison =
+          activeProtocolId === '@ohif/extension-tmtv.hangingProtocolModule.ptCTCompare';
+
+        // 2026-09-01 功能说明：对比布局保留切换前的世界空间缩放，避免不同体积
+        // 边界在矢状位/冠状位重新 fit 后造成图像尺寸突变。
+        if (isTMTVComparison) {
+          setOrientationPreservingScale(viewport, orientation);
+        } else {
+          viewport.setOrientation(orientation);
+        }
         viewport.render();
 
         // update the orientation in the viewport info
@@ -2250,7 +2264,10 @@ function commandsModule({
             const syncs = syncGroupService.getSynchronizersForViewport(viewportId);
             syncs.forEach(s => {
               const type = syncGroupService.getSynchronizerType(s);
-              if (type && type.toLowerCase() === 'cameraposition') {
+              if (
+                type &&
+                ['cameraposition', 'tmtvsamestudycamera'].includes(type.toLowerCase())
+              ) {
                 try {
                   // remove 同时移除 source 和 target
                   s.remove(viewportInfo);

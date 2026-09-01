@@ -240,6 +240,8 @@ function _initToolGroups(toolNames, Enums, toolGroupService, commandsManager) {
       },
     ],
     passive: [
+      // 2026-08-31 功能说明：MIP 支持调窗切换，滚轮仍由独立 VolumeRotate 绑定处理。
+      { toolName: toolNames.WindowLevel },
       { toolName: toolNames.StackScroll },
       // [2026-06-24 修改] MIP视口Zoom同样启用 zoomToCenter: true
       { toolName: toolNames.Zoom, configuration: { zoomToCenter: true } },

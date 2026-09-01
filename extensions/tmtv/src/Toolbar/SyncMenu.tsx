@@ -37,6 +37,8 @@ import {
 } from '@ohif/ui-next';
 import tmtvComparisonService, { COMPARISON_SYNC_IDS } from '../services/TMTVComparisonService';
 import { belongsToComparisonCameraGroup } from '../utils/ensureMIPWheelBinding';
+import applyTMTVZoomSync from '../utils/applyTMTVZoomSync';
+import { TMTV_SAME_STUDY_CAMERA_TYPE } from '../utils/createTMTVSameStudyCameraSynchronizer';
 
 function SyncMenu({ servicesManager, ...props }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -77,37 +79,13 @@ function SyncMenu({ servicesManager, ...props }) {
     [servicesManager]
   );
 
-  // [2026-08-20 新增] 懒创建 zoompan 同步器并挂接当前所有视口
-  // 仅在用户开启"同步缩放"或布局切换后需要重新应用时调用（此时视口已加载完成）。
-  // 通过公开 API addViewportToSyncGroup 创建/复用同步器，幂等：已存在的视口不会被重复添加。
+  // 2026-08-31 功能说明：对比模式按两次检查同步开关决定缩放组边界。
   const ensureZoomPanSync = useCallback(
-    (syncId, options) => {
-      const { syncGroupService, cornerstoneViewportService } = servicesManager.services;
-      try {
-        const vpIds = cornerstoneViewportService.getViewportIds() || [];
-        vpIds.forEach(vpId => {
-          const renderingEngine = getRenderingEngines().find(re =>
-            re.getViewports().some(vp => vp.id === vpId)
-          );
-          if (!renderingEngine) return;
-          try {
-            syncGroupService.addViewportToSyncGroup(vpId, renderingEngine.id, [
-              {
-                type: 'zoompan',
-                id: syncId,
-                source: true,
-                target: true,
-                options,
-              },
-            ]);
-          } catch {
-            /* ignore */
-          }
-        });
-      } catch (e) {
-        console.warn(`[SyncMenu] 创建同步器 ${syncId} 失败`, e);
-      }
-    },
+    () =>
+      applyTMTVZoomSync(
+        servicesManager,
+        tmtvComparisonService.isComparisonProtocolActive(servicesManager)
+      ),
     [servicesManager]
   );
 
@@ -119,22 +97,14 @@ function SyncMenu({ servicesManager, ...props }) {
     try {
       const syncSettings = customizationService.getCustomization('syncSettings') || {};
       const voiOn = syncSettings.voiSync !== false;
-      const zoomOn = syncSettings.zoomSync === true;
 
       applySyncEnabled('voi', null, voiOn);
-
-      if (zoomOn) {
-        ensureZoomPanSync('zoomSync', { syncPan: false });
-        applySyncEnabled(null, 'zoomSync', true);
-      } else {
-        applySyncEnabled(null, 'zoomSync', false);
-      }
 
       tmtvComparisonService.applyComparisonStudySyncFromSettings(servicesManager);
     } catch (e) {
       console.warn('[SyncMenu] 应用同步设置失败', e);
     }
-  }, [applySyncEnabled, ensureZoomPanSync, customizationService, servicesManager]);
+  }, [applySyncEnabled, customizationService, servicesManager]);
 
   // [2026-08-20 新增] 持久化同步设置（必须写完整对象，见文件头注释）
   const persistSyncSettings = useCallback(
@@ -272,8 +242,11 @@ function SyncMenu({ servicesManager, ...props }) {
         const { syncGroupService, cornerstoneViewportService } = servicesManager.services;
         try {
           const vpIds = cornerstoneViewportService.getViewportIds() || [];
-          // 获取所有 cameraPosition 同步器
-          const camSyncs = syncGroupService.getSynchronizersOfType('cameraPosition') || [];
+          // 2026-09-01 功能说明：普通与对比模式专用相机同步器都要随方位同步开关恢复。
+          const camSyncs = [
+            ...(syncGroupService.getSynchronizersOfType('cameraPosition') || []),
+            ...(syncGroupService.getSynchronizersOfType(TMTV_SAME_STUDY_CAMERA_TYPE) || []),
+          ];
           camSyncs.forEach(s => {
             const syncId = s.id || s._id;
             if (COMPARISON_SYNC_IDS.includes(syncId)) {
@@ -348,16 +321,11 @@ function SyncMenu({ servicesManager, ...props }) {
     setZoomSync(newState);
     try {
       persistSyncSettings({ zoomSync: newState });
-      if (newState) {
-        ensureZoomPanSync('zoomSync', { syncPan: false });
-        applySyncEnabled(null, 'zoomSync', true);
-      } else {
-        applySyncEnabled(null, 'zoomSync', false);
-      }
+      ensureZoomPanSync();
     } catch (e) {
       console.warn('[SyncMenu] 切换缩放同步失败', e);
     }
-  }, [zoomSync, persistSyncSettings, ensureZoomPanSync, applySyncEnabled]);
+  }, [zoomSync, persistSyncSettings, ensureZoomPanSync]);
 
   // 2026-08-31 功能说明：手动开启/关闭两次检查之间的同模态同步。
   const handleToggleComparisonStudySync = useCallback(() => {

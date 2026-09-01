@@ -7,6 +7,8 @@ import crosshairs from '../services/TMTVCrosshairService';
 import resetComparisonViewports from './resetComparisonViewports';
 import initialState from '../services/TMTVComparisonInitialState';
 
+jest.mock('@cornerstonejs/tools', () => ({ SynchronizerManager: { createSynchronizer: jest.fn() } }));
+
 jest.mock('@cornerstonejs/core', () => ({
   cache: { getVolume: jest.fn(), getImage: jest.fn() },
   utilities: {
@@ -75,19 +77,28 @@ describe('comparison viewport reset', () => {
         element,
         renderingEngineId: 'engine',
         camera: { parallelScale: 90, focalPoint: [999, 999, 999] },
+        initialCamera: { parallelScale: 100, focalPoint: [0, 0, 0] },
         getCamera: () => viewport.camera,
         getActors: () => modalities.map(modality => ({ referencedId: `${side}-${modality}` })),
         resetCamera: jest.fn(options => {
           expect(cameraSync.enabled).toBe(false);
           viewport.camera = {
-            parallelScale: options.resetZoom ? 100 : viewport.camera.parallelScale,
+            parallelScale: 100,
             focalPoint: [0, 0, side === 'baseline' ? 10 : 200],
           };
+          if (options.storeAsInitialCamera) {
+            viewport.initialCamera = JSON.parse(JSON.stringify(viewport.camera));
+          }
         }),
-        getZoom: jest.fn(() => NaN),
+        getZoom: jest.fn(
+          () => viewport.initialCamera.parallelScale / viewport.camera.parallelScale
+        ),
         setZoom: jest.fn(),
-        setCamera: jest.fn(camera => {
-          viewport.camera = camera;
+        setCamera: jest.fn((camera, storeAsInitialCamera) => {
+          viewport.camera = JSON.parse(JSON.stringify(camera));
+          if (storeAsInitialCamera) {
+            viewport.initialCamera = JSON.parse(JSON.stringify(viewport.camera));
+          }
         }),
         invertFlag: true,
         rgbInverted: true,
@@ -143,16 +154,18 @@ describe('comparison viewport reset', () => {
     jest.clearAllMocks();
   });
 
-  it('resets each study around its own center after pan without copying an invalid zoom or transient camera', () => {
+  it('resets each study around its own center and restores normalized zoom to 1', () => {
     expect(resetComparisonViewports(manager, metadata)).toBe(true);
     viewports.forEach(viewport => {
       expect(viewport.resetCamera).toHaveBeenCalledWith({
-        resetZoom: false,
+        resetZoom: true,
         resetPan: true,
         resetToCenter: true,
+        storeAsInitialCamera: true,
       });
       expect(viewport.setZoom).not.toHaveBeenCalled();
-      expect(viewport.camera.parallelScale).toBe(90);
+      expect(viewport.camera.parallelScale).toBe(100);
+      expect(viewport.getZoom()).toBe(1);
       expect(viewport.camera.focalPoint).toEqual([
         0,
         0,
@@ -210,7 +223,7 @@ describe('comparison viewport reset', () => {
   });
 
   it.each([NaN, Infinity, 0, -1])(
-    'fits the image instead of preserving invalid scale %s',
+    'fits the image and restores zoom 1 from invalid scale %s',
     scale => {
       viewports.get('baselineCTAxial').camera.parallelScale = scale;
       resetComparisonViewports(manager, metadata);
@@ -218,6 +231,7 @@ describe('comparison viewport reset', () => {
         expect.objectContaining({ resetZoom: true })
       );
       expect(viewports.get('baselineCTAxial').camera.parallelScale).toBe(100);
+      expect(viewports.get('baselineCTAxial').getZoom()).toBe(1);
     }
   );
 
@@ -307,7 +321,7 @@ describe('comparison viewport reset', () => {
       });
       originals.set(viewport.id, JSON.parse(JSON.stringify(viewport.camera)));
     });
-    document.dispatchEvent(new Event('pointerdown'));
+    document.dispatchEvent(new Event('keydown'));
     viewports.forEach(viewport => {
       viewport.camera.focalPoint[2] = 999;
       viewport.camera.parallelScale = 500;
@@ -317,6 +331,8 @@ describe('comparison viewport reset', () => {
     resetComparisonViewports(manager, metadata);
     viewports.forEach(viewport => {
       expect(viewport.camera).toEqual(originals.get(viewport.id));
+      expect(viewport.initialCamera).toEqual(originals.get(viewport.id));
+      expect(viewport.getZoom()).toBe(1);
     });
     expect(viewports.get('followupPTAxial').setProperties).toHaveBeenLastCalledWith(
       { voiRange: { lower: 0, upper: 4 } },
@@ -337,7 +353,7 @@ describe('comparison viewport reset', () => {
       viewPlaneNormal: [0, 0, 1],
     };
     viewport.getProperties = () => ({ voiRange: { lower: -5, upper: 74 } });
-    document.dispatchEvent(new Event('pointerdown'));
+    document.dispatchEvent(new Event('keydown'));
     expect(initialState.get(viewport)).toBeDefined();
     viewport.getActors = () => [{ referencedId: 'followup-CT' }];
     expect(initialState.get(viewport)).toBeUndefined();

@@ -2,6 +2,7 @@ import { cache, utilities } from '@cornerstonejs/core';
 import comparison, { VIEWPORT_IDS_BY_SIDE } from '../services/TMTVComparisonService';
 import crosshairs from '../services/TMTVCrosshairService';
 import initialState from '../services/TMTVComparisonInitialState';
+import resetTMTVCamera from './resetTMTVCamera';
 
 const isValidRange = range =>
   range &&
@@ -35,16 +36,13 @@ function getInitialRange(volume, metadataProvider) {
   return isValidRange(range) ? range : undefined;
 }
 
-/** 2026-08-31 功能说明：分别恢复 CT/PET 图层和 MIP 参数，保持有效物理缩放，拒绝回填 NaN 缩放比。 */
+/** 2026-09-01 功能说明：分别恢复 CT/PET 图层、MIP 参数和初始相机，使重置缩放归一为 1。 */
 function resetViewport(viewport, modality, metadataProvider) {
   const actors = viewport.getActors?.() || [];
   if (!actors.length) return;
 
-  const scale = viewport.getCamera?.()?.parallelScale;
   const initial = initialState.get(viewport);
-  const preserveScale = Number.isFinite(scale) && scale > 0;
-  viewport.resetCamera({ resetZoom: !preserveScale, resetPan: true, resetToCenter: true });
-  if (initial) viewport.setCamera(JSON.parse(JSON.stringify(initial.camera)));
+  resetTMTVCamera(viewport, initial?.camera);
 
   let defaultRange;
   const defaultVolumeId = viewport.getVolumeId?.() || actors[0]?.referencedId || actors[0]?.uid;

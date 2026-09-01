@@ -313,9 +313,15 @@ class TMTVCrosshairService {
           } catch (e) {
             continue;
           }
-          if (type.toLowerCase() === 'cameraposition') {
+          if (
+            ['cameraposition', 'tmtvcomparisoncamera', 'tmtvsamestudycamera'].includes(
+              type.toLowerCase()
+            )
+          ) {
             seen.add(s);
             try {
+              // 2026-08-31 功能说明：只恢复本次暂停的同步器，不能把用户原本关闭的组重新打开。
+              if (s.isDisabled?.()) continue;
               s.setEnabled(false);
               disabledSyncs.push(s);
             } catch (e) {
@@ -1020,6 +1026,8 @@ class TMTVCrosshairService {
   rotateCrosshair(deltaDegrees: number): void {
     const comparisonService = this.getActiveComparisonService();
     if (comparisonService) {
+      // 2026-09-01 功能说明：跨检查仅同步定位点，不同步单双切线旋转。
+      // 两次检查未完成空间配准时，各自保持独立斜切面，避免产生错误解剖对应。
       comparisonService.rotateCrosshair(deltaDegrees);
       return;
     }

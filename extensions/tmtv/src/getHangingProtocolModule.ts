@@ -12,6 +12,7 @@ import {
   ptCORONAL,
   ptSAGITTAL,
 } from './utils/hpViewports';
+import buildCompareSyncGroups from './utils/comparisonSyncGroups';
 
 const tmtvCompareProtocolId = '@ohif/extension-tmtv.hangingProtocolModule.ptCTCompare';
 
@@ -62,73 +63,8 @@ const createStudyModalitySelector = (studyInstanceUIDsIndex: number, modality: '
 });
 
 /**
- * [2026-08-28 修复] 构建对比模式 syncGroups。
- * 关键：CT/PT/Fusion（axial 方位）共享 cameraPositionSync，确保缩放率一致，
- * 避免 PET 因 volume bounds 较大独立 fit 后显示偏小（参照原 TMTV axialSync 机制）。
- * Baseline 与 Follow-up 分别用独立 sync 组，避免流式加载期间互相污染相机。
- * MIP 为 sagittal 方位，不加入 axial 相机同步，但与同侧 PT 共享 VOI。
+ * 2026-08-28 功能说明：创建对比模式体积视口，并按检查侧和模态绑定同步组。
  */
-const buildCompareSyncGroups = (side: string, modality: string) => {
-  const sideKey = side === 'Baseline' ? 'Baseline' : 'Followup';
-  const groups: any[] = [];
-
-  // axial/coronal 方位的 CT/PT/Fusion 共享相机位置同步组（按 side 分组）
-  if (modality !== 'MIP') {
-    groups.push({
-      type: 'cameraPosition',
-      id: `axialSync${sideKey}`,
-      source: true,
-      target: true,
-    });
-  }
-
-  // VOI 窗宽窗位同步（参照原 TMTV ctAXIAL/ptAXIAL/fusionAXIAL/mipSAGITTAL 配置）
-  if (modality === 'CT') {
-    groups.push({
-      type: 'voi',
-      id: `ctWLSync${sideKey}`,
-      source: true,
-      target: true,
-      options: { syncColormap: true },
-    });
-  } else if (modality === 'PT' || modality === 'MIP') {
-    groups.push({
-      type: 'voi',
-      id: `ptWLSync${sideKey}`,
-      source: true,
-      target: true,
-      options: { syncColormap: true },
-    });
-  } else if (modality === 'Fusion') {
-    // Fusion: CT VOI 仅作为 target 接收，fusion VOI 双向，ptFusion 仅 target
-    groups.push({ type: 'voi', id: `ctWLSync${sideKey}`, source: false, target: true });
-    groups.push({
-      type: 'voi',
-      id: `fusionWLSync${sideKey}`,
-      source: true,
-      target: true,
-      options: { syncColormap: true },
-    });
-    groups.push({
-      type: 'voi',
-      id: `ptFusionWLSync${sideKey}`,
-      source: false,
-      target: true,
-      options: { syncColormap: false, syncInvertState: false },
-    });
-  }
-
-  groups.push({
-    type: 'hydrateseg',
-    id: 'sameFORId',
-    source: true,
-    target: true,
-    options: { matchingRules: ['sameFOR'] },
-  });
-
-  return groups;
-};
-
 const createCompareVolumeViewport = ({
   viewportId,
   side,

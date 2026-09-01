@@ -2,6 +2,8 @@ import React, { useState, useCallback } from 'react';
 import PropTypes from 'prop-types';
 import html2canvas from 'html2canvas';
 import { classes } from '@ohif/core';
+import comparisonService from '../services/TMTVComparisonService';
+import { getViewportStudyUID } from '../utils/comparisonMeasurements';
 import {
   getEnabledElement as csGetEnabledElement,
   utilities as csUtils,
@@ -31,8 +33,7 @@ function SaveMenu({ commandsManager, servicesManager, ...props }) {
   } = servicesManager.services;
 
   /**
-   * 获取当前活动视口的DICOM元数据
-   * 通过悬挂协议匹配详情获取DisplaySet，再从MetadataProvider获取实例元数据
+   * 2026-08-31 功能说明：对比模式按视口当前加载数据获取元数据，避免换序列后沿用旧检查信息。
    * 返回包含patientID、patientName、studyDate等上传所需字段的元数据对象
    */
   const getActiveViewportMetadata = useCallback(() => {
@@ -41,18 +42,21 @@ function SaveMenu({ commandsManager, servicesManager, ...props }) {
       const { activeViewportId } = viewportGridService.getState();
       if (!activeViewportId) return null;
 
-      // 通过悬挂协议获取视口匹配详情（包含DisplaySet信息）
-      const { viewportMatchDetails } = hangingProtocolService.getMatchDetails();
-      const viewportDetails = viewportMatchDetails?.get(activeViewportId);
-      if (!viewportDetails) return null;
-
-      // 获取视口关联的DisplaySet列表
-      const { displaySetsInfo } = viewportDetails;
-      if (!displaySetsInfo || displaySetsInfo.length === 0) return null;
-
-      // 取第一个DisplaySet作为当前视口的主DisplaySet
-      const firstDisplaySetUID = displaySetsInfo[0].displaySetInstanceUID;
-      const firstDisplaySet = displaySetService.getDisplaySetByUID(firstDisplaySetUID);
+      let firstDisplaySet;
+      const isComparison = comparisonService.isComparisonProtocolActive(servicesManager);
+      const studyUID = isComparison && getViewportStudyUID(servicesManager, activeViewportId);
+      if (isComparison) {
+        if (!studyUID) return null;
+        firstDisplaySet = servicesManager.services.cornerstoneViewportService
+          .getViewportDisplaySets(activeViewportId)[0];
+      } else {
+        const { viewportMatchDetails } = hangingProtocolService.getMatchDetails();
+        const displaySetsInfo = viewportMatchDetails?.get(activeViewportId)?.displaySetsInfo;
+        if (!displaySetsInfo?.length) return null;
+        firstDisplaySet = displaySetService.getDisplaySetByUID(
+          displaySetsInfo[0].displaySetInstanceUID
+        );
+      }
       if (!firstDisplaySet) return null;
 
       // 确保DisplaySet中有图像数据
@@ -66,6 +70,7 @@ function SaveMenu({ commandsManager, servicesManager, ...props }) {
       const MetadataProvider = classes.MetadataProvider;
       const instance = MetadataProvider.get('instance', imageId);
       if (!instance) return null;
+      if (isComparison && instance.StudyInstanceUID !== studyUID) return null;
 
       // 性别映射：DICOM编码(M/F/O) -> 中文显示
       const sexMap = { M: '男', F: '女', O: '其他' };
@@ -90,7 +95,7 @@ function SaveMenu({ commandsManager, servicesManager, ...props }) {
       console.error('SaveMenu: 获取视口元数据失败', e);
       return null;
     }
-  }, [viewportGridService, hangingProtocolService, displaySetService]);
+  }, [viewportGridService, hangingProtocolService, displaySetService, servicesManager]);
 
   /**
    * 上传单张图像

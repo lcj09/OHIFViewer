@@ -300,8 +300,7 @@ const toolbarButtons = [
       evaluate: 'evaluate.cornerstoneTool',
     },
   },
-  // 2026-04-29 - 添加删除测量按钮
-  // 功能：清除当前所有测量（使用clearMeasurements命令）
+  // 2026-08-31 功能说明：对比时仅清除当前检查，普通 TMTV 保留原清除行为。
   {
     id: 'ClearMeasurements',
     uiType: 'ohif.toolButton',
@@ -310,7 +309,8 @@ const toolbarButtons = [
       label: i18n.t('Buttons:Clear'),
       tooltip: i18n.t('Buttons:Clear Measurements'),
       commands: {
-        commandName: 'clearMeasurements',
+        commandName: 'clearTMTVMeasurements',
+        context: 'TMTV:CORNERSTONE',
         commandOptions: {},
       },
     },

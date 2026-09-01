@@ -17,6 +17,8 @@ import { utils } from '@ohif/core';
 import tmtvCrosshairService from './services/TMTVCrosshairService';
 import crosshairDisplayService from './services/CrosshairDisplayService';
 import resetComparisonViewports from './utils/resetComparisonViewports';
+import resetTMTVCamera from './utils/resetTMTVCamera';
+import { clearTMTVMeasurements } from './utils/comparisonMeasurements';
 import tmtvLesionService from './services/TMTVLesionService';
 import tmtvLesionHighlightService from './services/TMTVLesionHighlightService';
 import tmtvSegmentMaskStorageService from './services/TMTVSegmentMaskStorageService';
@@ -207,6 +209,8 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
   }
 
   const actions = {
+    // 2026-08-31 功能说明：对比模式的清除操作只作用于当前检查。
+    clearTMTVMeasurements: () => clearTMTVMeasurements(servicesManager, commandsManager),
     getMatchingPTDisplaySet: ({ viewportMatchDetails }) => {
       // Todo: this is assuming that the hanging protocol has successfully matched
       // the correct PT. For future, we should have a way to filter out the PTs
@@ -1105,15 +1109,12 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       const toolGroupId = viewportInfo.getToolGroupId();
       const ptVOI = _getPTVOIRange();
 
-      // [2026-07-06] 保存当前缩放，resetCamera后恢复，避免图像整体变小
-      const currentZoom = viewport.getZoom();
-
       // ── PT视口重置 ──
       // 只重置相机，不调用resetProperties（避免VOI被重置为错误的默认值）
       // 手动恢复自定义SUV窗宽窗位和反色状态
       if (toolGroupId === 'ptToolGroup') {
-        viewport.resetCamera();
-        viewport.setZoom(currentZoom);
+        // 2026-09-01 功能说明：重置必须回到加载初始视野，不能恢复操作前的旧缩放。
+        resetTMTVCamera(viewport);
         if (ptVOI) {
           const { lower, upper } = csUtils.windowLevel.toLowHighRange(
             ptVOI.windowWidth,
@@ -1132,8 +1133,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         // 重置相机 + 恢复slabThickness（resetCamera不会恢复slabThickness）
         // 同时恢复自定义SUV窗宽窗位和反色状态
       } else if (toolGroupId === 'mipToolGroup') {
-        viewport.resetCamera();
-        viewport.setZoom(currentZoom);
+        resetTMTVCamera(viewport);
         viewport.setProperties({
           slabThickness: 500,
         });
@@ -1156,8 +1156,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         // 注意：setProperties必须指定volumeId，否则会影响CT volume
       } else if (toolGroupId === 'fusionToolGroup') {
         viewport.resetProperties?.();
-        viewport.resetCamera();
-        viewport.setZoom(currentZoom);
+        resetTMTVCamera(viewport);
         if (ptVOI) {
           const ptVolumeId = _getPTVolumeId(viewport);
           if (ptVolumeId) {
@@ -1186,8 +1185,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         // 使用默认重置行为
       } else {
         viewport.resetProperties?.();
-        viewport.resetCamera();
-        viewport.setZoom(currentZoom);
+        resetTMTVCamera(viewport);
         viewport.render();
       }
 
@@ -1451,6 +1449,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
   };
 
   const definitions = {
+    clearTMTVMeasurements: { commandFn: actions.clearTMTVMeasurements },
     setEndSliceForROIThresholdTool: {
       commandFn: actions.setEndSliceForROIThresholdTool,
     },

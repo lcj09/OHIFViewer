@@ -275,8 +275,9 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
       }
     });
 
-    // Release WebGL contexts AFTER disabling viewports (DOM listeners already cleaned)
-    this._releaseWebGLContexts();
+    // 2026-09-01 功能说明：先在有效 context 上释放 GPU 资源；context 和 VTK 对象
+    // 统一交给 renderingEngine.destroy() 销毁，避免 loseContext 后继续执行 GL 命令。
+    this._releaseWebGLResources();
 
     try {
       this.renderingEngine?.destroy?.();
@@ -472,53 +473,21 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     }
   }
 
-  /**
-   * Explicitly releases WebGL contexts by calling loseContext() on each
-   * WebGL context in the rendering engine's context pool.
-   * VTK.js's delete() does not call loseContext(), causing GPU memory leaks.
-   */
-  private _releaseWebGLContexts() {
+  /** 2026-09-01 功能说明：销毁引擎前释放纹理和缓冲，不提前主动丢失 WebGL context。 */
+  private _releaseWebGLResources() {
     try {
       const renderingEngine = this.renderingEngine as any;
       if (!renderingEngine) return;
 
-      // Try multiple paths to find contextPool (wrapper._implementation.contextPool or direct)
-      let contextPool = renderingEngine._implementation?.contextPool || renderingEngine.contextPool;
-
-      if (!contextPool) {
-        return;
-      }
+      const contextPool =
+        renderingEngine._implementation?.contextPool || renderingEngine.contextPool;
+      if (!contextPool) return;
 
       const contexts = contextPool.contexts || contextPool.getAllContexts?.() || [];
       contexts.forEach((ctx, index) => {
         try {
           if (!ctx || ctx.isDeleted?.()) return;
           const glRenderWindow = ctx.getOpenGLRenderWindow?.();
-
-          // 【关键修复 2026-07-27】必须在 loseContext() 之前调用 releaseGraphicsResources()！
-          //
-          // 原顺序（有内存泄漏）：
-          //   loseContext() → renderingEngine.destroy() → releaseGraphicsResources()
-          //   ↑ loseContext 后 WebGL 上下文失效，releaseGraphicsResources 中的
-          //     gl.deleteTexture() / gl.deleteBuffer() 等调用全部无效，
-          //     导致 CT(~246MB) + PT(~246MB) 的 3D 纹理无法释放！
-          //
-          // 新顺序（正确）：
-          //   releaseGraphicsResources() → loseContext()
-          //   ↑ 在 WebGL 上下文仍然有效时，先释放所有 GPU 资源：
-          //     - shaderCache（编译的着色器程序，~27.5MB compiled code）
-          //     - scalarTextures（CT+PT 的 3D 体素纹理，~492MB）
-          //     - colorTexture / opacityTexture（颜色查找表）
-          //     - VBO（顶点缓冲对象）
-          //     - textureUnitManager（纹理单元管理器）
-          //   释放完成后再 loseContext() 彻底关闭 WebGL 上下文。
-          //
-          // releaseGraphicsResources 内部调用链：
-          //   openGLRenderWindow.releaseGraphicsResources()
-          //   → 遍历 renderers → glRen.releaseGraphicsResources()
-          //   → 遍历 viewProps (actors) → volume.releaseGraphicsResources()
-          //   → mapper.releaseGraphicsResources() → scalarTextures[i].releaseGraphicsResources()
-          //   → gl.deleteTexture(model.handle)  ← 真正释放 GPU 纹理
           if (glRenderWindow && typeof glRenderWindow.releaseGraphicsResources === 'function') {
             try {
               glRenderWindow.releaseGraphicsResources();
@@ -526,56 +495,12 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
               console.warn('[ViewportService] releaseGraphicsResources failed for', index, e);
             }
           }
-
-          // 释放 GPU 资源后，再调用 loseContext() 彻底关闭 WebGL 上下文
-          const gl = glRenderWindow?.get3DContext?.() ?? glRenderWindow?.getContext?.();
-          if (gl?.getExtension) {
-            const loseExt = gl.getExtension('WEBGL_lose_context');
-            if (loseExt) { loseExt.loseContext(); }
-          }
-
-          // [2026-07-28 GPU 残留修复] 显式删除 VTK OpenGL 渲染窗口并清空 context/canvas 引用。
-          //
-          // 问题：loseContext() 只是标记上下文为 "lost"，不会立即释放 GPU 资源。
-          // GPU 驱动会等到 WebGL 上下文对象被 GC 回收后才真正释放显存。
-          // 但 VTK 的 vtkOpenGLRenderWindow 持有 model.context 和 model.canvas 引用，阻止 GC，
-          // 导致 GPU 内存残留 ~300 MB（关闭标签页后才释放）。
-          //
-          // 修复：在 loseContext() 后立即调用 glRenderWindow.delete()，
-          // 然后显式将 model.context 和 model.canvas 设为 null，解除引用链，
-          // 让 GC 可以回收 WebGL 上下文。这样 GPU 驱动能在返回查询界面后立即释放显存，
-          // 无需等标签页关闭。
-          //
-          // 验证：
-          // - 修复前：返回后 GPU 进程 1.65 GB，关闭标签页后 224 MB（差 1.4 GB）
-          // - 修复后（第1步）：返回后 GPU 进程 550 MB（Workers 终止后）
-          // - 修复后（第2步）：返回后 GPU 进程应接近 224 MB 基线
-          try {
-            if (glRenderWindow && !glRenderWindow.isDeleted?.()) {
-              glRenderWindow.delete();
-              // 显式清空 context 和 canvas 引用，打破 WebGLContext → GPU 内存的引用链
-              const glRWM = glRenderWindow as any;
-              if (glRWM?.model) {
-                glRWM.model.context = null;
-                glRWM.model.canvas = null;
-              }
-            }
-          } catch (e) {
-            console.warn('[ViewportService] glRenderWindow.delete() failed for', index, e);
-          }
         } catch (e) {
-          console.warn('[ViewportService] WebGL context release failed for', index, e);
+          console.warn('[ViewportService] WebGL resource release failed for', index, e);
         }
       });
-
-      // Clean up offscreen canvas containers
-      const containers = contextPool.offScreenCanvasContainers;
-      if (containers && Array.isArray(containers)) {
-        containers.forEach(c => { try { c?.parentNode?.removeChild(c); } catch {} });
-        containers.length = 0;
-      }
     } catch (e) {
-      console.warn('[ViewportService] _releaseWebGLContexts failed', e);
+      console.warn('[ViewportService] _releaseWebGLResources failed', e);
     }
   }
 

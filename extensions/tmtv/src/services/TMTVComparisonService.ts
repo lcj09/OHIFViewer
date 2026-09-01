@@ -1,5 +1,16 @@
 import { cache, Enums } from '@cornerstonejs/core';
 import initialState from './TMTVComparisonInitialState';
+import createComparisonCameraSynchronizer, {
+  COMPARISON_CAMERA_TYPE,
+} from '../utils/createComparisonCameraSynchronizer';
+import applyTMTVZoomSync from '../utils/applyTMTVZoomSync';
+import createTMTVSameStudyCameraSynchronizer, {
+  TMTV_SAME_STUDY_CAMERA_TYPE,
+} from '../utils/createTMTVSameStudyCameraSynchronizer';
+import fitComparisonViewports, {
+  reconcileComparisonViewportScales,
+} from '../utils/fitComparisonViewports';
+import { COMPARISON_VIEWPORT_IDS_BY_SIDE } from '../utils/comparisonViewportIds';
 
 export type TMTVComparisonSide = 'baseline' | 'followup';
 type TMTVComparisonModality = 'CT' | 'PT' | 'Fusion' | 'MIP';
@@ -14,10 +25,8 @@ type TMTVComparisonListener = (state: TMTVComparisonState) => void;
 
 const TMTV_COMPARE_PROTOCOL_ID = '@ohif/extension-tmtv.hangingProtocolModule.ptCTCompare';
 
-const VIEWPORT_IDS_BY_SIDE: Record<TMTVComparisonSide, string[]> = {
-  baseline: ['baselineCTAxial', 'baselinePTAxial', 'baselineFusionAxial', 'baselineMIPSagittal'],
-  followup: ['followupCTAxial', 'followupPTAxial', 'followupFusionAxial', 'followupMIPSagittal'],
-};
+const VIEWPORT_IDS_BY_SIDE: Record<TMTVComparisonSide, readonly string[]> =
+  COMPARISON_VIEWPORT_IDS_BY_SIDE;
 
 const VIEWPORT_IDS_BY_SIDE_AND_MODALITY: Record<
   TMTVComparisonSide,
@@ -107,10 +116,29 @@ const normalizeModality = (modality?: string | null): TMTVComparisonModality | n
 
 class TMTVComparisonService {
   /** 2026-08-31 功能说明：捕获首次鼠标、滚轮或键盘操作前的状态，避开初始化异步调窗尚未完成的时机。 */
-  private captureInitialState = () => {
+  private captureInitialState = (event?: Event) => {
     if (!this.isComparisonProtocolActive()) return;
     const viewportService = this.servicesManager?.services?.cornerstoneViewportService;
-    for (const id of [...VIEWPORT_IDS_BY_SIDE.baseline, ...VIEWPORT_IDS_BY_SIDE.followup]) {
+    const viewportIds = [...VIEWPORT_IDS_BY_SIDE.baseline, ...VIEWPORT_IDS_BY_SIDE.followup];
+    if (event?.type !== 'keydown' && event?.target) {
+      const target = event.target as Node;
+      const insideComparisonViewport = viewportIds.some(id => {
+        const element = viewportService?.getCornerstoneViewport(id)?.element;
+        return element === target || element?.contains?.(target);
+      });
+      if (!insideComparisonViewport) return;
+    } else if (event?.type === 'keydown') {
+      const activeViewportId =
+        this.servicesManager?.services?.viewportGridService?.getState?.()?.activeViewportId;
+      if (!viewportIds.includes(activeViewportId)) return;
+    }
+    this.captureComparisonScaleReferences();
+    this.comparisonInteractionStarted = true;
+    if (this.initialFitTimer) {
+      clearTimeout(this.initialFitTimer);
+      this.initialFitTimer = null;
+    }
+    for (const id of viewportIds) {
       try {
         initialState.capture(viewportService?.getCornerstoneViewport(id));
       } catch {
@@ -120,6 +148,14 @@ class TMTVComparisonService {
   };
   private servicesManager: any = null;
   private viewportSubscription: { unsubscribe: () => void } | null = null;
+  private gridSubscription: { unsubscribe: () => void } | null = null;
+  private initialFitTimer: ReturnType<typeof setTimeout> | null = null;
+  private initialFitAttempt = 0;
+  private scaleReconcileTimer: ReturnType<typeof setTimeout> | null = null;
+  private scaleReconcileAttempt = 0;
+  private comparisonScaleReferences = new Map<string, { current: number; initial: number }>();
+  private fittedViewports = new WeakMap<object, string>();
+  private comparisonInteractionStarted = false;
   private voiBindings = new Map<string, { element: HTMLElement; handler: EventListener }>();
   private applyingVoi = false;
 
@@ -144,10 +180,26 @@ class TMTVComparisonService {
    * 2026-08-31 功能说明：初始化两次检查对比状态服务，只保存 servicesManager 引用并在退出模式时释放。
    */
   public init(servicesManager: any) {
+    if (this.initialFitTimer) clearTimeout(this.initialFitTimer);
+    if (this.scaleReconcileTimer) clearTimeout(this.scaleReconcileTimer);
+    this.initialFitTimer = null;
+    this.scaleReconcileTimer = null;
+    this.initialFitAttempt = 0;
+    this.scaleReconcileAttempt = 0;
+    this.comparisonScaleReferences.clear();
+    this.fittedViewports = new WeakMap();
+    this.comparisonInteractionStarted = false;
     this.viewportSubscription?.unsubscribe();
     this.viewportSubscription = null;
+    this.gridSubscription?.unsubscribe();
+    this.gridSubscription = null;
     this.clearVoiBindings();
     this.servicesManager = servicesManager || null;
+    // 2026-09-01 功能说明：挂片协议创建视口前注册同检查相机同步器，避免回退到完整相机复制。
+    servicesManager?.services?.syncGroupService?.addSynchronizerType?.(
+      TMTV_SAME_STUDY_CAMERA_TYPE,
+      createTMTVSameStudyCameraSynchronizer
+    );
     if (typeof document !== 'undefined') {
       for (const event of ['pointerdown', 'wheel', 'keydown']) {
         document.addEventListener(event, this.captureInitialState, true);
@@ -157,16 +209,92 @@ class TMTVComparisonService {
     if (viewportService?.EVENTS?.VIEWPORT_VOLUMES_CHANGED) {
       this.viewportSubscription = viewportService.subscribe(
         viewportService.EVENTS.VIEWPORT_VOLUMES_CHANGED,
-        () => this.applyComparisonStudySyncFromSettings()
+        () => {
+          this.applyComparisonStudySyncFromSettings();
+          this.scheduleInitialViewportFit();
+          this.scheduleViewportScaleReconciliation();
+        }
       );
     }
+    const viewportGridService = servicesManager?.services?.viewportGridService;
+    if (viewportGridService?.EVENTS?.GRID_STATE_CHANGED) {
+      this.gridSubscription = viewportGridService.subscribe(
+        viewportGridService.EVENTS.GRID_STATE_CHANGED,
+        () => this.scheduleViewportScaleReconciliation()
+      );
+    }
+    this.scheduleInitialViewportFit();
     this.syncFromActiveViewport();
+  }
+
+  /** 2026-09-01 功能说明：合并加载/resize 事件，用户交互前仅保留一个可取消的初始 fit 任务。 */
+  private scheduleInitialViewportFit(resetAttempts = true) {
+    if (!this.isComparisonProtocolActive() || this.comparisonInteractionStarted) return;
+    if (resetAttempts) this.initialFitAttempt = 0;
+    if (this.initialFitTimer) clearTimeout(this.initialFitTimer);
+    this.initialFitTimer = setTimeout(() => {
+      this.initialFitTimer = null;
+      if (!this.isComparisonProtocolActive() || this.comparisonInteractionStarted) return;
+      try {
+        fitComparisonViewports(this.servicesManager, this.fittedViewports);
+      } catch (error) {
+        console.warn('[TMTVComparisonService] 初始化对比视口尺寸失败', error);
+      }
+      this.initialFitAttempt++;
+      if (this.initialFitAttempt < 8 && !this.comparisonInteractionStarted) {
+        this.scheduleInitialViewportFit(false);
+      }
+    }, 250);
+  }
+
+  /** 2026-09-01 功能说明：进入 1x1 前保存两侧 CT 尺度，返回布局时继续作为同侧基准。 */
+  private captureComparisonScaleReferences() {
+    const { viewportGridService, cornerstoneViewportService } = this.servicesManager?.services || {};
+    const layout = viewportGridService?.getState?.()?.layout;
+    if (layout?.numRows === 1 && layout?.numCols === 1) return;
+    for (const side of ['baseline', 'followup']) {
+      const viewport = cornerstoneViewportService?.getCornerstoneViewport?.(`${side}CTAxial`);
+      const current = viewport?.getCamera?.()?.parallelScale;
+      const initial = viewport?.initialCamera?.parallelScale;
+      if (Number.isFinite(current) && current > 0 && Number.isFinite(initial) && initial > 0) {
+        this.comparisonScaleReferences.set(side, { current, initial });
+      }
+    }
+  }
+
+  /** 2026-09-01 功能说明：布局最大化/还原后有限次数复核同侧显示尺度，不持续轮询。 */
+  private scheduleViewportScaleReconciliation(resetAttempts = true) {
+    if (!this.isComparisonProtocolActive()) return;
+    if (resetAttempts) this.scaleReconcileAttempt = 0;
+    if (this.scaleReconcileTimer) clearTimeout(this.scaleReconcileTimer);
+    this.scaleReconcileTimer = setTimeout(() => {
+      this.scaleReconcileTimer = null;
+      if (!this.isComparisonProtocolActive()) return;
+      try {
+        reconcileComparisonViewportScales(this.servicesManager, this.comparisonScaleReferences);
+      } catch (error) {
+        console.warn('[TMTVComparisonService] 布局恢复后对齐视口尺度失败', error);
+      }
+      this.scaleReconcileAttempt++;
+      if (this.scaleReconcileAttempt < 4) {
+        this.scheduleViewportScaleReconciliation(false);
+      }
+    }, 150);
   }
 
   /**
    * 2026-08-31 功能说明：释放订阅和服务引用，避免跨病例保留对比模式状态。
    */
   public reset() {
+    if (this.initialFitTimer) clearTimeout(this.initialFitTimer);
+    if (this.scaleReconcileTimer) clearTimeout(this.scaleReconcileTimer);
+    this.initialFitTimer = null;
+    this.scaleReconcileTimer = null;
+    this.initialFitAttempt = 0;
+    this.scaleReconcileAttempt = 0;
+    this.comparisonScaleReferences.clear();
+    this.fittedViewports = new WeakMap();
+    this.comparisonInteractionStarted = false;
     if (typeof document !== 'undefined') {
       for (const event of ['pointerdown', 'wheel', 'keydown']) {
         document.removeEventListener(event, this.captureInitialState, true);
@@ -175,6 +303,8 @@ class TMTVComparisonService {
     initialState.clear();
     this.viewportSubscription?.unsubscribe();
     this.viewportSubscription = null;
+    this.gridSubscription?.unsubscribe();
+    this.gridSubscription = null;
     this.removeComparisonStudySync();
     this.servicesManager = null;
     this.listeners.clear();
@@ -302,6 +432,7 @@ class TMTVComparisonService {
       this.removeComparisonStudySync(servicesManager);
     }
 
+    applyTMTVZoomSync(servicesManager, this.isComparisonProtocolActive(servicesManager));
     this.notify();
   }
 
@@ -317,6 +448,8 @@ class TMTVComparisonService {
     const syncSettings = customizationService?.getCustomization?.('syncSettings') || {};
     const compareOn =
       this.isComparisonProtocolActive(servicesManager) && syncSettings.comparisonStudySync === true;
+
+    applyTMTVZoomSync(servicesManager, this.isComparisonProtocolActive(servicesManager));
 
     if (compareOn) {
       this.ensureComparisonStudySync(servicesManager, syncSettings.voiSync !== false);
@@ -378,6 +511,10 @@ class TMTVComparisonService {
       this.removeComparisonStudySync(servicesManager);
       return;
     }
+    syncGroupService.addSynchronizerType?.(
+      COMPARISON_CAMERA_TYPE,
+      createComparisonCameraSynchronizer
+    );
 
     if (!includeVoi) {
       this.clearVoiBindings();
@@ -413,7 +550,7 @@ class TMTVComparisonService {
 
           const syncGroups: any[] = [
             {
-              type: 'cameraPosition',
+              type: COMPARISON_CAMERA_TYPE,
               id: `tmtvCompareCamera${modality}`,
               source: true,
               target: true,
