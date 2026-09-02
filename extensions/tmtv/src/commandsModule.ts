@@ -18,7 +18,11 @@ import tmtvCrosshairService from './services/TMTVCrosshairService';
 import crosshairDisplayService from './services/CrosshairDisplayService';
 import resetComparisonViewports from './utils/resetComparisonViewports';
 import resetTMTVCamera from './utils/resetTMTVCamera';
-import { clearTMTVMeasurements } from './utils/comparisonMeasurements';
+import {
+  clearTMTVMeasurements,
+  getAnnotationStudyUID,
+  getViewportStudyUID,
+} from './utils/comparisonMeasurements';
 import tmtvLesionService from './services/TMTVLesionService';
 import tmtvLesionHighlightService from './services/TMTVLesionHighlightService';
 import tmtvSegmentMaskStorageService from './services/TMTVSegmentMaskStorageService';
@@ -26,6 +30,13 @@ import tmtvAutoSegmentationService from './services/TMTVAutoSegmentationService'
 import { createTMTVReportSections } from './services/TMTVReportService';
 import { getDimensions } from './services/TMTVStatisticsService';
 import { toolGroupIds } from '../../../modes/tmtv/src/initToolGroups';
+import tmtvComparisonService, { VIEWPORT_IDS_BY_SIDE } from './services/TMTVComparisonService';
+import tmtvSessionService from './services/TMTVSessionService';
+import {
+  findModalityDisplaySetForSide,
+  getExistingSessionSegmentationIds,
+} from './utils/tmtvSegmentationScope';
+import addSegmentationRepresentationPreservingCamera from './utils/addSegmentationRepresentationPreservingCamera';
 
 const { SegmentationRepresentations } = Enums;
 const { formatPN } = utils;
@@ -55,6 +66,11 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
 
   const { getEnabledElement } = utilityModule.exports;
 
+  /** 2026-09-02 功能说明：统一使用 OHIF 支持的通知接口显示 TMTV 命令错误。 */
+  function showTMTVError(message: string, title = 'TMTV') {
+    uiNotificationService.show({ title, message, type: 'error' });
+  }
+
   // [2026-08-06] 初始化 CrosshairDisplayService，注入 servicesManager
   crosshairDisplayService.init(servicesManager);
   // [2026-08-10 修复同步器干扰] 注入 servicesManager 到 TMTVCrosshairService
@@ -71,12 +87,26 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
   }
 
   function _getAnnotationsSelectedByToolNames(toolNames) {
-    return toolNames.reduce((allAnnotationUIDs, toolName) => {
+    const selectedAnnotationUIDs = toolNames.reduce((allAnnotationUIDs, toolName) => {
       const annotationUIDs =
         csTools.annotation.selection.getAnnotationsSelectedByToolName(toolName);
 
       return allAnnotationUIDs.concat(annotationUIDs);
     }, []);
+
+    if (!tmtvComparisonService.isComparisonProtocolActive(servicesManager)) {
+      return selectedAnnotationUIDs;
+    }
+
+    // 2026-09-02 功能说明：对比模式只使用当前检查的 ROI，避免共享标注状态把另一侧范围带入阈值计算。
+    const activeViewportId = viewportGridService.getActiveViewportId?.();
+    const activeStudyUID = getViewportStudyUID(servicesManager, activeViewportId);
+    if (!activeStudyUID) return [];
+
+    return selectedAnnotationUIDs.filter(annotationUID => {
+      const annotation = csTools.annotation.state.getAnnotation(annotationUID);
+      return getAnnotationStudyUID(annotation, servicesManager) === activeStudyUID;
+    });
   }
 
   // ============================================================================
@@ -144,13 +174,18 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
   // ============================================================================
   function _getPTVolumeId(viewport) {
     const { displaySetMatchDetails } = hangingProtocolService.getMatchDetails();
-    const ptDisplaySetMatch = displaySetMatchDetails.get('ptDisplaySet');
-    if (!ptDisplaySetMatch) return null;
+    const ptDisplaySet = findModalityDisplaySetForSide(
+      displaySetMatchDetails,
+      displaySetService,
+      'PT',
+      tmtvSessionService.getActiveSide()
+    );
+    if (!ptDisplaySet) return null;
 
     if (!(viewport instanceof BaseVolumeViewport)) return null;
 
     const volumeIds = viewport.getAllVolumeIds();
-    return volumeIds.find(id => id.includes(ptDisplaySetMatch.displaySetInstanceUID));
+    return volumeIds.find(id => id.includes(ptDisplaySet.displaySetInstanceUID));
   }
 
   function getReferenceVolumeForSegmentationVolume(segmentationVolumeId) {
@@ -175,9 +210,35 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       ? segmentationService.getActiveSegmentation?.(activeViewportId)
       : null;
 
+    const activeSession = tmtvSessionService.getActiveSession();
+    const comparisonActive = tmtvComparisonService.isComparisonProtocolActive(servicesManager);
+    const scopedSegmentationIds = getExistingSessionSegmentationIds(
+      activeSession,
+      segmentationService,
+      id => tmtvLesionHighlightService.isHighlightSegmentationId(id)
+    );
+    const isAllowed = segmentationId =>
+      !!segmentationId &&
+      !tmtvLesionHighlightService.isHighlightSegmentationId(segmentationId) &&
+      (!comparisonActive || scopedSegmentationIds.includes(segmentationId));
+
+    // 2026-09-02 功能说明：视口 representation 已先于面板就绪时，从当前侧视口补登记其真实分割。
+    const registerCurrentViewportSegmentation = segmentationId => {
+      if (!comparisonActive || !segmentationId || scopedSegmentationIds.length) return false;
+      const viewportSide = tmtvComparisonService.getSideForViewportId(activeViewportId);
+      if (viewportSide !== activeSession?.side) return false;
+      tmtvSessionService.setSegmentationIds(viewportSide, [segmentationId], segmentationId);
+      return true;
+    };
+
+    if (activeSegmentation?.segmentationId && isAllowed(activeSegmentation.segmentationId)) {
+      return activeSegmentation.segmentationId;
+    }
+
     if (
       activeSegmentation?.segmentationId &&
-      !tmtvLesionHighlightService.isHighlightSegmentationId(activeSegmentation.segmentationId)
+      !tmtvLesionHighlightService.isHighlightSegmentationId(activeSegmentation.segmentationId) &&
+      registerCurrentViewportSegmentation(activeSegmentation.segmentationId)
     ) {
       return activeSegmentation.segmentationId;
     }
@@ -185,12 +246,20 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     if (activeViewportId) {
       const activeViewportRepresentations =
         segmentationService.getSegmentationRepresentations?.(activeViewportId) ?? [];
-      const activeViewportPrimary = activeViewportRepresentations.find(
-        representation =>
-          !tmtvLesionHighlightService.isHighlightSegmentationId(
-            representation.segmentationId ?? representation.segmentation?.segmentationId
-          )
+      const getRepresentationId = representation =>
+        representation.segmentationId ?? representation.segmentation?.segmentationId;
+      let activeViewportPrimary = activeViewportRepresentations.find(representation =>
+        isAllowed(getRepresentationId(representation))
       );
+      if (!activeViewportPrimary && comparisonActive && !scopedSegmentationIds.length) {
+        activeViewportPrimary = activeViewportRepresentations.find(representation => {
+          const segmentationId = getRepresentationId(representation);
+          return (
+            !tmtvLesionHighlightService.isHighlightSegmentationId(segmentationId) &&
+            registerCurrentViewportSegmentation(segmentationId)
+          );
+        });
+      }
       const activeViewportPrimaryId =
         activeViewportPrimary?.segmentationId ??
         activeViewportPrimary?.segmentation?.segmentationId;
@@ -199,6 +268,8 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         return activeViewportPrimaryId;
       }
     }
+
+    if (comparisonActive) return scopedSegmentationIds[0];
 
     return segmentationService
       .getSegmentations()
@@ -211,30 +282,16 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
   const actions = {
     // 2026-08-31 功能说明：对比模式的清除操作只作用于当前检查。
     clearTMTVMeasurements: () => clearTMTVMeasurements(servicesManager, commandsManager),
-    getMatchingPTDisplaySet: ({ viewportMatchDetails }) => {
+    getMatchingPTDisplaySet: ({
+      viewportMatchDetails,
+      side = tmtvSessionService.getActiveSide(),
+    }) => {
       // Todo: this is assuming that the hanging protocol has successfully matched
       // the correct PT. For future, we should have a way to filter out the PTs
       // that are in the viewer layout (but then we have the problem of the attenuation
       // corrected PT vs the non-attenuation correct PT)
 
-      let ptDisplaySet = null;
-      for (const [, viewportDetails] of viewportMatchDetails) {
-        const { displaySetsInfo } = viewportDetails;
-        const displaySets = displaySetsInfo.map(({ displaySetInstanceUID }) =>
-          displaySetService.getDisplaySetByUID(displaySetInstanceUID)
-        );
-
-        if (!displaySets || displaySets.length === 0) {
-          continue;
-        }
-
-        ptDisplaySet = displaySets.find(displaySet => displaySet.Modality === 'PT');
-        if (ptDisplaySet) {
-          break;
-        }
-      }
-
-      return ptDisplaySet;
+      return findModalityDisplaySetForSide(viewportMatchDetails, displaySetService, 'PT', side);
     },
     getPTMetadata: ({ ptDisplaySet }) => {
       const dataSource = extensionManager.getDataSources()[0];
@@ -268,17 +325,36 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     getTMTVSegmentMaskReferenceContext: ({ segmentIndex = 1 } = {}) => {
       // [2026-08-27 功能] 本地存储管理 UI：从当前 PT displaySet/viewport 解析本地 mask 查询上下文，刷新初期 viewport volume 未就绪时使用 imageId cache 兜底
       const { viewportMatchDetails } = hangingProtocolService.getMatchDetails();
+      const activeSide = tmtvSessionService.getActiveSide();
       const ptDisplaySet = actions.getMatchingPTDisplaySet({
         viewportMatchDetails,
+        side: activeSide,
       });
 
       if (!ptDisplaySet) {
         return null;
       }
 
-      let withPTViewportId = null;
+      let withPTViewportId =
+        activeSide === 'single'
+          ? null
+          : VIEWPORT_IDS_BY_SIDE[activeSide]?.find(viewportId => viewportId.includes('PTAxial'));
+
+      const preferredPTMatch = withPTViewportId
+        ? viewportMatchDetails
+            .get(withPTViewportId)
+            ?.displaySetsInfo?.some(
+              ({ displaySetInstanceUID }) =>
+                displaySetInstanceUID === ptDisplaySet.displaySetInstanceUID
+            )
+        : false;
+      if (!preferredPTMatch) withPTViewportId = null;
 
       for (const [viewportId, { displaySetsInfo }] of viewportMatchDetails.entries()) {
+        if (withPTViewportId) break;
+        if (activeSide !== 'single' && !String(viewportId).toLowerCase().startsWith(activeSide)) {
+          continue;
+        }
         const isPT = displaySetsInfo.some(
           ({ displaySetInstanceUID }) =>
             displaySetInstanceUID === ptDisplaySet.displaySetInstanceUID
@@ -373,23 +449,41 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       label = undefined,
       restoreOnlyIfPersistedMask = false,
     } = {}) => {
-      // Create a segmentation of the same resolution as the source data
-      // using volumeLoader.createAndCacheDerivedVolume.
+      // 2026-09-02 功能说明：按当前 Session 的 PET 创建 labelmap，对比模式不回退到另一检查。
 
       const { viewportMatchDetails } = hangingProtocolService.getMatchDetails();
+      const activeSide = tmtvSessionService.getActiveSide();
 
       const ptDisplaySet = actions.getMatchingPTDisplaySet({
         viewportMatchDetails,
+        side: activeSide,
       });
 
       if (!ptDisplaySet) {
-        uiNotificationService.error('No matching PT display set found');
+        showTMTVError('No matching PT display set found');
         return;
       }
 
-      let withPTViewportId = null;
+      let withPTViewportId =
+        activeSide === 'single'
+          ? null
+          : VIEWPORT_IDS_BY_SIDE[activeSide]?.find(viewportId => viewportId.includes('PTAxial'));
+
+      const preferredPTMatch = withPTViewportId
+        ? viewportMatchDetails
+            .get(withPTViewportId)
+            ?.displaySetsInfo?.some(
+              ({ displaySetInstanceUID }) =>
+                displaySetInstanceUID === ptDisplaySet.displaySetInstanceUID
+            )
+        : false;
+      if (!preferredPTMatch) withPTViewportId = null;
 
       for (const [viewportId, { displaySetsInfo }] of viewportMatchDetails.entries()) {
+        if (withPTViewportId) break;
+        if (activeSide !== 'single' && !String(viewportId).toLowerCase().startsWith(activeSide)) {
+          continue;
+        }
         const isPT = displaySetsInfo.some(
           ({ displaySetInstanceUID }) =>
             displaySetInstanceUID === ptDisplaySet.displaySetInstanceUID
@@ -402,7 +496,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       }
 
       if (!withPTViewportId) {
-        uiNotificationService.error('No viewport showing matching PT display set found');
+        showTMTVError('No viewport showing matching PT display set found');
         return;
       }
 
@@ -436,32 +530,83 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       });
 
       // [2026-08-26 功能] IndexedDB 稀疏保存/恢复 Segment 1 mask：等待空 labelmap representation 建立后再返回，保证后续可立即写回恢复 mask
-      await segmentationService.addSegmentationRepresentation(withPTViewportId, {
-        segmentationId,
-      });
+      if (activeSide === 'single') {
+        await segmentationService.addSegmentationRepresentation(withPTViewportId, {
+          segmentationId,
+        });
+      } else {
+        await addSegmentationRepresentationPreservingCamera(
+          servicesManager,
+          withPTViewportId,
+          segmentationId
+        );
+      }
+
+      if (activeSide !== 'single') {
+        const fusionViewportId = VIEWPORT_IDS_BY_SIDE[activeSide]?.find(viewportId =>
+          viewportId.includes('Fusion')
+        );
+        if (fusionViewportId && fusionViewportId !== withPTViewportId) {
+          try {
+            await addSegmentationRepresentationPreservingCamera(
+              servicesManager,
+              fusionViewportId,
+              segmentationId
+            );
+          } catch (error) {
+            console.warn('createNewLabelmapFromPT: add fusion representation failed', error);
+          }
+        }
+      }
+
+      const currentSession = tmtvSessionService.getSession(activeSide);
+      tmtvSessionService.setSegmentationIds(
+        activeSide,
+        [...(currentSession?.segmentationIds || []), segmentationId],
+        segmentationId
+      );
 
       return segmentationId;
     },
     thresholdSegmentationByRectangleROITool: ({ segmentationId, config, segmentIndex }) => {
       const segmentation = csTools.segmentation.state.getSegmentation(segmentationId);
 
+      if (!segmentation) {
+        showTMTVError('No segmentation found for current examination');
+        return;
+      }
+
       const { representationData } = segmentation;
-      const { displaySetMatchDetails: matchDetails } = hangingProtocolService.getMatchDetails();
-      const ctDisplaySetMatch = matchDetails.get('ctDisplaySet');
-      const ptDisplaySetMatch = matchDetails.get('ptDisplaySet');
-
-      const ctDisplaySet = displaySetService.getDisplaySetByUID(
-        ctDisplaySetMatch.displaySetInstanceUID
+      const { viewportMatchDetails } = hangingProtocolService.getMatchDetails();
+      const activeSide = tmtvSessionService.getActiveSide();
+      const ctDisplaySet = findModalityDisplaySetForSide(
+        viewportMatchDetails,
+        displaySetService,
+        'CT',
+        activeSide
       );
-      const ptDisplaySet = displaySetService.getDisplaySetByUID(
-        ptDisplaySetMatch.displaySetInstanceUID
+      const ptDisplaySet = findModalityDisplaySetForSide(
+        viewportMatchDetails,
+        displaySetService,
+        'PT',
+        activeSide
       );
 
-      const { volumeId: segVolumeId } = representationData[
-        SegmentationRepresentations.Labelmap
-      ] as csTools.Types.LabelmapToolOperationDataVolume;
+      if (!ctDisplaySet || !ptDisplaySet) {
+        showTMTVError('No matching CT/PT display set found for current examination');
+        return;
+      }
 
-      const labelmapVolume = cs.cache.getVolume(segVolumeId);
+      const labelmapData = representationData?.[SegmentationRepresentations.Labelmap] as
+        | csTools.Types.LabelmapToolOperationDataVolume
+        | undefined;
+      const segVolumeId = labelmapData?.volumeId;
+
+      const labelmapVolume = segVolumeId ? cs.cache.getVolume(segVolumeId) : null;
+      if (!labelmapVolume) {
+        showTMTVError('No labelmap volume found for current segmentation');
+        return;
+      }
 
       const annotationUIDs = _getAnnotationsSelectedByToolNames(ROI_THRESHOLD_MANUAL_TOOL_IDS);
 
@@ -485,7 +630,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       const ptVolumeInfo = cs.cache.getVolumeContainingImageId(ptImageIds[0]);
 
       if (!ptVolumeInfo) {
-        uiNotificationService.error('No PT volume found');
+        showTMTVError('No PT volume found');
         return;
       }
 
@@ -493,7 +638,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       const ctVolumeInfo = cs.cache.getVolumeContainingImageId(ctImageIds[0]);
 
       if (!ctVolumeInfo) {
-        uiNotificationService.error('No CT volume found');
+        showTMTVError('No CT volume found');
         return;
       }
 
@@ -518,22 +663,37 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       segmentIndex = 1,
     } = {}) => {
       // [2026-08-26 功能] 全身 SUV 阈值自动分割：统一写入 Segment 1，后续 Lesion candidate/统计/报告复用已有刷新链路
+      const operationSide = tmtvSessionService.getActiveSide();
       let targetSegmentationId = segmentationId;
 
       if (!targetSegmentationId) {
-        const tmtvSegmentations = segmentationService
-          .getSegmentations()
-          .filter(
-            segmentation =>
-              !tmtvLesionHighlightService.isHighlightSegmentationId(segmentation.segmentationId)
-          );
-        targetSegmentationId = tmtvSegmentations[0]?.segmentationId;
+        const activeSession = tmtvSessionService.getActiveSession();
+        const scopedSegmentationIds = getExistingSessionSegmentationIds(
+          activeSession,
+          segmentationService,
+          id => tmtvLesionHighlightService.isHighlightSegmentationId(id)
+        );
+        targetSegmentationId = scopedSegmentationIds[0];
+
+        if (!targetSegmentationId && activeSession?.side === 'single') {
+          targetSegmentationId = segmentationService
+            .getSegmentations()
+            .find(
+              segmentation =>
+                !tmtvLesionHighlightService.isHighlightSegmentationId(segmentation.segmentationId)
+            )?.segmentationId;
+        }
       }
 
       if (!targetSegmentationId) {
         targetSegmentationId = await actions.createNewLabelmapFromPT({
           label: 'TMTV Segmentation',
         });
+      }
+
+      if (tmtvSessionService.getActiveSide() !== operationSide) {
+        // 2026-09-02 功能说明：创建 labelmap 期间发生切侧时终止旧请求，避免写入新侧 Session。
+        return null;
       }
 
       const segmentation = targetSegmentationId
@@ -569,6 +729,12 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         });
 
         segmentationService.setActiveSegment?.(targetSegmentationId, segmentIndex);
+        const currentSession = tmtvSessionService.getSession(operationSide);
+        tmtvSessionService.setSegmentationIds(
+          operationSide,
+          [...(currentSession?.segmentationIds || []), targetSegmentationId],
+          targetSegmentationId
+        );
         uiNotificationService.show({
           title: 'TMTV Auto Segmentation',
           message: `Generated ${result.keptComponentCount} candidates, filtered ${result.filteredComponentCount} small components.`,
@@ -594,13 +760,20 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
         return null;
       }
 
-      const segmentationIds = segmentationService
-        .getSegmentations()
-        .map(segmentation => segmentation?.segmentationId)
-        .filter(
-          segmentationId =>
-            segmentationId && !tmtvLesionHighlightService.isHighlightSegmentationId(segmentationId)
-        );
+      const activeSide = tmtvSessionService.getActiveSide();
+      const activeSession = tmtvSessionService.getSession(activeSide);
+      const segmentationIds = tmtvComparisonService.isComparisonProtocolActive(servicesManager)
+        ? getExistingSessionSegmentationIds(activeSession, segmentationService, id =>
+            tmtvLesionHighlightService.isHighlightSegmentationId(id)
+          )
+        : segmentationService
+            .getSegmentations()
+            .map(segmentation => segmentation?.segmentationId)
+            .filter(
+              segmentationId =>
+                segmentationId &&
+                !tmtvLesionHighlightService.isHighlightSegmentationId(segmentationId)
+            );
       const viewportIds =
         cornerstoneViewportService?.getViewportIds?.() ??
         viewportGridService?.getViewportIds?.() ??
@@ -629,7 +802,21 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       return primarySegmentationId;
     },
     calculateTMTV: async ({ segmentations }) => {
-      const segmentationIds = segmentations.map(segmentation => segmentation.segmentationId);
+      // 2026-09-02 功能说明：只计算 Cornerstone 状态中已完整注册的 labelmap，兼容新建分割事件先于面板渲染。
+      const segmentationIds = (segmentations || [])
+        .map(segmentation => segmentation?.segmentationId)
+        .filter(segmentationId => {
+          if (!segmentationId) return false;
+          const cornerstoneSegmentation =
+            csTools.segmentation.state.getSegmentation(segmentationId);
+          return !!cornerstoneSegmentation?.representationData?.[
+            SegmentationRepresentations.Labelmap
+          ];
+        });
+
+      if (!segmentationIds.length) {
+        return null;
+      }
 
       const stats = await csTools.utilities.segmentation.computeMetabolicStats({
         segmentationIds,

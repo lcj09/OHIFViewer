@@ -86,6 +86,30 @@ describe('fitComparisonViewports', () => {
     expect(ct.resetCamera).toHaveBeenCalledTimes(2);
   });
 
+  it('does not refit when only a labelmap overlay actor is added', () => {
+    const pet = makeViewport('baselinePTAxial', 100);
+    const actors = [{ uid: 'pet-volume', referencedId: 'pet-volume' }];
+    pet.getActors = () => actors;
+    const servicesManager = {
+      services: {
+        cornerstoneViewportService: {
+          getCornerstoneViewport: id => (id === pet.id ? pet : undefined),
+        },
+      },
+    };
+    const fitted = new WeakMap();
+
+    expect(fitComparisonViewports(servicesManager, fitted)).toBe(true);
+    pet.resetCamera.mockClear();
+    actors.push({
+      uid: 'baseline-segmentation-Labelmap',
+      referencedId: 'baseline-segmentation-volume',
+    });
+
+    expect(fitComparisonViewports(servicesManager, fitted)).toBe(false);
+    expect(pet.resetCamera).not.toHaveBeenCalled();
+  });
+
   it('restores current and initial scales after maximize/restore without resetting position', () => {
     const ct = makeViewport('baselineCTAxial', 160);
     const pet = makeViewport('baselinePTAxial', 300);

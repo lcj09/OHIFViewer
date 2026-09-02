@@ -7,6 +7,8 @@ import { Button } from '@ohif/ui-next';
 import { useTranslation } from 'react-i18next';
 import tmtvLesionService from '../../services/TMTVLesionService';
 import tmtvLesionHighlightService from '../../services/TMTVLesionHighlightService';
+import tmtvComparisonService from '../../services/TMTVComparisonService';
+import tmtvSessionService, { type TMTVSession } from '../../services/TMTVSessionService';
 
 const SEGMENT_INDEX = 1;
 const LESION_FILTERS = ['all', 'confirmed', 'candidate', 'rejected'];
@@ -142,18 +144,40 @@ export default function PanelRoiThresholdSegmentation() {
     servicesManager.services;
   const { segmentationsWithRepresentations: segmentationsInfo } =
     useActiveViewportSegmentationRepresentations();
+  const [activeSession, setActiveSession] = useState<TMTVSession | null>(() =>
+    tmtvSessionService.getActiveSession()
+  );
+  const sessionSide = activeSession?.side || tmtvSessionService.getActiveSide();
 
-  // [2026-08-25 功能] 右侧统计只处理真实 TMTV Segment 1，排除“选中 lesion 高亮层”
-  const tmtvSegmentationsInfo =
+  // 2026-09-02 功能说明：对比面板只读取当前 Session 的真实分割，切换检查不复用另一侧状态。
+  const discoveredTMTVSegmentationsInfo =
     segmentationsInfo?.filter(
       info =>
         !tmtvLesionHighlightService.isHighlightSegmentationId(info.segmentation.segmentationId)
     ) || [];
-  const segmentationIds = tmtvSegmentationsInfo.map(info => info.segmentation.segmentationId);
-  const segmentations = tmtvSegmentationsInfo.map(info => info.segmentation);
+  const discoveredSegmentationIds = discoveredTMTVSegmentationsInfo.map(
+    info => info.segmentation.segmentationId
+  );
+  const discoveredSegmentationGroupId = [...discoveredSegmentationIds].sort().join(',');
+  const activeViewportSide = tmtvComparisonService.getSideForViewportId(
+    viewportGridService.getActiveViewportId?.()
+  );
+  const discoveredSegmentationIdsForSession =
+    sessionSide === 'single' || activeViewportSide === sessionSide ? discoveredSegmentationIds : [];
+  const sessionSegmentationIds = (activeSession?.segmentationIds || []).filter(
+    segmentationId =>
+      !tmtvLesionHighlightService.isHighlightSegmentationId(segmentationId) &&
+      !!segmentationService.getSegmentation?.(segmentationId)
+  );
+  const segmentationIds = sessionSegmentationIds.length
+    ? sessionSegmentationIds
+    : discoveredSegmentationIdsForSession;
+  const segmentations = segmentationIds
+    .map(segmentationId => segmentationService.getSegmentation(segmentationId))
+    .filter(Boolean);
   const segmentationGroupId = useMemo(
-    () => [...segmentationIds].sort().join(','),
-    [segmentationsInfo]
+    () => `${sessionSide}:${[...segmentationIds].sort().join(',')}`,
+    [sessionSide, discoveredSegmentationGroupId, activeSession?.revision]
   );
   const [lesionState, setLesionState] = useState(() => tmtvLesionService.getState(segmentationIds));
   const [lesionFilter, setLesionFilter] = useState('all');
@@ -177,11 +201,53 @@ export default function PanelRoiThresholdSegmentation() {
   const localMaskRequestIdRef = useRef(0);
   const lesionRefreshRequestIdRef = useRef(0);
   const isRestoringPersistedMaskRef = useRef(false);
+  const previousSessionSideRef = useRef(sessionSide);
+
+  useEffect(() => {
+    const subscription = tmtvSessionService.subscribe(session => setActiveSession(session));
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (previousSessionSideRef.current === sessionSide) return;
+    // 2026-09-02 功能说明：切换检查时取消旧侧异步刷新并重置本地 mask 检测状态。
+    previousSessionSideRef.current = sessionSide;
+    lesionRefreshRequestIdRef.current += 1;
+    localMaskRequestIdRef.current += 1;
+    hasAttemptedInitialMaskRestoreRef.current = false;
+    isRestoringPersistedMaskRef.current = false;
+    setLocalMaskInfo(null);
+    setHasPersistedMask(false);
+    setLesionState(tmtvLesionService.getState(segmentationIds));
+  }, [segmentationGroupId, sessionSide]);
+
+  useEffect(() => {
+    if (!discoveredSegmentationIdsForSession.length) return;
+    const activeViewportId = viewportGridService.getActiveViewportId?.();
+    const activeViewportSide = tmtvComparisonService.getSideForViewportId(activeViewportId);
+    if (sessionSide !== 'single' && activeViewportSide !== sessionSide) return;
+
+    const currentSession = tmtvSessionService.getSession(sessionSide);
+    const existingSessionIds = (currentSession?.segmentationIds || []).filter(segmentationId =>
+      segmentationService.getSegmentation?.(segmentationId)
+    );
+    const nextIds = [...new Set([...existingSessionIds, ...discoveredSegmentationIdsForSession])];
+    tmtvSessionService.setSegmentationIds(
+      sessionSide,
+      nextIds,
+      currentSession?.activeSegmentationId || nextIds[0]
+    );
+  }, [discoveredSegmentationGroupId, segmentationService, sessionSide, viewportGridService]);
 
   const getCurrentTMTVSegmentations = useCallback(
     (preferredSegmentationId?: string) => {
       // [2026-08-27 功能] 本地 mask 恢复：优先使用刚创建的 segmentation，避免旧 segmentationIds 闭包导致恢复后 lesion 列表为空
-      if (preferredSegmentationId) {
+      const liveSessionSegmentationIds =
+        tmtvSessionService.getSession(sessionSide)?.segmentationIds || [];
+      if (
+        preferredSegmentationId &&
+        (sessionSide === 'single' || liveSessionSegmentationIds.includes(preferredSegmentationId))
+      ) {
         const preferredSegmentation = segmentationService.getSegmentation(preferredSegmentationId);
 
         if (
@@ -192,33 +258,50 @@ export default function PanelRoiThresholdSegmentation() {
         }
       }
 
-      return segmentationIds.length
-        ? segmentationIds.map(id => segmentationService.getSegmentation(id)).filter(Boolean)
-        : segmentationService
+      if (segmentationIds.length) {
+        return segmentationIds.map(id => segmentationService.getSegmentation(id)).filter(Boolean);
+      }
+
+      return sessionSide === 'single'
+        ? segmentationService
             .getSegmentations()
             .filter(
               segmentation =>
                 !tmtvLesionHighlightService.isHighlightSegmentationId(segmentation.segmentationId)
-            );
+            )
+        : [];
     },
-    [segmentationGroupId, segmentationService]
+    [segmentationGroupId, segmentationService, sessionSide]
   );
 
   const refreshTMTVAndLesions = useCallback(
     async (segmentationId?: string, options: { restorePersistedMask?: boolean } = {}) => {
       // [2026-08-24 功能] Segment 1 更新后同步刷新整体 TMTV/TLG 和 lesion 级统计
+      const requestSide = tmtvSessionService.getActiveSide();
       const requestId = lesionRefreshRequestIdRef.current + 1;
       lesionRefreshRequestIdRef.current = requestId;
       const currentSegmentations = getCurrentTMTVSegmentations(segmentationId);
 
-      await handleROIThresholding({
+      if (!currentSegmentations.length) {
+        // 2026-09-02 功能说明：新建分割的事件早于 Session/面板刷新时不启动空统计任务。
+        return;
+      }
+
+      const metabolicStats = await handleROIThresholding({
         segmentationId,
         commandsManager,
         segmentationService,
         segmentations: currentSegmentations,
       });
 
-      if (lesionRefreshRequestIdRef.current !== requestId) {
+      if (metabolicStats == null) {
+        return;
+      }
+
+      if (
+        lesionRefreshRequestIdRef.current !== requestId ||
+        tmtvSessionService.getActiveSide() !== requestSide
+      ) {
         return;
       }
 
@@ -230,11 +313,20 @@ export default function PanelRoiThresholdSegmentation() {
         }
       );
 
-      if (lesionRefreshRequestIdRef.current !== requestId) {
+      if (
+        lesionRefreshRequestIdRef.current !== requestId ||
+        tmtvSessionService.getActiveSide() !== requestSide
+      ) {
         return;
       }
 
       setLesionState(nextLesionState);
+      tmtvSessionService.setSegmentationIds(
+        requestSide,
+        nextLesionState.segmentationIds,
+        segmentationId || nextLesionState.segmentationIds[0]
+      );
+      tmtvSessionService.setTotals(requestSide, nextLesionState.totals);
 
       // [2026-08-25 功能] Brush/Eraser 修改 Segment 1 后同步刷新 confirmed totals，避免分割已清空但 TMTV/TLG 仍显示旧值
       segmentationService.setSegmentationGroupStats(nextLesionState.segmentationIds, {
@@ -307,6 +399,13 @@ export default function PanelRoiThresholdSegmentation() {
 
       const nextLesionState = tmtvLesionService.getState(segmentationIds);
       setLesionState(nextLesionState);
+      const currentSession = tmtvSessionService.getSession(sessionSide);
+      tmtvSessionService.setSegmentationIds(
+        sessionSide,
+        nextLesionState.segmentationIds,
+        currentSession?.activeSegmentationId || nextLesionState.segmentationIds[0]
+      );
+      tmtvSessionService.setTotals(sessionSide, nextLesionState.totals);
       setMergeSelectionIds(previousSelectionIds =>
         previousSelectionIds.filter(lesionId =>
           nextLesionState.lesions.some(lesion => lesion.id === lesionId)
@@ -320,7 +419,7 @@ export default function PanelRoiThresholdSegmentation() {
       subscription.unsubscribe();
       tmtvLesionHighlightService.removeHighlight(segmentationIds);
     };
-  }, [segmentationGroupId]);
+  }, [segmentationGroupId, sessionSide]);
 
   useEffect(() => {
     const initialRun = async () => {

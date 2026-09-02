@@ -8,9 +8,25 @@ export const handleROIThresholding = async ({
   segmentationId: string;
   segmentations?: any[];
 }) => {
-  // [2026-08-25 功能] 支持调用方传入真实 TMTV segmentations，避免 lesion 高亮层混入 TMTV/TLG 统计
-  const currentSegmentations = segmentations ?? segmentationService.getSegmentations();
+  // 2026-09-02 功能说明：统计前过滤空对象和未完成 labelmap 注册的分割，避免底层读取空 representationData。
+  const currentSegmentations = (segmentations ?? segmentationService.getSegmentations()).filter(
+    segmentation =>
+      !!segmentation?.segmentationId &&
+      !!(
+        segmentation.representationData?.Labelmap ||
+        Object.values(segmentation.representationData || {}).length
+      )
+  );
+
+  if (!currentSegmentations.length) {
+    return null;
+  }
+
   const tmtv = await commandsManager.run('calculateTMTV', { segmentations: currentSegmentations });
+
+  if (tmtv == null) {
+    return null;
+  }
 
   // add the tmtv to all the segment cachedStats, although it is a global
   // value but we don't have any other way to display it for now
@@ -23,4 +39,6 @@ export const handleROIThresholding = async ({
 
     segmentationService.addOrUpdateSegmentation(segmentation);
   });
+
+  return tmtv;
 };

@@ -4,6 +4,8 @@ const validScale = value => Number.isFinite(value) && value > 0;
 
 const getActorId = actor => actor?.referencedId || actor?.uid;
 
+const isLabelmapActor = actor => /(?:^|-)Labelmap(?:-|$)/i.test(String(actor?.uid || ''));
+
 const scalesDiffer = (first, second) =>
   !validScale(first) ||
   !validScale(second) ||
@@ -87,7 +89,11 @@ export function reconcileComparisonViewportScales(
 
 /** 2026-09-01 功能说明：以 Volume、视口尺寸生成一次性 fit 标识，布局变化后允许重新校正。 */
 export function getComparisonFitSignature(viewport: any): string | null {
-  const actorIds = (viewport?.getActors?.() || []).map(getActorId).filter(Boolean);
+  // 2026-09-02 功能说明：分割 overlay 不代表原始影像或布局变化，不能触发 resetCamera。
+  const actorIds = (viewport?.getActors?.() || [])
+    .filter(actor => !isLabelmapActor(actor))
+    .map(getActorId)
+    .filter(Boolean);
   const isFusion = viewport?.id?.includes('Fusion');
   if (!actorIds.length || (isFusion && actorIds.length < 2) || !viewport?.resetCamera) {
     return null;
@@ -166,10 +172,7 @@ export default function fitComparisonViewports(
         const viewport = getViewport(`${side}${suffix}`);
         if (!viewport || !getComparisonFitSignature(viewport)) continue;
         const scale = viewport.getCamera?.()?.parallelScale;
-        if (
-          validScale(scale) &&
-          Math.abs(scale - ctScale) <= Number.EPSILON * Math.max(1, ctScale)
-        )
+        if (validScale(scale) && Math.abs(scale - ctScale) <= Number.EPSILON * Math.max(1, ctScale))
           continue;
         try {
           viewport.setCamera({ parallelScale: ctScale }, true);

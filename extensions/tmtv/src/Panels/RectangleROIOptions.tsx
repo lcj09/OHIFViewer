@@ -1,4 +1,4 @@
-import React, { useCallback, useReducer } from 'react';
+import React, { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
 import { Button } from '@ohif/ui-next';
 import ROIThresholdConfiguration, {
   ROI_STAT,
@@ -8,6 +8,7 @@ import { useSystem } from '@ohif/core';
 import { useSegmentations } from '@ohif/extension-cornerstone';
 import { useTranslation } from 'react-i18next';
 import tmtvLesionHighlightService from '../services/TMTVLesionHighlightService';
+import tmtvSessionService, { type TMTVSession } from '../services/TMTVSessionService';
 
 const LOWER_CT_THRESHOLD_DEFAULT = -1024;
 const UPPER_CT_THRESHOLD_DEFAULT = 1024;
@@ -47,12 +48,29 @@ function reducer(state, action) {
 function RectangleROIOptions() {
   const { commandsManager } = useSystem();
   const segmentations = useSegmentations();
-  // [2026-08-26 功能] TMTV 分割工具只使用真实 Segment 1，避免高亮层成为 Brush/Eraser/阈值工具的编辑目标
-  const activeSegmentation = segmentations.find(
-    segmentation =>
-      !tmtvLesionHighlightService.isHighlightSegmentationId(segmentation.segmentationId)
+  const [activeSession, setActiveSession] = useState<TMTVSession | null>(() =>
+    tmtvSessionService.getActiveSession()
   );
+  // 2026-09-02 功能说明：矩形 ROI 阈值只编辑当前检查 Session 的真实分割。
+  const activeSegmentation = useMemo(() => {
+    const realSegmentations = segmentations.filter(
+      segmentation =>
+        !tmtvLesionHighlightService.isHighlightSegmentationId(segmentation.segmentationId)
+    );
+
+    if (activeSession?.side !== 'baseline' && activeSession?.side !== 'followup') {
+      return realSegmentations[0];
+    }
+
+    const scopedIds = new Set(activeSession.segmentationIds);
+    return realSegmentations.find(segmentation => scopedIds.has(segmentation.segmentationId));
+  }, [activeSession, segmentations]);
   const { t } = useTranslation('ROIThresholdConfiguration');
+
+  useEffect(() => {
+    const subscription = tmtvSessionService.subscribe(setActiveSession);
+    return () => subscription.unsubscribe();
+  }, []);
 
   const runCommand = useCallback(
     (commandName, commandOptions = {}) => {
