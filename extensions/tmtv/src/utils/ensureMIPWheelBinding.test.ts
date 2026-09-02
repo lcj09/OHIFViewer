@@ -19,6 +19,11 @@ describe('MIP wheel bindings', () => {
   it('removes only scroll wheel bindings and restores rotation without changing primary tools', () => {
     const wheelBinding = { mouseButton: enums.MouseBindings.Wheel };
     const group = {
+      toolOptions: {
+        StackScroll: { mode: 'Active', bindings: [wheelBinding, { mouseButton: 1 }] },
+        Zoom: { mode: 'Active', bindings: [wheelBinding] },
+        VolumeRotateMouseWheel: { mode: 'Passive', bindings: [] },
+      },
       getToolOptions: name =>
         name === toolNames.StackScroll
           ? { mode: 'Active', bindings: [wheelBinding, { mouseButton: 1 }] }
@@ -30,6 +35,9 @@ describe('MIP wheel bindings', () => {
     expect(group.setToolPassive).toHaveBeenCalledWith('StackScroll', {
       removeAllBindings: [wheelBinding],
     });
+    expect(group.setToolPassive).toHaveBeenCalledWith('Zoom', {
+      removeAllBindings: [wheelBinding],
+    });
     expect(group.setToolActive).toHaveBeenCalledTimes(1);
     expect(group.setToolActive).toHaveBeenCalledWith('VolumeRotateMouseWheel', {
       bindings: [wheelBinding],
@@ -38,6 +46,13 @@ describe('MIP wheel bindings', () => {
 
   it('leaves an already correct tool group unchanged across repeated viewport mounts', () => {
     const group = {
+      toolOptions: {
+        StackScroll: { mode: 'Passive', bindings: [] },
+        VolumeRotateMouseWheel: {
+          mode: 'Active',
+          bindings: [{ mouseButton: enums.MouseBindings.Wheel }],
+        },
+      },
       getToolOptions: name =>
         name === toolNames.StackScroll
           ? { mode: 'Passive', bindings: [] }

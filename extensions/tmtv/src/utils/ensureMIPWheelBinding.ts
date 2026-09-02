@@ -1,14 +1,19 @@
-/** 2026-08-31 功能说明：确保 MIP 滚轮使用原生体积旋转，只移除切片滚轮绑定，保留左键工具。 */
+/** 2026-09-02 功能说明：确保 MIP 滚轮只由原生体积旋转占用，保留其他工具的非滚轮绑定。 */
 export default function ensureMIPWheelBinding(toolGroupService, toolNames, enums): void {
   const group = toolGroupService?.getToolGroup?.('mipToolGroup');
   if (!group) return;
   const wheel = enums.MouseBindings.Wheel;
-  const scrollOptions = group.getToolOptions?.(toolNames.StackScroll);
-  const wheelBindings =
-    scrollOptions?.bindings?.filter(binding => binding.mouseButton === wheel) || [];
-  if (wheelBindings.length) {
-    group.setToolPassive(toolNames.StackScroll, { removeAllBindings: wheelBindings });
-  }
+  const toolOptions = group.toolOptions || {};
+
+  Object.entries(toolOptions).forEach(([toolName, options]: [string, any]) => {
+    if (toolName === toolNames.VolumeRotate) return;
+    const wheelBindings =
+      options?.bindings?.filter(binding => binding.mouseButton === wheel) || [];
+    if (wheelBindings.length) {
+      group.setToolPassive(toolName, { removeAllBindings: wheelBindings });
+    }
+  });
+
   const rotateOptions = group.getToolOptions?.(toolNames.VolumeRotate);
   if (!rotateOptions) return;
   const hasWheel =

@@ -13,6 +13,7 @@ import ensureMIPWheelBinding from '../../../extensions/tmtv/src/utils/ensureMIPW
 import { installComparisonMeasurementIsolation } from '../../../extensions/tmtv/src/utils/comparisonMeasurements';
 import crosshairDisplayService from '../../../extensions/tmtv/src/services/CrosshairDisplayService';
 import tmtvComparisonService from '../../../extensions/tmtv/src/services/TMTVComparisonService';
+import tmtvSessionService from '../../../extensions/tmtv/src/services/TMTVSessionService';
 import ComparisonSideSelector from '../../../extensions/tmtv/src/Panels/ComparisonSideSelector';
 
 const { MetadataProvider } = classes;
@@ -97,10 +98,22 @@ function modeFactory({ modeConfiguration }) {
 
       // 2026-08-31 功能说明：初始化两次检查对比上下文，供工具栏识别当前操作侧
       tmtvComparisonService.init(servicesManager);
+      // 2026-09-02 功能说明：创建不介入影像加载链路的轻量分割 Session，不复制 Volume/labelmap。
+      tmtvSessionService.init(servicesManager);
 
       // Init Default and SR ToolGroups  1初始化工作组（PT  CT FUSION MIP）
       initToolGroups(toolNames, Enums, toolGroupService, commandsManager);
       ensureMIPWheelBinding(toolGroupService, toolNames, Enums);
+      // 2026-09-02 功能说明：工具栏切换后重新收口 MIP 滚轮，避免 Zoom/Pan/翻页覆盖旋转绑定。
+      const { unsubscribe: mipToolUnsubscribe } = toolGroupService.subscribe(
+        toolGroupService.EVENTS.TOOL_ACTIVATED,
+        ({ toolGroupId }) => {
+          if (toolGroupId === 'mipToolGroup') {
+            ensureMIPWheelBinding(toolGroupService, toolNames, Enums);
+          }
+        }
+      );
+      unsubscriptions.push(mipToolUnsubscribe);
       const measurementIsolation = installComparisonMeasurementIsolation(servicesManager);
       unsubscriptions.push(measurementIsolation.dispose);
       //监听视口添加事件，2设置十字线配置和Fusion视口的活动体积
@@ -486,6 +499,7 @@ function modeFactory({ modeConfiguration }) {
         tmtvSegmentMaskStorageService.reset();
         tmtvCrosshairService.reset();
         crosshairDisplayService.reset();
+        tmtvSessionService.reset();
         tmtvComparisonService.reset();
       } catch (e) {
         console.warn('[tmtv-mode] TMTV singleton cleanup failed', e);
