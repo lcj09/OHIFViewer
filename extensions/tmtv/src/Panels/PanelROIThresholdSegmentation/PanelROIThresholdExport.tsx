@@ -3,12 +3,13 @@ import { useActiveViewportSegmentationRepresentations } from '@ohif/extension-co
 import { handleROIThresholding } from '../../utils/handleROIThresholding';
 import { debounce } from '@ohif/core/src/utils';
 import { useSystem } from '@ohif/core/src';
-import { Button } from '@ohif/ui-next';
+import { Button, Icons } from '@ohif/ui-next';
 import { useTranslation } from 'react-i18next';
 import tmtvLesionService from '../../services/TMTVLesionService';
 import tmtvLesionHighlightService from '../../services/TMTVLesionHighlightService';
 import tmtvComparisonService from '../../services/TMTVComparisonService';
 import tmtvSessionService, { type TMTVSession } from '../../services/TMTVSessionService';
+import { calculateTMTVPatientComparison } from '../../utils/calculateTMTVPatientComparison';
 
 const SEGMENT_INDEX = 1;
 const LESION_FILTERS = ['all', 'confirmed', 'candidate', 'rejected'];
@@ -40,6 +41,22 @@ type LesionQualityTag = {
 
 function formatStat(value: number | null | undefined, digits = 3) {
   return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '';
+}
+
+function formatComparisonStat(
+  value: number | null | undefined,
+  options: { digits?: number; signed?: boolean; suffix?: string } = {}
+) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 'N/A';
+  }
+
+  const { digits = 3, signed = false, suffix = '' } = options;
+  const zeroThreshold = 0.5 * 10 ** -digits;
+  const normalizedValue = Math.abs(value) < zeroThreshold ? 0 : value;
+  const sign = signed && normalizedValue > 0 ? '+' : '';
+
+  return `${sign}${normalizedValue.toFixed(digits)}${suffix}`;
 }
 
 function formatLocalMaskUpdatedAt(updatedAt: number | null | undefined) {
@@ -200,6 +217,7 @@ export default function PanelRoiThresholdSegmentation() {
   const [isRunningAutoSegmentation, setIsRunningAutoSegmentation] = useState(false);
   const [autoSegmentationSummary, setAutoSegmentationSummary] = useState('');
   const [isAutoSegmentationExpanded, setIsAutoSegmentationExpanded] = useState(true);
+  const [isPatientComparisonExpanded, setIsPatientComparisonExpanded] = useState(true);
   const [lesionSortKey, setLesionSortKey] = useState('volume');
   const [lesionSortDirection, setLesionSortDirection] = useState<'asc' | 'desc'>('desc');
   const hasAttemptedInitialMaskRestoreRef = useRef(false);
@@ -634,6 +652,20 @@ export default function PanelRoiThresholdSegmentation() {
   // [2026-08-25 功能] 第一阶段 Header TMTV/TLG 只统计 confirmed lesions，candidate/rejected 不进入总量
   const tmtvValue = lesionState.totals.tmtv;
   const tlgValue = lesionState.totals.tlg;
+  // 2026-09-03 功能说明：患者级对比仅读取两个轻量 Session totals，不触发体素统计或持有影像对象。
+  const patientComparison =
+    sessionSide === 'baseline' || sessionSide === 'followup'
+      ? calculateTMTVPatientComparison(
+          tmtvSessionService.getSession('baseline')?.totals,
+          tmtvSessionService.getSession('followup')?.totals
+        )
+      : null;
+  const patientComparisonRows = patientComparison
+    ? [
+        { label: 'TMTV', metric: patientComparison.tmtv },
+        { label: 'TLG', metric: patientComparison.tlg },
+      ]
+    : [];
   const lesionCount = lesionState.lesions.length;
   const selectedLesionId = lesionState.selectedLesionId;
   const confirmedCount = lesionState.lesions.filter(lesion => lesion.status === 'confirmed').length;
@@ -1168,6 +1200,75 @@ export default function PanelRoiThresholdSegmentation() {
               <span className="text-foreground">{formatStat(tlgValue)}</span>
             </div>
           </div>
+          {patientComparison && (
+            <div
+              data-cy="tmtvPatientComparisonTotals"
+              className="border-border border-t pt-0.5"
+            >
+              {/* 2026-09-03 功能说明：总量对比可折叠，释放紧凑右侧面板的病灶列表空间。 */}
+              <button
+                type="button"
+                data-cy="toggleTmtvPatientComparisonTotals"
+                className="text-muted-foreground flex h-5 w-full items-center justify-between text-[11px] font-semibold"
+                aria-expanded={isPatientComparisonExpanded}
+                title={isPatientComparisonExpanded ? '收起总量对比' : '展开总量对比'}
+                onClick={() => setIsPatientComparisonExpanded(isExpanded => !isExpanded)}
+              >
+                <span>总量对比</span>
+                <Icons.ChevronDown
+                  className={`h-3.5 w-3.5 transition-transform ${
+                    isPatientComparisonExpanded ? '' : '-rotate-90'
+                  }`}
+                />
+              </button>
+              {isPatientComparisonExpanded && (
+                <div className="grid grid-cols-[2.75rem_repeat(4,minmax(0,1fr))] gap-x-1 text-[10px] leading-4">
+                  <span />
+                  <span className="text-muted-foreground truncate text-right">检查一</span>
+                  <span className="text-muted-foreground truncate text-right">检查二</span>
+                  <span className="text-muted-foreground truncate text-right">差值</span>
+                  <span className="text-muted-foreground truncate text-right">变化率</span>
+                  {patientComparisonRows.map(({ label, metric }) => (
+                    <React.Fragment key={label}>
+                      <span className="text-muted-foreground font-semibold">{label}</span>
+                      <span
+                        className="text-foreground truncate text-right tabular-nums"
+                        title={formatComparisonStat(metric.baseline)}
+                      >
+                        {formatComparisonStat(metric.baseline)}
+                      </span>
+                      <span
+                        className="text-foreground truncate text-right tabular-nums"
+                        title={formatComparisonStat(metric.followup)}
+                      >
+                        {formatComparisonStat(metric.followup)}
+                      </span>
+                      <span
+                        className="text-foreground truncate text-right tabular-nums"
+                        title={formatComparisonStat(metric.delta, { signed: true })}
+                      >
+                        {formatComparisonStat(metric.delta, { signed: true })}
+                      </span>
+                      <span
+                        className="text-foreground truncate text-right tabular-nums"
+                        title={formatComparisonStat(metric.percentChange, {
+                          digits: 1,
+                          signed: true,
+                          suffix: '%',
+                        })}
+                      >
+                        {formatComparisonStat(metric.percentChange, {
+                          digits: 1,
+                          signed: true,
+                          suffix: '%',
+                        })}
+                      </span>
+                    </React.Fragment>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <div className="flex items-center justify-between gap-2">
             <label className="text-muted-foreground flex min-w-0 cursor-pointer items-center gap-1 whitespace-nowrap text-[11px]">
               <input
