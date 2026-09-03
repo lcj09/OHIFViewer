@@ -279,6 +279,14 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       )?.segmentationId;
   }
 
+  /** 2026-09-02 功能说明：对比命令显式传递 Session；单检查返回空以保持原 lesion 持久化键。 */
+  function getActiveLesionSessionId(): string | undefined {
+    const session = tmtvSessionService.getActiveSession();
+    return session?.side === 'baseline' || session?.side === 'followup'
+      ? session.sessionId
+      : undefined;
+  }
+
   const actions = {
     // 2026-08-31 功能说明：对比模式的清除操作只作用于当前检查。
     clearTMTVMeasurements: () => clearTMTVMeasurements(servicesManager, commandsManager),
@@ -795,7 +803,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       });
 
       if (clearSelection) {
-        tmtvLesionService.selectLesion(segmentationIds, null);
+        tmtvLesionService.selectLesion(segmentationIds, null, getActiveLesionSessionId());
         tmtvLesionHighlightService.clearHighlight(segmentationIds);
       }
 
@@ -828,7 +836,11 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     selectTMTVLesion: async ({ segmentationIds, lesionId }) => {
       // [2026-08-27 功能] 单击 lesion 时同步定位到病灶中心层，避免小病灶只在列表高亮但图像页不可见
-      const lesion = tmtvLesionService.selectLesion(segmentationIds, lesionId);
+      const lesion = tmtvLesionService.selectLesion(
+        segmentationIds,
+        lesionId,
+        getActiveLesionSessionId()
+      );
 
       await tmtvLesionHighlightService.highlightLesion(segmentationIds, lesion);
 
@@ -867,9 +879,10 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     deleteTMTVLesion: ({ segmentationIds = [], lesionId }) => {
       // [2026-08-24 功能] 删除病灶后使用增量 totals，避免立即触发全量 TMTV/lesion 重算造成卡顿
-      const previousLesionState = tmtvLesionService.getState(segmentationIds);
+      const sessionId = getActiveLesionSessionId();
+      const previousLesionState = tmtvLesionService.getState(segmentationIds, sessionId);
       const shouldClearHighlight = previousLesionState.selectedLesionId === lesionId;
-      const lesionState = tmtvLesionService.deleteLesion(lesionId, 1);
+      const lesionState = tmtvLesionService.deleteLesion(lesionId, 1, sessionId);
 
       if (lesionState) {
         if (shouldClearHighlight) {
@@ -885,12 +898,13 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     deleteTMTVLesions: ({ segmentationIds = [], lesionIds = [] }) => {
       // [2026-08-27 功能] 批量 Delete rejected 病灶：真实清空 Segment 1 连通域，替代逐层橡皮擦清除
-      const previousLesionState = tmtvLesionService.getState(segmentationIds);
+      const sessionId = getActiveLesionSessionId();
+      const previousLesionState = tmtvLesionService.getState(segmentationIds, sessionId);
       const targetLesionIds = new Set((lesionIds ?? []).filter(Boolean));
       const shouldClearHighlight =
         !!previousLesionState.selectedLesionId &&
         targetLesionIds.has(previousLesionState.selectedLesionId);
-      const lesionState = tmtvLesionService.deleteLesions(segmentationIds, lesionIds, 1);
+      const lesionState = tmtvLesionService.deleteLesions(segmentationIds, lesionIds, 1, sessionId);
 
       if (lesionState) {
         if (shouldClearHighlight) {
@@ -904,8 +918,14 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       }
     },
     setTMTVLesionStatus: ({ segmentationIds = [], lesionId, status }) => {
-      // [2026-08-25 功能] 第一阶段 Lesion 确认/拒绝只更新业务状态，TMTV/TLG 只汇总 confirmed lesions
-      const lesionState = tmtvLesionService.setLesionStatus(segmentationIds, lesionId, status);
+      // 2026-09-02 功能说明：更新当前 Session 状态并返回快照，供面板立即刷新病灶列表。
+      const lesionState = tmtvLesionService.setLesionStatus(
+        segmentationIds,
+        lesionId,
+        status,
+        true,
+        getActiveLesionSessionId()
+      );
 
       if (lesionState) {
         segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
@@ -913,10 +933,18 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
           tlg: lesionState.totals.tlg,
         });
       }
+
+      return lesionState;
     },
     setTMTVLesionStatuses: ({ segmentationIds = [], lesionIds = [], status }) => {
-      // [2026-08-26 功能] 批量 Lesion 审核：一次确认/拒绝多个候选，只更新业务状态和 confirmed totals
-      const lesionState = tmtvLesionService.setLesionStatuses(segmentationIds, lesionIds, status);
+      // 2026-09-02 功能说明：批量审核返回当前 Session 快照，避免面板等待异步重渲染。
+      const lesionState = tmtvLesionService.setLesionStatuses(
+        segmentationIds,
+        lesionIds,
+        status,
+        true,
+        getActiveLesionSessionId()
+      );
 
       if (lesionState) {
         segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
@@ -924,10 +952,16 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
           tlg: lesionState.totals.tlg,
         });
       }
+
+      return lesionState;
     },
     mergeTMTVLesions: ({ segmentationIds = [], lesionIds = [] }) => {
       // [2026-08-26 功能] Merge Lesions：业务层合并多个 lesion/finding，不创建新 Segment、不修改 Segment 1 voxel
-      const lesionState = tmtvLesionService.mergeLesions(segmentationIds, lesionIds);
+      const lesionState = tmtvLesionService.mergeLesions(
+        segmentationIds,
+        lesionIds,
+        getActiveLesionSessionId()
+      );
 
       if (lesionState) {
         segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
@@ -938,10 +972,14 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     undoTMTVLesionEdit: () => {
       // [2026-08-26 功能] TMTV 专用撤销命令，避免覆盖测量/标注等全局 undo 行为
-      const historyEntry = tmtvLesionService.undo();
+      const sessionId = getActiveLesionSessionId();
+      const historyEntry = tmtvLesionService.undo(sessionId);
 
       if (historyEntry?.type === 'STATUS' || historyEntry?.type === 'BATCH_STATUS') {
-        const lesionState = tmtvLesionService.getState(historyEntry.segmentationIds);
+        const lesionState = tmtvLesionService.getState(
+          historyEntry.segmentationIds,
+          historyEntry.sessionId
+        );
         segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
           tmtv: lesionState.totals.tmtv,
           tlg: lesionState.totals.tlg,
@@ -950,10 +988,14 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     redoTMTVLesionEdit: () => {
       // [2026-08-26 功能] TMTV 专用重做命令，避免覆盖测量/标注等全局 redo 行为
-      const historyEntry = tmtvLesionService.redo();
+      const sessionId = getActiveLesionSessionId();
+      const historyEntry = tmtvLesionService.redo(sessionId);
 
       if (historyEntry?.type === 'STATUS' || historyEntry?.type === 'BATCH_STATUS') {
-        const lesionState = tmtvLesionService.getState(historyEntry.segmentationIds);
+        const lesionState = tmtvLesionService.getState(
+          historyEntry.segmentationIds,
+          historyEntry.sessionId
+        );
         segmentationService.setSegmentationGroupStats(lesionState.segmentationIds, {
           tmtv: lesionState.totals.tmtv,
           tlg: lesionState.totals.tlg,
@@ -973,7 +1015,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       });
 
       const segmentationIds = segmentations.map(segmentation => segmentation.segmentationId);
-      const lesionState = tmtvLesionService.getState(segmentationIds);
+      const lesionState = tmtvLesionService.getState(segmentationIds, getActiveLesionSessionId());
       // [2026-08-25 功能] 第四阶段 CSV 导出使用 TMTVReportService 生成正式报告结构，避免报告逻辑散落在 commandsModule
       const reportLesions = lesions ?? lesionState.lesions;
       const reportLesionTotals = lesionTotals ?? lesionState.totals;
@@ -1005,7 +1047,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       });
 
       const segmentationIds = segmentations.map(segmentation => segmentation.segmentationId);
-      const lesionState = tmtvLesionService.getState(segmentationIds);
+      const lesionState = tmtvLesionService.getState(segmentationIds, getActiveLesionSessionId());
       const reportLesions = lesions ?? lesionState.lesions;
       const reportLesionTotals = lesionTotals ?? lesionState.totals;
 
@@ -1037,7 +1079,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       });
 
       const segmentationIds = segmentations.map(segmentation => segmentation.segmentationId);
-      const lesionState = tmtvLesionService.getState(segmentationIds);
+      const lesionState = tmtvLesionService.getState(segmentationIds, getActiveLesionSessionId());
       const reportLesions = lesions ?? lesionState.lesions;
       const reportLesionTotals = lesionTotals ?? lesionState.totals;
 
