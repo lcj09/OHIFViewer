@@ -240,7 +240,8 @@ export default function PanelRoiThresholdSegmentation() {
   const [autoSegmentationSummary, setAutoSegmentationSummary] = useState('');
   const [isAutoSegmentationExpanded, setIsAutoSegmentationExpanded] = useState(true);
   const [isPatientComparisonExpanded, setIsPatientComparisonExpanded] = useState(true);
-  const [isLesionComparisonExpanded, setIsLesionComparisonExpanded] = useState(true);
+  // 2026-09-04 功能说明：病灶候选匹配属于辅助信息，进入面板时默认收起以节省右侧空间。
+  const [isLesionComparisonExpanded, setIsLesionComparisonExpanded] = useState(false);
   const [lesionSortKey, setLesionSortKey] = useState('volume');
   const [lesionSortDirection, setLesionSortDirection] = useState<'asc' | 'desc'>('desc');
   const hasAttemptedInitialMaskRestoreRef = useRef(false);
