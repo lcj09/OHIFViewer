@@ -446,19 +446,22 @@ const SidePanel = ({
   };
 
   const getOpenStateComponent = () => {
-    // [2026-09-04 新增] hideTabs 时屏蔽顶部 tab 切换按钮，仅保留折叠按钮
+    // [2026-09-04 修改] hideTabs 时不渲染顶部占位条，内容直接顶到面板最上方，
+    // 折叠按钮改为悬浮在首个区块标题栏右侧空白处（折叠箭头左边），为病灶列表节省纵向空间
     if (hideTabs) {
       return (
-        <>
-          <div className="bg-muted flex h-[40px] flex-shrink-0 select-none rounded-t p-2">
-            {getCloseIcon()}
-          </div>
-          <Separator
-            orientation="horizontal"
-            className="bg-background"
-            thickness="2px"
-          />
-        </>
+        <div
+          className="absolute z-10 flex cursor-pointer items-center justify-center"
+          // [2026-09-04 修改] 与右侧 "<" 箭头垂直居中对齐（标题栏中心线 16px），水平紧邻箭头左侧
+          style={{ width: '24px', height: '24px', top: '4px', right: '28px' }}
+          onClick={() => updatePanelOpen(false)}
+          data-cy={`side-panel-header-${side}`}
+        >
+          {React.createElement(Icons[openStateIconName[side]] || Icons.MissingIcon, {
+            className: 'text-primary',
+            style: { width: '16px', height: '16px' },
+          })}
+        </div>
       );
     }
     return (
