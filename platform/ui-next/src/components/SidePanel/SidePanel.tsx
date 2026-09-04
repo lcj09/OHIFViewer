@@ -28,6 +28,8 @@ type SidePanelProps = {
   collapsedInsideBorderSize: number;
   collapsedOutsideBorderSize: number;
   tabs: any;
+  // [2026-09-04 新增] 屏蔽面板顶部 tab 切换按钮（仅隐藏渲染，保留折叠/展开功能）
+  hideTabs?: boolean;
 };
 
 type StyleMap = {
@@ -195,6 +197,7 @@ const SidePanel = ({
   expandedInsideBorderSize = 4,
   collapsedInsideBorderSize = 8,
   collapsedOutsideBorderSize = 4,
+  hideTabs = false,
 }: SidePanelProps) => {
   const [panelOpen, setPanelOpen] = useState(isExpanded);
   const [activeTabIndex, setActiveTabIndex] = useState(activeTabIndexProp ?? 0);
@@ -299,6 +302,8 @@ const SidePanel = ({
             className={classnames('text-primary', side === 'left' && 'rotate-180 transform')}
           />
         </div>
+        {/* [2026-09-04 新增] hideTabs 时折叠态也不显示竖排 tab 图标 */}
+        {!hideTabs && (
         <div className={classnames('mt-3 flex flex-col space-y-3')}>
           {_childComponents.map((childComponent, index) => (
             <Tooltip key={index}>
@@ -336,6 +341,7 @@ const SidePanel = ({
             </Tooltip>
           ))}
         </div>
+        )}
       </>
     );
   };
@@ -440,6 +446,21 @@ const SidePanel = ({
   };
 
   const getOpenStateComponent = () => {
+    // [2026-09-04 新增] hideTabs 时屏蔽顶部 tab 切换按钮，仅保留折叠按钮
+    if (hideTabs) {
+      return (
+        <>
+          <div className="bg-muted flex h-[40px] flex-shrink-0 select-none rounded-t p-2">
+            {getCloseIcon()}
+          </div>
+          <Separator
+            orientation="horizontal"
+            className="bg-background"
+            thickness="2px"
+          />
+        </>
+      );
+    }
     return (
       <>
         <div className="bg-muted flex h-[40px] flex-shrink-0 select-none rounded-t p-2">

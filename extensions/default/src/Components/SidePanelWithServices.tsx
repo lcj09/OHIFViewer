@@ -16,6 +16,8 @@ export type SidePanelWithServicesProps = {
   expandedInsideBorderSize?: number;
   collapsedInsideBorderSize?: number;
   collapsedOutsideBorderSize?: number;
+  // [2026-09-04 新增] 屏蔽面板顶部 tab 切换按钮（仅隐藏渲染，不删除功能）
+  hideTabs?: boolean;
 };
 
 const SidePanelWithServices = ({

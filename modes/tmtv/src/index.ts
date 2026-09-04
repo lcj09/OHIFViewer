@@ -590,6 +590,8 @@ function modeFactory({ modeConfiguration }) {
               rightPanelResizable: true,
               // [2026-08-21 修改] 右侧面板默认展开
               rightPanelClosed: false,
+              // [2026-09-04 新增] 屏蔽右侧面板顶部两个 tab 切换按钮（仅隐藏，不删除）
+              rightPanelHideTabs: true,
               viewports: [
                 {
                   namespace: cs3d.viewport,

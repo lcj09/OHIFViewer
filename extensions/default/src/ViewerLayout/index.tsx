@@ -37,6 +37,8 @@ function ViewerLayout({
   rightPanelClosed = false,
   leftPanelResizable = false,
   rightPanelResizable = false,
+  // [2026-09-04 新增] 屏蔽右侧面板顶部 tab 切换按钮（仅隐藏渲染，不删除功能）
+  rightPanelHideTabs = false,
   leftPanelInitialExpandedWidth,
   rightPanelInitialExpandedWidth,
   leftPanelMinimumExpandedWidth,
@@ -292,6 +294,7 @@ function ViewerLayout({
                     isExpanded={!rightPanelClosedState}
                     servicesManager={servicesManager}
                     {...rightPanelProps}
+                    hideTabs={rightPanelHideTabs}
                   />
                 </ResizablePanel>
               </>
