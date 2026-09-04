@@ -15,6 +15,7 @@ import tmtvLesionComparisonService, {
   type TMTVLesionMatchStatus,
 } from '../../services/TMTVLesionComparisonService';
 import { calculateTMTVPatientComparison } from '../../utils/calculateTMTVPatientComparison';
+import getComparisonPatientIdentity from '../../utils/getComparisonPatientIdentity';
 
 const SEGMENT_INDEX = 1;
 const LESION_FILTERS = ['all', 'confirmed', 'candidate', 'rejected'];
@@ -177,7 +178,7 @@ function setPrimaryTMTVSegmentationActive({
 export default function PanelRoiThresholdSegmentation() {
   const { t } = useTranslation('ROIThresholdConfiguration');
   const { commandsManager, servicesManager } = useSystem();
-  const { cornerstoneViewportService, segmentationService, viewportGridService } =
+  const { cornerstoneViewportService, displaySetService, segmentationService, viewportGridService } =
     servicesManager.services;
   const { segmentationsWithRepresentations: segmentationsInfo } =
     useActiveViewportSegmentationRepresentations();
@@ -240,6 +241,7 @@ export default function PanelRoiThresholdSegmentation() {
   const [autoSegmentationSummary, setAutoSegmentationSummary] = useState('');
   const [isAutoSegmentationExpanded, setIsAutoSegmentationExpanded] = useState(true);
   const [isPatientComparisonExpanded, setIsPatientComparisonExpanded] = useState(true);
+  const [displaySetRevision, setDisplaySetRevision] = useState(0);
   // 2026-09-04 功能说明：病灶候选匹配属于辅助信息，进入面板时默认收起以节省右侧空间。
   const [isLesionComparisonExpanded, setIsLesionComparisonExpanded] = useState(false);
   const [lesionSortKey, setLesionSortKey] = useState('volume');
@@ -273,6 +275,16 @@ export default function PanelRoiThresholdSegmentation() {
       if (ownsInitialization) tmtvLesionComparisonService.destroy();
     };
   }, []);
+
+  useEffect(() => {
+    // 2026-09-04 功能说明：仅用事件版本触发患者身份复核，不把 DisplaySet 保存进 React 状态。
+    const refreshIdentity = () => setDisplaySetRevision(revision => revision + 1);
+    const subscriptions = [
+      displaySetService.subscribe(displaySetService.EVENTS.DISPLAY_SETS_ADDED, refreshIdentity),
+      displaySetService.subscribe(displaySetService.EVENTS.DISPLAY_SETS_CHANGED, refreshIdentity),
+    ];
+    return () => subscriptions.forEach(subscription => subscription.unsubscribe());
+  }, [displaySetService]);
 
   useEffect(() => {
     // 2026-09-03 功能说明：面板采用最新 lesion 状态后补触发一次幂等匹配，修复初始化通知早于 Session 登记的时序窗口。
@@ -698,12 +710,30 @@ export default function PanelRoiThresholdSegmentation() {
   // [2026-08-25 功能] 第一阶段 Header TMTV/TLG 只统计 confirmed lesions，candidate/rejected 不进入总量
   const tmtvValue = lesionState.totals.tmtv;
   const tlgValue = lesionState.totals.tlg;
-  // 2026-09-03 功能说明：患者级对比仅读取两个轻量 Session totals，不触发体素统计或持有影像对象。
+  const baselineComparisonSession = tmtvSessionService.getSession('baseline');
+  const followupComparisonSession = tmtvSessionService.getSession('followup');
+  const comparisonPatientIdentity = useMemo(
+    () =>
+      getComparisonPatientIdentity(
+        displaySetService.getActiveDisplaySets?.() || [],
+        baselineComparisonSession?.studyInstanceUID,
+        followupComparisonSession?.studyInstanceUID
+      ),
+    [
+      displaySetRevision,
+      displaySetService,
+      baselineComparisonSession?.studyInstanceUID,
+      followupComparisonSession?.studyInstanceUID,
+    ]
+  );
+  const isComparisonSession = sessionSide === 'baseline' || sessionSide === 'followup';
+  const canCompareLongitudinally = comparisonPatientIdentity.status === 'same';
+  // 2026-09-04 功能说明：只有同一患者才计算纵向总量变化，避免不同患者数据被误解为疗效结果。
   const patientComparison =
-    sessionSide === 'baseline' || sessionSide === 'followup'
+    isComparisonSession && canCompareLongitudinally
       ? calculateTMTVPatientComparison(
-          tmtvSessionService.getSession('baseline')?.totals,
-          tmtvSessionService.getSession('followup')?.totals
+          baselineComparisonSession?.totals,
+          followupComparisonSession?.totals
         )
       : null;
   const patientComparisonRows = patientComparison
@@ -712,8 +742,6 @@ export default function PanelRoiThresholdSegmentation() {
         { label: 'TLG', metric: patientComparison.tlg },
       ]
     : [];
-  const baselineComparisonSession = tmtvSessionService.getSession('baseline');
-  const followupComparisonSession = tmtvSessionService.getSession('followup');
   const baselineComparisonState = baselineComparisonSession
     ? tmtvLesionService.getState(
         baselineComparisonSession.segmentationIds,
@@ -1336,6 +1364,17 @@ export default function PanelRoiThresholdSegmentation() {
               <span className="text-foreground">{formatStat(tlgValue)}</span>
             </div>
           </div>
+          {isComparisonSession && !canCompareLongitudinally && (
+            <div
+              data-cy="tmtvComparisonPatientWarning"
+              className="border-border border-t py-1 text-[10px] leading-4 text-yellow-300"
+            >
+              {/* 2026-09-04 功能说明：患者不一致或身份缺失时保留影像浏览，停用可能误导的纵向统计。 */}
+              {comparisonPatientIdentity.status === 'different'
+                ? '两次检查患者不一致，仅用于图像对照；总量变化和病灶候选已停用。'
+                : '无法确认两次检查患者一致性，仅用于图像对照；总量变化和病灶候选已停用。'}
+            </div>
+          )}
           {patientComparison && (
             <div
               data-cy="tmtvPatientComparisonTotals"

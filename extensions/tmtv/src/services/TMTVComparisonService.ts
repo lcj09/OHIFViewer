@@ -156,6 +156,15 @@ class TMTVComparisonService {
   private comparisonScaleReferences = new Map<string, { current: number; initial: number }>();
   private fittedViewports = new WeakMap<object, string>();
   private comparisonInteractionStarted = false;
+  private viewportResizeBindings = new Map<
+    string,
+    {
+      element: HTMLElement;
+      observer: ResizeObserver;
+      width: number;
+      height: number;
+    }
+  >();
   private voiBindings = new Map<string, { element: HTMLElement; handler: EventListener }>();
   private applyingVoi = false;
 
@@ -193,6 +202,7 @@ class TMTVComparisonService {
     this.viewportSubscription = null;
     this.gridSubscription?.unsubscribe();
     this.gridSubscription = null;
+    this.clearViewportResizeBindings();
     this.clearVoiBindings();
     this.servicesManager = servicesManager || null;
     // 2026-09-01 功能说明：挂片协议创建视口前注册同检查相机同步器，避免回退到完整相机复制。
@@ -210,6 +220,7 @@ class TMTVComparisonService {
       this.viewportSubscription = viewportService.subscribe(
         viewportService.EVENTS.VIEWPORT_VOLUMES_CHANGED,
         () => {
+          this.refreshViewportResizeBindings();
           this.applyComparisonStudySyncFromSettings();
           this.scheduleInitialViewportFit();
           this.scheduleViewportScaleReconciliation();
@@ -220,9 +231,13 @@ class TMTVComparisonService {
     if (viewportGridService?.EVENTS?.GRID_STATE_CHANGED) {
       this.gridSubscription = viewportGridService.subscribe(
         viewportGridService.EVENTS.GRID_STATE_CHANGED,
-        () => this.scheduleViewportScaleReconciliation()
+        () => {
+          this.refreshViewportResizeBindings();
+          this.scheduleViewportScaleReconciliation();
+        }
       );
     }
+    this.refreshViewportResizeBindings();
     this.scheduleInitialViewportFit();
     this.syncFromActiveViewport();
   }
@@ -249,7 +264,8 @@ class TMTVComparisonService {
 
   /** 2026-09-01 功能说明：进入 1x1 前保存两侧 CT 尺度，返回布局时继续作为同侧基准。 */
   private captureComparisonScaleReferences() {
-    const { viewportGridService, cornerstoneViewportService } = this.servicesManager?.services || {};
+    const { viewportGridService, cornerstoneViewportService } =
+      this.servicesManager?.services || {};
     const layout = viewportGridService?.getState?.()?.layout;
     if (layout?.numRows === 1 && layout?.numCols === 1) return;
     for (const side of ['baseline', 'followup']) {
@@ -282,6 +298,70 @@ class TMTVComparisonService {
     }, 150);
   }
 
+  /** 2026-09-04 功能说明：监听对比视口容器尺寸，侧栏开合后按同侧 CT 恢复 PET/Fusion/MIP 尺度。 */
+  private refreshViewportResizeBindings() {
+    if (typeof ResizeObserver === 'undefined') return;
+    const viewportService = this.servicesManager?.services?.cornerstoneViewportService;
+    const viewportIds = [...VIEWPORT_IDS_BY_SIDE.baseline, ...VIEWPORT_IDS_BY_SIDE.followup];
+    const activeIds = new Set(viewportIds);
+
+    this.viewportResizeBindings.forEach((binding, viewportId) => {
+      let currentElement: HTMLElement | undefined;
+      try {
+        currentElement = viewportService?.getCornerstoneViewport?.(viewportId)?.element;
+      } catch {
+        // 已销毁视口按缺失处理。
+      }
+      if (activeIds.has(viewportId) && currentElement === binding.element) return;
+      binding.observer.disconnect();
+      this.viewportResizeBindings.delete(viewportId);
+    });
+
+    viewportIds.forEach(viewportId => {
+      if (this.viewportResizeBindings.has(viewportId)) return;
+      let element: HTMLElement | undefined;
+      try {
+        element = viewportService?.getCornerstoneViewport?.(viewportId)?.element;
+      } catch {
+        return;
+      }
+      if (!element) return;
+
+      const binding = {
+        element,
+        observer: null as ResizeObserver,
+        width: element.clientWidth,
+        height: element.clientHeight,
+      };
+      const observer = new ResizeObserver(entries => {
+        const entry = entries.find(item => item.target === element) || entries[0];
+        const width = entry?.contentRect?.width ?? element.clientWidth;
+        const height = entry?.contentRect?.height ?? element.clientHeight;
+        if (
+          !Number.isFinite(width) ||
+          width <= 0 ||
+          !Number.isFinite(height) ||
+          height <= 0 ||
+          (width === binding.width && height === binding.height)
+        ) {
+          return;
+        }
+        binding.width = width;
+        binding.height = height;
+        this.scheduleViewportScaleReconciliation();
+      });
+      binding.observer = observer;
+      observer.observe(element);
+      this.viewportResizeBindings.set(viewportId, binding);
+    });
+  }
+
+  /** 2026-09-04 功能说明：退出或替换布局时断开尺寸监听，释放旧 viewport element 引用。 */
+  private clearViewportResizeBindings() {
+    this.viewportResizeBindings.forEach(binding => binding.observer.disconnect());
+    this.viewportResizeBindings.clear();
+  }
+
   /**
    * 2026-08-31 功能说明：释放订阅和服务引用，避免跨病例保留对比模式状态。
    */
@@ -305,6 +385,7 @@ class TMTVComparisonService {
     this.viewportSubscription = null;
     this.gridSubscription?.unsubscribe();
     this.gridSubscription = null;
+    this.clearViewportResizeBindings();
     this.removeComparisonStudySync();
     this.servicesManager = null;
     this.listeners.clear();

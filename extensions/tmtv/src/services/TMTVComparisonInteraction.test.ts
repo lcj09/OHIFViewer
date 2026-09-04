@@ -5,7 +5,9 @@ import comparison, {
 } from './TMTVComparisonService';
 import { TMTVCrosshairService } from './TMTVCrosshairService';
 
-jest.mock('@cornerstonejs/tools', () => ({ SynchronizerManager: { createSynchronizer: jest.fn() } }));
+jest.mock('@cornerstonejs/tools', () => ({
+  SynchronizerManager: { createSynchronizer: jest.fn() },
+}));
 
 jest.mock('@cornerstonejs/core', () => ({
   cache: { getVolume: jest.fn() },
@@ -20,7 +22,11 @@ describe('TMTV comparison interactions', () => {
   let volumesChanged: () => void;
   let unsubscribe;
   let crosshairs: TMTVCrosshairService;
-  let observers: { disconnect: jest.Mock }[];
+  let observers: {
+    observe: jest.Mock;
+    disconnect: jest.Mock;
+    callback: (entries: any[]) => void;
+  }[];
   const originalResizeObserver = global.ResizeObserver;
 
   // 2026-08-31 功能说明：模拟独立检查 Volume 和真实 DOM 事件，验证同步而不加载医学图像。
@@ -102,8 +108,8 @@ describe('TMTV comparison interactions', () => {
     };
     comparison.init(servicesManager);
     observers = [];
-    global.ResizeObserver = jest.fn().mockImplementation(() => {
-      const observer = { observe: jest.fn(), disconnect: jest.fn() };
+    global.ResizeObserver = jest.fn().mockImplementation(callback => {
+      const observer = { observe: jest.fn(), disconnect: jest.fn(), callback };
       observers.push(observer);
       return observer;
     });
@@ -128,7 +134,10 @@ describe('TMTV comparison interactions', () => {
   it('pauses comparison camera groups for crosshair rotation without enabling previously disabled groups', () => {
     const active = { setEnabled: jest.fn(), isDisabled: () => false };
     const inactive = { setEnabled: jest.fn(), isDisabled: () => true };
-    servicesManager.services.syncGroupService.getSynchronizersForViewport = () => [active, inactive];
+    servicesManager.services.syncGroupService.getSynchronizersForViewport = () => [
+      active,
+      inactive,
+    ];
     servicesManager.services.syncGroupService.getSynchronizerType = () => 'tmtvComparisonCamera';
     const suspended = (crosshairs as any)._disableSynchronizers();
     expect(suspended).toEqual([active]);
@@ -225,6 +234,37 @@ describe('TMTV comparison interactions', () => {
     volumesChanged();
     emitVoi(viewports.get('baselineCTAxial'), 'baseline-CT');
     expect(viewports.get('followupCTAxial').setProperties).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores PET scale after a side panel changes viewport width and releases observers', () => {
+    jest.useFakeTimers();
+    const ct = viewports.get('baselineCTAxial');
+    const pet = viewports.get('baselinePTAxial');
+    let petScale = 240;
+    ct.getCamera = () => ({ parallelScale: 100 });
+    ct.initialCamera = { parallelScale: 100 };
+    pet.getCamera = () => ({ parallelScale: petScale });
+    pet.initialCamera = { parallelScale: 240 };
+    pet.setCamera = jest.fn(({ parallelScale }) => {
+      petScale = parallelScale;
+    });
+
+    volumesChanged();
+    jest.advanceTimersByTime(3000);
+    petScale = 240;
+    pet.setCamera.mockClear();
+
+    const petObserver = observers.find(observer =>
+      observer.observe.mock.calls.some(([element]) => element === pet.element)
+    );
+    expect(petObserver).toBeDefined();
+    petObserver.callback([{ target: pet.element, contentRect: { width: 520, height: 400 } }]);
+    jest.advanceTimersByTime(200);
+
+    expect(pet.setCamera).toHaveBeenCalledWith({ parallelScale: 100 });
+    comparison.reset();
+    expect(petObserver.disconnect).toHaveBeenCalledTimes(1);
+    jest.useRealTimers();
   });
 
   it('renders all eight comparison crosshairs and keeps their initial coordinates separate', () => {
