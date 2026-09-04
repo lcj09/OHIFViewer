@@ -3,6 +3,7 @@ import * as csTools from '@cornerstonejs/tools';
 import i18n from 'i18next';
 
 import type { TMTVLesion } from './TMTVLesionService';
+import addSegmentationRepresentationPreservingCamera from '../utils/addSegmentationRepresentationPreservingCamera';
 
 const { SegmentationRepresentations } = csTools.Enums;
 const HIGHLIGHT_SEGMENTATION_ID_PREFIX = 'tmtv-selected-lesion-highlight';
@@ -285,14 +286,19 @@ class TMTVLesionHighlightService {
       );
 
       if (!existingRepresentations?.length) {
-        await segmentationService.addSegmentationRepresentation(viewportId, {
-          segmentationId: highlightSegmentationId,
-          type: SegmentationRepresentations.Labelmap,
-          config: {
-            blendMode: csEnums.BlendModes.MAXIMUM_INTENSITY_BLEND,
-          },
-          suppressEvents: true,
-        });
+        // 2026-09-03 功能说明：首次添加病灶高亮层时保持 PET/Fusion 相机，避免选中列表后图像缩小。
+        await addSegmentationRepresentationPreservingCamera(
+          this.servicesManager,
+          viewportId,
+          highlightSegmentationId,
+          {
+            type: SegmentationRepresentations.Labelmap,
+            config: {
+              blendMode: csEnums.BlendModes.MAXIMUM_INTENSITY_BLEND,
+            },
+            suppressEvents: true,
+          }
+        );
       }
 
       // [2026-08-25 功能] 高亮层只负责显示，添加后立即恢复真实 Segment 1 为 active，避免 Brush/Eraser 编辑高亮层

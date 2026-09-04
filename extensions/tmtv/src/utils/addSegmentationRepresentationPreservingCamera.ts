@@ -48,14 +48,16 @@ const waitForSegmentationRendered = (viewportId: string, segmentationId: string)
 export default async function addSegmentationRepresentationPreservingCamera(
   servicesManager,
   viewportId: string,
-  segmentationId: string
+  segmentationId: string,
+  representationOptions: Record<string, unknown> = {}
 ): Promise<void> {
   const { cornerstoneViewportService, segmentationService, syncGroupService } =
     servicesManager?.services || {};
   const viewport = cornerstoneViewportService?.getCornerstoneViewport?.(viewportId);
+  const representation = { ...representationOptions, segmentationId };
 
   if (!viewport) {
-    await segmentationService.addSegmentationRepresentation(viewportId, { segmentationId });
+    await segmentationService.addSegmentationRepresentation(viewportId, representation);
     return;
   }
 
@@ -71,7 +73,7 @@ export default async function addSegmentationRepresentationPreservingCamera(
 
   const rendered = waitForSegmentationRendered(viewportId, segmentationId);
   try {
-    await segmentationService.addSegmentationRepresentation(viewportId, { segmentationId });
+    await segmentationService.addSegmentationRepresentation(viewportId, representation);
     await rendered.promise;
   } finally {
     rendered.cancel();

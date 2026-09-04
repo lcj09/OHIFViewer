@@ -112,4 +112,35 @@ describe('addSegmentationRepresentationPreservingCamera', () => {
     expect(viewport.setCamera).toHaveBeenCalledWith(expect.objectContaining({ parallelScale: 80 }));
     expect(synchronizer.setEnabled.mock.calls).toEqual([[false], [true]]);
   });
+
+  it('forwards highlight representation options without allowing the ID to be replaced', async () => {
+    const addSegmentationRepresentation = jest.fn(async () => {
+      triggerRendered('baselinePTAxial', 'highlight-segmentation');
+    });
+    const servicesManager = {
+      services: {
+        cornerstoneViewportService: {
+          getCornerstoneViewport: () => ({ getCamera: () => null, render: jest.fn() }),
+        },
+        segmentationService: { addSegmentationRepresentation },
+      },
+    };
+
+    await addSegmentationRepresentationPreservingCamera(
+      servicesManager,
+      'baselinePTAxial',
+      'highlight-segmentation',
+      {
+        segmentationId: 'wrong-segmentation',
+        type: 'LABELMAP',
+        suppressEvents: true,
+      }
+    );
+
+    expect(addSegmentationRepresentation).toHaveBeenCalledWith('baselinePTAxial', {
+      segmentationId: 'highlight-segmentation',
+      type: 'LABELMAP',
+      suppressEvents: true,
+    });
+  });
 });

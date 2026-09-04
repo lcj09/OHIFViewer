@@ -14,6 +14,7 @@ import { installComparisonMeasurementIsolation } from '../../../extensions/tmtv/
 import crosshairDisplayService from '../../../extensions/tmtv/src/services/CrosshairDisplayService';
 import tmtvComparisonService from '../../../extensions/tmtv/src/services/TMTVComparisonService';
 import tmtvSessionService from '../../../extensions/tmtv/src/services/TMTVSessionService';
+import tmtvLesionComparisonService from '../../../extensions/tmtv/src/services/TMTVLesionComparisonService';
 import ComparisonSideSelector from '../../../extensions/tmtv/src/Panels/ComparisonSideSelector';
 
 const { MetadataProvider } = classes;
@@ -100,6 +101,11 @@ function modeFactory({ modeConfiguration }) {
       tmtvComparisonService.init(servicesManager);
       // 2026-09-02 功能说明：创建不介入影像加载链路的轻量分割 Session，不复制 Volume/labelmap。
       tmtvSessionService.init(servicesManager);
+      // 2026-09-03 功能说明：监听双 Session 的 confirmed lesion，生成轻量自动候选匹配。
+      tmtvLesionComparisonService.init({
+        lesionService: tmtvLesionService,
+        sessionService: tmtvSessionService,
+      });
 
       // Init Default and SR ToolGroups  1初始化工作组（PT  CT FUSION MIP）
       initToolGroups(toolNames, Enums, toolGroupService, commandsManager);
@@ -494,6 +500,7 @@ function modeFactory({ modeConfiguration }) {
 
       // [2026-08-28 功能] 退出 TMTV 时释放扩展层单例状态，避免 lesion voxel 索引、临时高亮 volume、SVG/viewport 引用跨病例保留
       try {
+        tmtvLesionComparisonService.destroy();
         tmtvLesionHighlightService.reset();
         tmtvLesionService.destroy();
         tmtvSegmentMaskStorageService.reset();

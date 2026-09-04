@@ -9,6 +9,11 @@ import tmtvLesionService from '../../services/TMTVLesionService';
 import tmtvLesionHighlightService from '../../services/TMTVLesionHighlightService';
 import tmtvComparisonService from '../../services/TMTVComparisonService';
 import tmtvSessionService, { type TMTVSession } from '../../services/TMTVSessionService';
+import tmtvLesionComparisonService, {
+  createTMTVLesionComparisonResult,
+  type TMTVLesionComparisonResult,
+  type TMTVLesionMatchStatus,
+} from '../../services/TMTVLesionComparisonService';
 import { calculateTMTVPatientComparison } from '../../utils/calculateTMTVPatientComparison';
 
 const SEGMENT_INDEX = 1;
@@ -22,6 +27,7 @@ const LESION_QUALITY_FILTERS = [
   'highBurden',
 ];
 const LESION_SORT_OPTIONS = ['volume', 'suvMax', 'tlg', 'displayIndex'];
+const MAX_VISIBLE_LESION_MATCHES = 100;
 const LESION_QUALITY_RULES = {
   smallVolumeML: 1,
   lowSUVMax: 3,
@@ -75,6 +81,20 @@ function getFiniteInputNumber(value: string, fallback: number): number {
   const numericValue = Number(value);
 
   return Number.isFinite(numericValue) ? numericValue : fallback;
+}
+
+function getLesionMatchStatusLabel(status: TMTVLesionMatchStatus): string {
+  if (status === 'persistent') return '持续';
+  if (status === 'new') return '新发候选';
+  if (status === 'resolved') return '消退候选';
+  return '未匹配';
+}
+
+function getLesionMatchStatusClassName(status: TMTVLesionMatchStatus): string {
+  if (status === 'persistent') return 'text-green-400';
+  if (status === 'new') return 'text-primary';
+  if (status === 'resolved') return 'text-orange-300';
+  return 'text-yellow-300';
 }
 
 function getSortableNumber(value: number | null | undefined): number {
@@ -202,6 +222,8 @@ export default function PanelRoiThresholdSegmentation() {
   const [lesionState, setLesionState] = useState(() =>
     tmtvLesionService.getState(segmentationIds, lesionSessionId)
   );
+  const [lesionComparisonResult, setLesionComparisonResult] =
+    useState<TMTVLesionComparisonResult | null>(() => tmtvLesionComparisonService.getResult());
   const [lesionFilter, setLesionFilter] = useState('all');
   const [lesionQualityFilter, setLesionQualityFilter] = useState('all');
   const [exportConfirmedOnly, setExportConfirmedOnly] = useState(true);
@@ -218,6 +240,7 @@ export default function PanelRoiThresholdSegmentation() {
   const [autoSegmentationSummary, setAutoSegmentationSummary] = useState('');
   const [isAutoSegmentationExpanded, setIsAutoSegmentationExpanded] = useState(true);
   const [isPatientComparisonExpanded, setIsPatientComparisonExpanded] = useState(true);
+  const [isLesionComparisonExpanded, setIsLesionComparisonExpanded] = useState(true);
   const [lesionSortKey, setLesionSortKey] = useState('volume');
   const [lesionSortDirection, setLesionSortDirection] = useState<'asc' | 'desc'>('desc');
   const hasAttemptedInitialMaskRestoreRef = useRef(false);
@@ -234,6 +257,28 @@ export default function PanelRoiThresholdSegmentation() {
     });
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    // 2026-09-03 功能说明：兜底初始化当前模块实例，避免分包后匹配服务未绑定而长期停留在更新状态。
+    const ownsInitialization = tmtvLesionComparisonService.ensureInitialized({
+      lesionService: tmtvLesionService,
+      sessionService: tmtvSessionService,
+    });
+    const subscription = tmtvLesionComparisonService.subscribe(setLesionComparisonResult);
+    tmtvLesionComparisonService.recalculate();
+    return () => {
+      subscription.unsubscribe();
+      // 面板只销毁由自身建立的绑定；模式级实例继续由 onModeExit 统一释放。
+      if (ownsInitialization) tmtvLesionComparisonService.destroy();
+    };
+  }, []);
+
+  useEffect(() => {
+    // 2026-09-03 功能说明：面板采用最新 lesion 状态后补触发一次幂等匹配，修复初始化通知早于 Session 登记的时序窗口。
+    if (sessionSide === 'baseline' || sessionSide === 'followup') {
+      tmtvLesionComparisonService.recalculate();
+    }
+  }, [lesionState.updatedAt, sessionSide]);
 
   useEffect(() => {
     if (previousSessionSideRef.current === sessionSide) return;
@@ -666,6 +711,96 @@ export default function PanelRoiThresholdSegmentation() {
         { label: 'TLG', metric: patientComparison.tlg },
       ]
     : [];
+  const baselineComparisonSession = tmtvSessionService.getSession('baseline');
+  const followupComparisonSession = tmtvSessionService.getSession('followup');
+  const baselineComparisonState = baselineComparisonSession
+    ? tmtvLesionService.getState(
+        baselineComparisonSession.segmentationIds,
+        baselineComparisonSession.sessionId
+      )
+    : null;
+  const followupComparisonState = followupComparisonSession
+    ? tmtvLesionService.getState(
+        followupComparisonSession.segmentationIds,
+        followupComparisonSession.sessionId
+      )
+    : null;
+  const baselineComparisonReady = !!baselineComparisonState?.updatedAt;
+  const followupComparisonReady = !!followupComparisonState?.updatedAt;
+  const baselineComparisonSessionId = baselineComparisonSession?.sessionId;
+  const followupComparisonSessionId = followupComparisonSession?.sessionId;
+  const effectiveLesionComparisonResult = useMemo(() => {
+    if (
+      lesionComparisonResult?.baselineSessionId === baselineComparisonSessionId &&
+      lesionComparisonResult?.followupSessionId === followupComparisonSessionId &&
+      lesionComparisonResult?.baselineStateUpdatedAt === baselineComparisonState?.updatedAt &&
+      lesionComparisonResult?.followupStateUpdatedAt === followupComparisonState?.updatedAt
+    ) {
+      return lesionComparisonResult;
+    }
+    if (
+      !baselineComparisonSessionId ||
+      !followupComparisonSessionId ||
+      !baselineComparisonState ||
+      !followupComparisonState
+    ) {
+      return null;
+    }
+
+    // 2026-09-03 功能说明：服务通知缺失时由现有轻量病灶状态同步生成显示快照，不读取或复制影像体素。
+    return createTMTVLesionComparisonResult(
+      { sessionId: baselineComparisonSessionId },
+      { sessionId: followupComparisonSessionId },
+      baselineComparisonState,
+      followupComparisonState
+    );
+  }, [
+    lesionComparisonResult,
+    baselineComparisonSessionId,
+    followupComparisonSessionId,
+    baselineComparisonState,
+    followupComparisonState,
+  ]);
+  const lesionComparisonPendingMessage =
+    !baselineComparisonReady && !followupComparisonReady
+      ? '检查一、检查二尚未生成病灶列表'
+      : !baselineComparisonReady
+        ? '检查一尚未生成病灶列表'
+        : !followupComparisonReady
+          ? '检查二尚未生成病灶列表'
+          : '匹配结果正在更新';
+  const comparisonLesionLabels = useMemo(() => {
+    const labels = {
+      baseline: new Map<string, string>(),
+      followup: new Map<string, string>(),
+    };
+    if (!effectiveLesionComparisonResult) return labels;
+
+    const baselineSession = tmtvSessionService.getSession('baseline');
+    const followupSession = tmtvSessionService.getSession('followup');
+    const baselineState = baselineSession
+      ? tmtvLesionService.getState(baselineSession.segmentationIds, baselineSession.sessionId)
+      : null;
+    const followupState = followupSession
+      ? tmtvLesionService.getState(followupSession.segmentationIds, followupSession.sessionId)
+      : null;
+
+    baselineState?.lesions.forEach(lesion =>
+      labels.baseline.set(lesion.id, `检查一 #${lesion.displayIndex}`)
+    );
+    followupState?.lesions.forEach(lesion =>
+      labels.followup.set(lesion.id, `检查二 #${lesion.displayIndex}`)
+    );
+    return labels;
+  }, [effectiveLesionComparisonResult]);
+  const visibleLesionMatches = effectiveLesionComparisonResult?.matches.slice(
+    0,
+    MAX_VISIBLE_LESION_MATCHES
+  );
+  const hiddenLesionMatchCount = Math.max(
+    0,
+    (effectiveLesionComparisonResult?.matches.length || 0) - MAX_VISIBLE_LESION_MATCHES
+  );
   const lesionCount = lesionState.lesions.length;
   const selectedLesionId = lesionState.selectedLesionId;
   const confirmedCount = lesionState.lesions.filter(lesion => lesion.status === 'confirmed').length;
@@ -1265,6 +1400,106 @@ export default function PanelRoiThresholdSegmentation() {
                       </span>
                     </React.Fragment>
                   ))}
+                </div>
+              )}
+            </div>
+          )}
+          {patientComparison && (
+            <div
+              data-cy="tmtvLesionComparison"
+              className="border-border border-t pt-0.5"
+            >
+              {/* 2026-09-03 功能说明：病灶匹配列表只读且可折叠，手动校正留到阶段 2.4.3。 */}
+              <button
+                type="button"
+                data-cy="toggleTmtvLesionComparison"
+                className="text-muted-foreground flex h-5 w-full items-center justify-between text-[11px] font-semibold"
+                aria-expanded={isLesionComparisonExpanded}
+                title={isLesionComparisonExpanded ? '收起病灶对比' : '展开病灶对比'}
+                onClick={() => setIsLesionComparisonExpanded(isExpanded => !isExpanded)}
+              >
+                <span>病灶对比</span>
+                <Icons.ChevronDown
+                  className={`h-3.5 w-3.5 transition-transform ${
+                    isLesionComparisonExpanded ? '' : '-rotate-90'
+                  }`}
+                />
+              </button>
+              {isLesionComparisonExpanded && (
+                <div className="flex flex-col gap-1 pb-0.5">
+                  {effectiveLesionComparisonResult ? (
+                    <>
+                      <div className="flex flex-wrap gap-x-2 gap-y-0 text-[10px] leading-4">
+                        <span className="text-green-400">
+                          {`持续 ${effectiveLesionComparisonResult.counts.persistent}`}
+                        </span>
+                        <span className="text-primary">
+                          {`新发 ${effectiveLesionComparisonResult.counts.new}`}
+                        </span>
+                        <span className="text-orange-300">
+                          {`消退 ${effectiveLesionComparisonResult.counts.resolved}`}
+                        </span>
+                        <span className="text-yellow-300">
+                          {`未匹配 ${effectiveLesionComparisonResult.counts.unmatched}`}
+                        </span>
+                      </div>
+                      {visibleLesionMatches?.length ? (
+                        <div className="ohif-scrollbar max-h-36 overflow-y-auto border-t border-white/10">
+                          {visibleLesionMatches.map(match => {
+                            const baselineLabel = match.baselineLesionId
+                              ? comparisonLesionLabels.baseline.get(match.baselineLesionId) ||
+                                '检查一病灶'
+                              : '';
+                            const followupLabel = match.followupLesionId
+                              ? comparisonLesionLabels.followup.get(match.followupLesionId) ||
+                                '检查二病灶'
+                              : '';
+                            const lesionPairLabel =
+                              baselineLabel && followupLabel
+                                ? `${baselineLabel} → ${followupLabel}`
+                                : baselineLabel || followupLabel;
+
+                            return (
+                              <div
+                                key={match.matchId}
+                                className="grid grid-cols-[4.5rem_minmax(0,1fr)_3.5rem] items-center gap-1 border-b border-white/5 py-0.5 text-[10px] leading-4 last:border-b-0"
+                                title={`${match.baselineLesionId || '-'} → ${
+                                  match.followupLesionId || '-'
+                                }`}
+                              >
+                                <span
+                                  className={`truncate font-semibold ${getLesionMatchStatusClassName(
+                                    match.status
+                                  )}`}
+                                >
+                                  {getLesionMatchStatusLabel(match.status)}
+                                </span>
+                                <span className="text-foreground truncate">{lesionPairLabel}</span>
+                                <span className="text-muted-foreground text-right tabular-nums">
+                                  {typeof match.distanceMM === 'number'
+                                    ? `${match.distanceMM.toFixed(1)} mm`
+                                    : match.reason === 'conflict'
+                                      ? '待确认'
+                                      : ''}
+                                </span>
+                              </div>
+                            );
+                          })}
+                          {hiddenLesionMatchCount > 0 && (
+                            <div className="text-muted-foreground py-1 text-center text-[10px]">
+                              {`另有 ${hiddenLesionMatchCount} 项未展开`}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-muted-foreground text-[10px]">暂无已确认病灶</div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="text-muted-foreground text-[10px]">
+                      {lesionComparisonPendingMessage}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
