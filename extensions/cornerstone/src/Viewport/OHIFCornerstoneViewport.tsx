@@ -146,8 +146,12 @@ const OHIFCornerstoneViewport = React.memo(
 
       // Cleanup function
       return () => {
-        resizeObserver.unobserve(element);
-        resizeObserver.disconnect();
+        // 2026-09-07 功能说明：无条件断开 Observer，避免 unobserve 异常时跳过 disconnect 并持有旧视口 DOM。
+        try {
+          resizeObserver.unobserve(element);
+        } finally {
+          resizeObserver.disconnect();
+        }
       };
     }, [onResize]);
 
@@ -215,17 +219,36 @@ const OHIFCornerstoneViewport = React.memo(
         // Always clear this viewport's entry from the module-level dimensions cache
         viewportDimensions.delete(viewportId);
 
-        const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
-
         // Always remove the ELEMENT_ENABLED listener, even if viewportInfo is null,
         // to prevent event listener leaks when viewportInfo is unavailable.
         const cleanupListener = () => {
           eventTarget.removeEventListener(Enums.Events.ELEMENT_ENABLED, elementEnabledHandler);
         };
 
+        // 2026-09-07 功能说明：组件本地引用必须独立于服务销毁顺序释放，避免全局 viewportRefs 持有整棵已卸载视口 DOM。
+        const releaseComponentReferences = () => {
+          try {
+            cleanupListener();
+          } finally {
+            try {
+              viewportRef.unregister();
+            } finally {
+              elementRef.current = null;
+            }
+          }
+        };
+
+        let viewportInfo;
+        try {
+          viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
+        } catch {
+          releaseComponentReferences();
+          return;
+        }
+
         if (!viewportInfo) {
           // Expected when ModeRoute cleanup already destroyed the viewport service
-          cleanupListener();
+          releaseComponentReferences();
           return;
         }
 
@@ -237,7 +260,11 @@ const OHIFCornerstoneViewport = React.memo(
         }
 
         if (onElementDisabled && typeof onElementDisabled === 'function') {
-          onElementDisabled(viewportInfo);
+          try {
+            onElementDisabled(viewportInfo);
+          } catch (error) {
+            console.warn('[OHIFViewport] onElementDisabled failed for', viewportId, error);
+          }
         }
 
         // 【关键】在 disableElement 之前手动清理 VTK 资源，不依赖 React 自动回收。
@@ -329,17 +356,7 @@ const OHIFCornerstoneViewport = React.memo(
             console.warn('[OHIFViewport] fallback also failed for', viewportId, e2);
           }
         }
-        viewportRef.unregister();
-
-        cleanupListener();
-
-        // Force-null the element ref to break any remaining references from
-        // closures or external caches to the DOM element. Without this, the
-        // DOM node can be retained by ResizeObserver callbacks or other
-        // module-level state even after the component unmounts.
-        if (elementRef) {
-          elementRef.current = null;
-        }
+        releaseComponentReferences();
       };
     }, []);
 
@@ -352,6 +369,9 @@ const OHIFCornerstoneViewport = React.memo(
     // Note: this approach does not actually end of sending network requests
     // and it uses the network cache
     useEffect(() => {
+      // 2026-09-07 功能说明：元数据异步刷新绑定当前 DOM 代次，避免退出后更新复用的 viewport。
+      let isDisposed = false;
+      const mountedElement = elementRef.current;
       const { unsubscribe } = displaySetService.subscribe(
         displaySetService.EVENTS.DISPLAY_SET_SERIES_METADATA_INVALIDATED,
         async ({
@@ -364,6 +384,10 @@ const OHIFCornerstoneViewport = React.memo(
 
           const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
 
+          if (!viewportInfo || isDisposed || elementRef.current !== mountedElement) {
+            return;
+          }
+
           if (viewportInfo.hasDisplaySet(invalidatedDisplaySetInstanceUID)) {
             const viewportData = viewportInfo.getViewportData();
             const newViewportData = await cornerstoneCacheService.invalidateViewportData(
@@ -373,52 +397,85 @@ const OHIFCornerstoneViewport = React.memo(
               displaySetService
             );
 
+            if (
+              isDisposed ||
+              !mountedElement ||
+              elementRef.current !== mountedElement ||
+              cornerstoneViewportService.getViewportInfo(viewportId) !== viewportInfo
+            ) {
+              return;
+            }
+
             const keepCamera = true;
             cornerstoneViewportService.updateViewport(viewportId, newViewportData, keepCamera);
           }
         }
       );
       return () => {
+        isDisposed = true;
         unsubscribe();
       };
     }, [viewportId]);
 
     useEffect(() => {
+      // 2026-09-07 功能说明：阻止退出后完成的旧加载任务向已卸载或复用的 viewport 回写数据。
+      let isDisposed = false;
+      const mountedElement = elementRef.current;
+
       // handle the default viewportType to be stack
       if (!viewportOptions.viewportType) {
         viewportOptions.viewportType = STACK;
       }
 
       const loadViewportData = async () => {
-        const viewportData = await cornerstoneCacheService.createViewportData(
-          displaySets,
-          viewportOptions,
-          dataSource,
-          initialImageIndex
-        );
+        try {
+          const viewportData = await cornerstoneCacheService.createViewportData(
+            displaySets,
+            viewportOptions,
+            dataSource,
+            initialImageIndex
+          );
 
-        const presentations = getViewportPresentations(viewportId, viewportOptions);
+          if (
+            isDisposed ||
+            !mountedElement ||
+            elementRef.current !== mountedElement ||
+            !cornerstoneViewportService.getViewportInfo(viewportId)
+          ) {
+            return;
+          }
 
-        // Note: This is a hack to get the grid to re-render the OHIFCornerstoneViewport component
-        // Used for segmentation hydration right now, since the logic to decide whether
-        // a viewport needs to render a segmentation lives inside the CornerstoneViewportService
-        // so we need to re-render (force update via change of the needsRerendering) so that React
-        // does the diffing and decides we should render this again (although the id and element has not changed)
-        // so that the CornerstoneViewportService can decide whether to render the segmentation or not. Not that we reached here we can turn it off.
-        if (viewportOptions.needsRerendering) {
-          viewportOptions.needsRerendering = false;
+          const presentations = getViewportPresentations(viewportId, viewportOptions);
+
+          // Note: This is a hack to get the grid to re-render the OHIFCornerstoneViewport component
+          // Used for segmentation hydration right now, since the logic to decide whether
+          // a viewport needs to render a segmentation lives inside the CornerstoneViewportService
+          // so we need to re-render (force update via change of the needsRerendering) so that React
+          // does the diffing and decides we should render this again (although the id and element has not changed)
+          // so that the CornerstoneViewportService can decide whether to render the segmentation or not. Not that we reached here we can turn it off.
+          if (viewportOptions.needsRerendering) {
+            viewportOptions.needsRerendering = false;
+          }
+
+          cornerstoneViewportService.setViewportData(
+            viewportId,
+            viewportData,
+            viewportOptions,
+            displaySetOptions,
+            presentations
+          );
+        } catch (error) {
+          if (!isDisposed) {
+            throw error;
+          }
         }
-
-        cornerstoneViewportService.setViewportData(
-          viewportId,
-          viewportData,
-          viewportOptions,
-          displaySetOptions,
-          presentations
-        );
       };
 
-      loadViewportData();
+      void loadViewportData();
+
+      return () => {
+        isDisposed = true;
+      };
     }, [viewportOptions, displaySets, dataSource]);
 
     const Notification = customizationService.getCustomization('ui.notificationComponent');

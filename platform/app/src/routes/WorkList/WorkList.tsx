@@ -276,9 +276,9 @@ function WorkList({
 
     const tmtvMode = appConfig.loadedModes?.find(m => m.routeName === 'tmtv');
     if (tmtvMode) {
-      // 2026-09-02 功能说明：当前页签整页进入对比模式，重建 Cornerstone 全局请求池，避免 SPA 重入残留。
+      // 2026-09-07 功能说明：整页重建 Cornerstone，同时替换当前历史项，避免反复对比时旧查询文档进入 BFCache。
       const compareUrl = `${tmtvMode.routeName}${dataPath || ''}?${query.toString()}`;
-      window.location.href = compareUrl;
+      window.location.replace(compareUrl);
     }
   };
 
