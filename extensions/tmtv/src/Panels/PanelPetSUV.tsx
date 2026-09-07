@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 import { DicomMetadataStore } from '@ohif/core';
 import { useTranslation } from 'react-i18next';
@@ -64,6 +64,17 @@ export default function PanelPetSUV() {
   const { displaySetService, hangingProtocolService } = servicesManager.services;
   const [metadata, setMetadata] = useState(DEFAULT_MEATADATA);
   const [ptDisplaySet, setPtDisplaySet] = useState(null);
+  const resetCrosshairsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      // 2026-09-04 功能说明：面板卸载时取消待执行命令，避免退出模式后回调访问已销毁视口。
+      if (resetCrosshairsTimerRef.current) {
+        clearTimeout(resetCrosshairsTimerRef.current);
+        resetCrosshairsTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleMetadataChange = metadata => {
     setMetadata(prevState => {
@@ -156,14 +167,18 @@ export default function PanelPetSUV() {
 
     // Crosshair position depends on the metadata values such as the positioning interaction
     // between series, so when the metadata is updated, the crosshairs need to be reset.
-    setTimeout(() => {
+    if (resetCrosshairsTimerRef.current) {
+      clearTimeout(resetCrosshairsTimerRef.current);
+    }
+    resetCrosshairsTimerRef.current = setTimeout(() => {
       commandsManager.runCommand('resetCrosshairs');
+      resetCrosshairsTimerRef.current = null;
     }, 0);
   }
   return (
     <>
       <div className="ohif-scrollbar flex min-h-0 flex-auto select-none flex-col justify-between overflow-auto">
-        <div className="flex min-h-0 flex-1 flex-col bg-background text-base">
+        <div className="bg-background flex min-h-0 flex-1 flex-col text-base">
           <PanelSection defaultOpen={true}>
             <PanelSection.Header>{t('Patient Information')}</PanelSection.Header>
             <PanelSection.Content>

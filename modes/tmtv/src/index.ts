@@ -16,6 +16,10 @@ import tmtvComparisonService from '../../../extensions/tmtv/src/services/TMTVCom
 import tmtvSessionService from '../../../extensions/tmtv/src/services/TMTVSessionService';
 import tmtvLesionComparisonService from '../../../extensions/tmtv/src/services/TMTVLesionComparisonService';
 import ComparisonSideSelector from '../../../extensions/tmtv/src/Panels/ComparisonSideSelector';
+import {
+  drainLifecycleSubscriptions,
+  runLifecycleCleanups,
+} from '../../../extensions/tmtv/src/utils/runLifecycleCleanups';
 
 const { MetadataProvider } = classes;
 
@@ -69,6 +73,8 @@ function modeFactory({ modeConfiguration }) {
      */
     //点击按钮，启动TMTV模式
     onModeEnter: ({ servicesManager, extensionManager, commandsManager }: withAppTypes) => {
+      // 2026-09-04 功能说明：异常退出后再次进入时先清除遗留订阅，避免事件监听随进入次数累积。
+      drainLifecycleSubscriptions(unsubscriptions);
       // Cancel any pending delayed metadata clear from a previous mode exit.
       // This prevents wiping the new study's metadata if the user re-enters quickly.
       if (metadataClearTimer) {
@@ -422,22 +428,20 @@ function modeFactory({ modeConfiguration }) {
         toolGroupService,
         syncGroupService,
         segmentationService,
-        cornerstoneViewportService,
         uiDialogService,
         uiModalService,
       } = servicesManager.services;
 
-      // 2026-08-31 功能说明：执行并清空模式级订阅，避免 unsubscribe 闭包跨病例保留 service 引用。
-      unsubscriptions.forEach(unsubscribe => {
-        try {
-          unsubscribe();
-        } catch (e) {
-          console.warn('[tmtv-mode] 取消订阅失败', e);
-        }
-      });
-      unsubscriptions.length = 0;
-      uiDialogService.hideAll();
-      uiModalService.hide();
+      // 2026-09-04 功能说明：先停止订阅和延迟 resize，防止销毁过程中有新事件访问旧视口。
+      drainLifecycleSubscriptions(unsubscriptions);
+      if (resizeTimer) {
+        clearTimeout(resizeTimer);
+        resizeTimer = null;
+      }
+      runLifecycleCleanups([
+        { label: 'dialog service', cleanup: () => uiDialogService.hideAll() },
+        { label: 'modal service', cleanup: () => uiModalService.hide() },
+      ]);
 
       // CRITICAL: Manually clean up tool instances BEFORE toolGroupService.destroy().
       // OrientationMarkerTool creates ResizeObservers and event listeners that are NOT
@@ -498,29 +502,32 @@ function modeFactory({ modeConfiguration }) {
         console.warn('[tmtv-mode] Tool instance cleanup failed', e);
       }
 
-      // [2026-08-28 功能] 退出 TMTV 时释放扩展层单例状态，避免 lesion voxel 索引、临时高亮 volume、SVG/viewport 引用跨病例保留
-      try {
-        tmtvLesionComparisonService.destroy();
-        tmtvLesionHighlightService.reset();
-        tmtvLesionService.destroy();
-        tmtvSegmentMaskStorageService.reset();
-        tmtvCrosshairService.reset();
-        crosshairDisplayService.reset();
-        tmtvSessionService.reset();
-        tmtvComparisonService.reset();
-      } catch (e) {
-        console.warn('[tmtv-mode] TMTV singleton cleanup failed', e);
-      }
+      // 2026-09-04 功能说明：每个单例独立清理，一个服务异常时仍继续释放其他大对象和监听器。
+      runLifecycleCleanups([
+        {
+          label: 'lesion comparison service',
+          cleanup: () => tmtvLesionComparisonService.destroy(),
+        },
+        { label: 'lesion highlight service', cleanup: () => tmtvLesionHighlightService.reset() },
+        { label: 'lesion service', cleanup: () => tmtvLesionService.destroy() },
+        {
+          label: 'segment mask storage service',
+          cleanup: () => tmtvSegmentMaskStorageService.reset(),
+        },
+        { label: 'crosshair service', cleanup: () => tmtvCrosshairService.reset() },
+        { label: 'crosshair display service', cleanup: () => crosshairDisplayService.reset() },
+        { label: 'session service', cleanup: () => tmtvSessionService.reset() },
+        { label: 'comparison service', cleanup: () => tmtvComparisonService.reset() },
+      ]);
 
-      toolGroupService.destroy();
-      syncGroupService.destroy();
-      segmentationService.destroy();
-      cornerstoneViewportService.destroy();
-      // [内存排查] 清除 pending 的 resize timer，避免回调在 cornerstoneViewportService 销毁后执行
-      if (resizeTimer) {
-        clearTimeout(resizeTimer);
-        resizeTimer = null;
-      }
+      // 2026-09-04 功能说明：OHIF 服务逐项销毁，确保部分初始化或单项异常不会阻断后续释放。
+      runLifecycleCleanups([
+        { label: 'tool group service', cleanup: () => toolGroupService.destroy() },
+        { label: 'sync group service', cleanup: () => syncGroupService.destroy() },
+        { label: 'segmentation service', cleanup: () => segmentationService.destroy() },
+      ]);
+      // 2026-09-04 功能说明：渲染引擎由 Cornerstone 扩展的 onModeExit 统一销毁；
+      // 此处提前销毁会与仍在卸载的 useViewportRendering 竞争，导致访问已删除的 imageData。
       // Delay DicomMetadataStore.clear() to allow in-flight image load requests to complete.
       // wadors/wadouri loaders have cancelFn=undefined, so HTTP requests already sent cannot
       // be cancelled. They need metadata available when createImage calls getImageFrame.

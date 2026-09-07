@@ -186,12 +186,16 @@ class TMTVSegmentMaskStorageService {
   }
 
   public reset(): void {
-    // [2026-08-28 功能] TMTV 模式退出时取消待保存任务，释放定时器闭包持有的 segmentationVolume/scalarData 大对象
+    // 2026-09-04 功能说明：退出时取消保存任务并关闭 IndexedDB 连接，释放体素闭包和数据库句柄。
     this.generation++;
     this.saveTimeoutByKey.forEach(timeout => {
       clearTimeout(timeout);
     });
     this.saveTimeoutByKey.clear();
+
+    const staleDatabasePromise = this.dbPromise;
+    this.dbPromise = null;
+    staleDatabasePromise?.then(database => database?.close()).catch(() => undefined);
   }
 
   private async persistSegmentMask(
@@ -391,7 +395,12 @@ class TMTVSegmentMaskStorageService {
             db.createObjectStore(STORE_NAME, { keyPath: 'storageKey' });
           }
         };
-        request.onsuccess = () => resolve(request.result);
+        request.onsuccess = () => {
+          const database = request.result;
+          // 2026-09-04 功能说明：数据库升级或删除时主动释放旧连接，避免浏览器长期保留阻塞句柄。
+          database.onversionchange = () => database.close();
+          resolve(database);
+        };
         request.onerror = () => resolve(null);
         request.onblocked = () => resolve(null);
       });
