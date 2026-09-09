@@ -137,6 +137,8 @@ export default function resetComparisonViewports(servicesManager, metadataProvid
       }
     });
   }
+  // 2026-09-09 功能说明：重置结果成为新的 MIP 布局恢复基准，防止双击还原带回旧旋转中心。
+  comparison.captureMIPCameraState();
   if (failures) {
     uiNotificationService?.show?.({
       title: '重置视图',

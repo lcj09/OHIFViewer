@@ -1397,6 +1397,14 @@ class TMTVCrosshairService {
     // 仅处理左键
     if (evt.button !== 0) return;
 
+    // 2026-09-08 功能说明：MIP 的 Trackball 左键由 3D 旋转独占，十字线不能同时定位或拖动。
+    if (this._isMipViewport(viewportId)) {
+      const activeTool = this.servicesManager?.services?.toolGroupService
+        ?.getToolGroupForViewport?.(viewportId)
+        ?.getActivePrimaryMouseButtonTool?.();
+      if (activeTool === 'TrackballRotate') return;
+    }
+
     // [边界处理] 如果 dragging/rotating 仍为 true，说明上一次 mouseup 丢失
     // （如鼠标移出浏览器窗口），先结束上一次操作，避免状态卡死
     if (this.dragging) {

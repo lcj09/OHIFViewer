@@ -1,11 +1,17 @@
 import applyTMTVZoomSync from './applyTMTVZoomSync';
 import { syncComparisonCamera } from './createComparisonCameraSynchronizer';
-import { syncTMTVZoom, TMTV_ZOOM_TYPE } from './createTMTVZoomSynchronizer';
+import {
+  setTMTVZoomLayoutSuspended,
+  syncTMTVZoom,
+  TMTV_ZOOM_TYPE,
+} from './createTMTVZoomSynchronizer';
 import { syncTMTVSameStudyCamera } from './createTMTVSameStudyCameraSynchronizer';
 import initialState from '../services/TMTVComparisonInitialState';
 
 jest.mock('@cornerstonejs/core', () => ({ Enums: { Events: { CAMERA_MODIFIED: 'camera' } } }));
-jest.mock('@cornerstonejs/tools', () => ({ SynchronizerManager: { createSynchronizer: jest.fn() } }));
+jest.mock('@cornerstonejs/tools', () => ({
+  SynchronizerManager: { createSynchronizer: jest.fn() },
+}));
 jest.mock('../services/TMTVComparisonInitialState', () => ({
   __esModule: true,
   default: { get: jest.fn() },
@@ -101,7 +107,10 @@ describe('comparison toolbar camera and zoom combinations', () => {
     };
   });
 
-  afterEach(() => jest.clearAllMocks());
+  afterEach(() => {
+    setTMTVZoomLayoutSuspended(false);
+    jest.clearAllMocks();
+  });
 
   it('maps scroll and pan relative to separate initial centers, without copying zoom', () => {
     const next = {
@@ -181,16 +190,61 @@ describe('comparison toolbar camera and zoom combinations', () => {
     const from = { ...source, viewportId: 'baselineMIPSagittal' };
     const to = { ...target, viewportId: 'followupMIPSagittal' };
     sync(
-      { ...camera(), position: [110, 20, 30], viewPlaneNormal: [1, 0, 0], viewUp: [0, 0, 1] },
+      {
+        ...camera(),
+        focalPoint: [10, 80, 90],
+        position: [110, 80, 90],
+        viewPlaneNormal: [1, 0, 0],
+        viewUp: [0, 0, 1],
+      },
       camera(),
       from,
       to
     );
-    expect(viewports.get(to.viewportId).getCamera()).toMatchObject({
+    expect(viewports.get(to.viewportId).setCamera).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        focalPoint: [110, 20, 30],
+        position: [210, 20, 30],
+        viewUp: [0, 0, 1],
+      })
+    );
+    expect(viewports.get(to.viewportId).setCamera.mock.calls.at(-1)[0]).not.toHaveProperty(
+      'viewPlaneNormal'
+    );
+  });
+
+  it('applies an MIP rotation as a delta when the target had a different orientation before sync', () => {
+    const from = { ...source, viewportId: 'baselineMIPSagittal' };
+    const to = { ...target, viewportId: 'followupMIPSagittal' };
+    const targetViewport = viewports.get(to.viewportId);
+    targetViewport.setCamera({
       focalPoint: [110, 20, 30],
-      position: [210, 20, 30],
-      viewPlaneNormal: [1, 0, 0],
+      position: [110, 120, 30],
+      viewPlaneNormal: [0, 1, 0],
+      viewUp: [0, 0, 1],
     });
+    targetViewport.setCamera.mockClear();
+
+    sync(
+      {
+        ...camera(),
+        position: [110, 20, 30],
+        viewPlaneNormal: [1, 0, 0],
+        viewUp: [0, 0, 1],
+      },
+      camera(),
+      from,
+      to
+    );
+
+    expect(targetViewport.setCamera).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        focalPoint: [110, 20, 30],
+        position: [110, 20, -70],
+        viewUp: [1, 0, 0],
+      })
+    );
+    expect(targetViewport.setCamera.mock.calls.at(-1)[0]).not.toHaveProperty('viewPlaneNormal');
   });
 
   it('blocks feedback from another modality synchronizer during a camera update', () => {
@@ -310,6 +364,29 @@ describe('comparison toolbar camera and zoom combinations', () => {
 
     expect(targetViewport.setCamera).not.toHaveBeenCalled();
     expect(targetViewport.render).not.toHaveBeenCalled();
+  });
+
+  it('ignores automatic camera fitting while the comparison layout is resizing', () => {
+    const sourceViewport = viewports.get(source.viewportId);
+    const targetViewport = viewports.get(target.viewportId);
+    sourceViewport.setCamera({ parallelScale: 5000 });
+    targetViewport.setCamera.mockClear();
+    setTMTVZoomLayoutSuspended(true);
+
+    syncTMTVZoom(
+      null,
+      source,
+      target,
+      {
+        detail: {
+          previousCamera: { ...camera(), parallelScale: 150 },
+          camera: { ...camera(), parallelScale: 5000 },
+        },
+      },
+      { servicesManager }
+    );
+
+    expect(targetViewport.setCamera).not.toHaveBeenCalled();
   });
 
   it('applies a valid normalized zoom idempotently and rejects stale or invalid camera events', () => {

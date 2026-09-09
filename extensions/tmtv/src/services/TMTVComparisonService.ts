@@ -4,6 +4,7 @@ import createComparisonCameraSynchronizer, {
   COMPARISON_CAMERA_TYPE,
 } from '../utils/createComparisonCameraSynchronizer';
 import applyTMTVZoomSync from '../utils/applyTMTVZoomSync';
+import { setTMTVZoomLayoutSuspended } from '../utils/createTMTVZoomSynchronizer';
 import createTMTVSameStudyCameraSynchronizer, {
   TMTV_SAME_STUDY_CAMERA_TYPE,
 } from '../utils/createTMTVSameStudyCameraSynchronizer';
@@ -11,6 +12,9 @@ import fitComparisonViewports, {
   reconcileComparisonViewportScales,
 } from '../utils/fitComparisonViewports';
 import { COMPARISON_VIEWPORT_IDS_BY_SIDE } from '../utils/comparisonViewportIds';
+import installComparisonMIPResizeGuard, {
+  ComparisonMIPResizeGuard,
+} from '../utils/installComparisonMIPResizeGuard';
 
 export type TMTVComparisonSide = 'baseline' | 'followup';
 type TMTVComparisonModality = 'CT' | 'PT' | 'Fusion' | 'MIP';
@@ -156,6 +160,7 @@ class TMTVComparisonService {
   private comparisonScaleReferences = new Map<string, { current: number; initial: number }>();
   private fittedViewports = new WeakMap<object, string>();
   private comparisonInteractionStarted = false;
+  private mipResizeGuard: ComparisonMIPResizeGuard | null = null;
   private viewportResizeBindings = new Map<
     string,
     {
@@ -178,6 +183,12 @@ class TMTVComparisonService {
       this.applyingVoi = previous;
     }
   }
+
+  /** 2026-09-09 功能说明：将当前 MIP 相机登记为布局重建基准，供重置等显式操作完成后刷新。 */
+  public captureMIPCameraState(): void {
+    this.mipResizeGuard?.capture();
+  }
+
   private listeners = new Set<TMTVComparisonListener>();
   private state: TMTVComparisonState = {
     isComparisonMode: false,
@@ -189,6 +200,8 @@ class TMTVComparisonService {
    * 2026-08-31 功能说明：初始化两次检查对比状态服务，只保存 servicesManager 引用并在退出模式时释放。
    */
   public init(servicesManager: any) {
+    this.mipResizeGuard?.dispose();
+    this.mipResizeGuard = null;
     if (this.initialFitTimer) clearTimeout(this.initialFitTimer);
     if (this.scaleReconcileTimer) clearTimeout(this.scaleReconcileTimer);
     this.initialFitTimer = null;
@@ -198,6 +211,7 @@ class TMTVComparisonService {
     this.comparisonScaleReferences.clear();
     this.fittedViewports = new WeakMap();
     this.comparisonInteractionStarted = false;
+    setTMTVZoomLayoutSuspended(false);
     this.viewportSubscription?.unsubscribe();
     this.viewportSubscription = null;
     this.gridSubscription?.unsubscribe();
@@ -205,6 +219,10 @@ class TMTVComparisonService {
     this.clearViewportResizeBindings();
     this.clearVoiBindings();
     this.servicesManager = servicesManager || null;
+    // 2026-09-08 功能说明：在全局延迟 resize 的同步边界内保护对比 MIP 相机，并在模式退出时还原原方法。
+    this.mipResizeGuard = installComparisonMIPResizeGuard(this.servicesManager, () =>
+      this.isComparisonProtocolActive()
+    );
     // 2026-09-01 功能说明：挂片协议创建视口前注册同检查相机同步器，避免回退到完整相机复制。
     servicesManager?.services?.syncGroupService?.addSynchronizerType?.(
       TMTV_SAME_STUDY_CAMERA_TYPE,
@@ -220,10 +238,12 @@ class TMTVComparisonService {
       this.viewportSubscription = viewportService.subscribe(
         viewportService.EVENTS.VIEWPORT_VOLUMES_CHANGED,
         () => {
+          this.mipResizeGuard?.restore();
           this.refreshViewportResizeBindings();
           this.applyComparisonStudySyncFromSettings();
           this.scheduleInitialViewportFit();
           this.scheduleViewportScaleReconciliation();
+          this.mipResizeGuard?.capture();
         }
       );
     }
@@ -232,6 +252,7 @@ class TMTVComparisonService {
       this.gridSubscription = viewportGridService.subscribe(
         viewportGridService.EVENTS.GRID_STATE_CHANGED,
         () => {
+          this.mipResizeGuard?.capture();
           this.refreshViewportResizeBindings();
           this.scheduleViewportScaleReconciliation();
         }
@@ -278,22 +299,35 @@ class TMTVComparisonService {
     }
   }
 
-  /** 2026-09-01 功能说明：布局最大化/还原后有限次数复核同侧显示尺度，不持续轮询。 */
+  /** 2026-09-08 功能说明：布局稳定前暂停缩放传播，并有限次数复核同侧显示尺度。 */
   private scheduleViewportScaleReconciliation(resetAttempts = true) {
-    if (!this.isComparisonProtocolActive()) return;
-    if (resetAttempts) this.scaleReconcileAttempt = 0;
+    if (!this.isComparisonProtocolActive()) {
+      setTMTVZoomLayoutSuspended(false);
+      return;
+    }
+    if (resetAttempts) {
+      this.scaleReconcileAttempt = 0;
+      setTMTVZoomLayoutSuspended(true);
+    }
     if (this.scaleReconcileTimer) clearTimeout(this.scaleReconcileTimer);
     this.scaleReconcileTimer = setTimeout(() => {
       this.scaleReconcileTimer = null;
-      if (!this.isComparisonProtocolActive()) return;
+      if (!this.isComparisonProtocolActive()) {
+        setTMTVZoomLayoutSuspended(false);
+        return;
+      }
       try {
+        this.mipResizeGuard?.restore();
         reconcileComparisonViewportScales(this.servicesManager, this.comparisonScaleReferences);
+        this.mipResizeGuard?.capture();
       } catch (error) {
         console.warn('[TMTVComparisonService] 布局恢复后对齐视口尺度失败', error);
       }
       this.scaleReconcileAttempt++;
       if (this.scaleReconcileAttempt < 4) {
         this.scheduleViewportScaleReconciliation(false);
+      } else {
+        setTMTVZoomLayoutSuspended(false);
       }
     }, 150);
   }
@@ -366,6 +400,8 @@ class TMTVComparisonService {
    * 2026-08-31 功能说明：释放订阅和服务引用，避免跨病例保留对比模式状态。
    */
   public reset() {
+    this.mipResizeGuard?.dispose();
+    this.mipResizeGuard = null;
     if (this.initialFitTimer) clearTimeout(this.initialFitTimer);
     if (this.scaleReconcileTimer) clearTimeout(this.scaleReconcileTimer);
     this.initialFitTimer = null;
@@ -375,6 +411,7 @@ class TMTVComparisonService {
     this.comparisonScaleReferences.clear();
     this.fittedViewports = new WeakMap();
     this.comparisonInteractionStarted = false;
+    setTMTVZoomLayoutSuspended(false);
     if (typeof document !== 'undefined') {
       for (const event of ['pointerdown', 'wheel', 'keydown']) {
         document.removeEventListener(event, this.captureInitialState, true);

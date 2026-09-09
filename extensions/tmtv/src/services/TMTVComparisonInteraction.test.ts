@@ -51,7 +51,7 @@ describe('TMTV comparison interactions', () => {
         viewUp: [0, -1, 0],
       }),
       worldToCanvas: jest.fn(point => [point[0], point[1]]),
-      canvasToWorld: point => [point[0], point[1], center[2]],
+      canvasToWorld: jest.fn(point => [point[0], point[1], center[2]]),
       setProperties: jest.fn((properties, volumeId, suppressEvents) => {
         if (!suppressEvents) emitVoi(viewport, volumeId, properties.voiRange);
       }),
@@ -103,6 +103,11 @@ describe('TMTV comparison interactions', () => {
         syncGroupService: {
           addViewportToSyncGroup: jest.fn(),
           removeViewportFromSyncGroup: jest.fn(),
+        },
+        toolGroupService: {
+          getToolGroupForViewport: () => ({
+            getActivePrimaryMouseButtonTool: () => 'MIPJumpToClick',
+          }),
         },
       },
     };
@@ -314,6 +319,24 @@ describe('TMTV comparison interactions', () => {
     Array.from(mip.element.querySelectorAll('circle')).forEach((circle: SVGCircleElement) => {
       expect(circle.style.display).toBe('none');
     });
+  });
+
+  it('does not let the MIP crosshair handler turn a trackball drag into pan', () => {
+    const mip = viewports.get('baselineMIPSagittal');
+    crosshairs.addViewport(mip.id, mip);
+    crosshairs.setVisible(true);
+    servicesManager.services.toolGroupService.getToolGroupForViewport = () => ({
+      getActivePrimaryMouseButtonTool: () => 'TrackballRotate',
+    });
+    mip.canvasToWorld.mockClear();
+    mip.worldToCanvas.mockClear();
+
+    mip.element.dispatchEvent(
+      new MouseEvent('mousedown', { button: 0, clientX: 220, clientY: 250 })
+    );
+
+    expect(mip.canvasToWorld).not.toHaveBeenCalled();
+    expect(mip.worldToCanvas).not.toHaveBeenCalled();
   });
 
   it('cleans comparison overlays, observers and mouse listeners across repeated layout changes', () => {

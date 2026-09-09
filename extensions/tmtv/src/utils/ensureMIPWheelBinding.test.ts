@@ -1,6 +1,9 @@
 import { getEnabledElement } from '@cornerstonejs/core';
 import VolumeRotateTool from '@cornerstonejs/tools/tools/VolumeRotateTool';
-import ensureMIPWheelBinding, { belongsToComparisonCameraGroup } from './ensureMIPWheelBinding';
+import ensureMIPWheelBinding, {
+  belongsToComparisonCameraGroup,
+  releaseMIPTrackballResizeBindings,
+} from './ensureMIPWheelBinding';
 
 jest.mock('@cornerstonejs/core', () => ({ getEnabledElement: jest.fn() }));
 jest.mock('@cornerstonejs/tools/tools/base', () => ({
@@ -12,7 +15,11 @@ jest.mock('@cornerstonejs/tools/tools/base', () => ({
   },
 }));
 
-const toolNames = { StackScroll: 'StackScroll', VolumeRotate: 'VolumeRotateMouseWheel' };
+const toolNames = {
+  StackScroll: 'StackScroll',
+  VolumeRotate: 'VolumeRotateMouseWheel',
+  TrackballRotateTool: 'TrackballRotate',
+};
 const enums = { MouseBindings: { Wheel: 524288 }, ToolModes: { Active: 'Active' } };
 
 describe('MIP wheel bindings', () => {
@@ -68,6 +75,43 @@ describe('MIP wheel bindings', () => {
 
   it('tolerates missing tool groups during layout disposal', () => {
     expect(() => ensureMIPWheelBinding({}, toolNames, enums)).not.toThrow();
+  });
+
+  it('removes trackball resize observers after every activation without changing interaction callbacks', () => {
+    const observers = [
+      { disconnect: jest.fn() },
+      { disconnect: jest.fn() },
+      { disconnect: jest.fn() },
+    ];
+    const originalOnSetToolActive = jest.fn(function () {
+      this._resizeObservers.set('restoredMIPSagittal', observers[2]);
+    });
+    const trackball = {
+      _resizeObservers: new Map([
+        ['baselineMIPSagittal', observers[0]],
+        ['followupMIPSagittal', observers[1]],
+      ]),
+      onSetToolDisabled: jest.fn(function () {
+        this._resizeObservers.forEach(observer => observer.disconnect());
+        this._resizeObservers.clear();
+      }),
+      onSetToolActive: originalOnSetToolActive,
+      mouseDragCallback: jest.fn(),
+    };
+    const group = { _toolInstances: { TrackballRotate: trackball } };
+
+    releaseMIPTrackballResizeBindings(group, toolNames);
+    observers.slice(0, 2).forEach(observer => expect(observer.disconnect).toHaveBeenCalledTimes(1));
+    trackball.onSetToolActive();
+    expect(originalOnSetToolActive).toHaveBeenCalledTimes(1);
+    expect(observers[2].disconnect).toHaveBeenCalledTimes(1);
+    expect(trackball._resizeObservers.size).toBe(0);
+
+    releaseMIPTrackballResizeBindings(group, toolNames);
+    trackball.onSetToolActive();
+    expect(originalOnSetToolActive).toHaveBeenCalledTimes(2);
+    expect(observers[2].disconnect).toHaveBeenCalledTimes(2);
+    expect(trackball.mouseDragCallback).toBeDefined();
   });
 
   it.each(['Baseline', 'Followup'])(

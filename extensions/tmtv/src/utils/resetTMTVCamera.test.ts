@@ -17,6 +17,7 @@ describe('resetTMTVCamera', () => {
           viewport.initialCamera = JSON.parse(JSON.stringify(viewport.camera));
         }
       }),
+      getCamera: () => viewport.camera,
       getZoom: () => viewport.initialCamera.parallelScale / viewport.camera.parallelScale,
     };
     return viewport;
@@ -44,6 +45,31 @@ describe('resetTMTVCamera', () => {
     expect(viewport.setCamera).toHaveBeenCalledWith(captured, true);
     expect(viewport.camera).toEqual(captured);
     expect(viewport.initialCamera).toEqual(captured);
+    expect(viewport.getZoom()).toBe(1);
+  });
+
+  it('keeps the fitted camera when the captured camera uses a stale placeholder center', () => {
+    const viewport = makeViewport();
+    viewport.resetCamera.mockImplementation(options => {
+      viewport.camera = {
+        parallelScale: 100,
+        focalPoint: [0, 0, -700],
+        position: [0, 0, -600],
+      };
+      if (options.storeAsInitialCamera) {
+        viewport.initialCamera = JSON.parse(JSON.stringify(viewport.camera));
+      }
+    });
+    const placeholder = {
+      parallelScale: 100,
+      focalPoint: [0, 0, 0],
+      position: [100, 0, 0],
+    };
+
+    expect(resetTMTVCamera(viewport, placeholder)).toBe(true);
+    expect(viewport.setCamera).not.toHaveBeenCalled();
+    expect(viewport.camera.focalPoint).toEqual([0, 0, -700]);
+    expect(viewport.initialCamera).toEqual(viewport.camera);
     expect(viewport.getZoom()).toBe(1);
   });
 

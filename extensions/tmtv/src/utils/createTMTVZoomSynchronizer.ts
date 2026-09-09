@@ -5,12 +5,22 @@ import { SynchronizerManager } from '@cornerstonejs/tools';
 export const TMTV_ZOOM_TYPE = 'tmtvzoom';
 
 const validScale = value => Number.isFinite(value) && value > 0;
+let layoutSyncSuspended = false;
+
+/** 2026-09-08 功能说明：布局尺寸尚未稳定时阻断自动 fit 产生的缩放事件跨视口传播。 */
+export function setTMTVZoomLayoutSuspended(suspended: boolean): void {
+  layoutSyncSuspended = suspended === true;
+}
 
 /**
  * 2026-09-01 功能说明：仅同步真实缩放事件，并按源视口初始相机计算归一化 zoom。
  * 滚轮翻页、MIP 旋转和定位产生的 CAMERA_MODIFIED 不应重复调用 setZoom。
  */
 export function syncTMTVZoom(_sync, source, target, event, { servicesManager } = {}) {
+  if (layoutSyncSuspended) {
+    return;
+  }
+
   const currentScale = event?.detail?.camera?.parallelScale;
   const previousScale = event?.detail?.previousCamera?.parallelScale;
   if (!validScale(currentScale) || !validScale(previousScale) || currentScale === previousScale) {
