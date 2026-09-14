@@ -2,7 +2,7 @@ import { cache, imageLoadPoolManager, Enums } from '@cornerstonejs/core';
 import zip from 'lodash.zip';
 import compact from 'lodash.compact';
 import flatten from 'lodash.flatten';
-import interleaveTopToBottom from './interleaveTopToBottom';
+import interleaveTopToBottom, { clearLoaderCache } from './interleaveTopToBottom';
 
 jest.mock('@cornerstonejs/core', () => ({
   cache: {
@@ -68,6 +68,7 @@ describe('interleaveTopToBottom', () => {
   };
 
   beforeEach(() => {
+    clearLoaderCache();
     jest.clearAllMocks();
     (cache.getVolume as jest.Mock).mockReturnValue(mockVolume);
     mockVolume.getImageLoadRequests.mockReturnValue([mockImageLoadRequest]);
@@ -100,6 +101,63 @@ describe('interleaveTopToBottom', () => {
     expect(compact).toHaveBeenCalled();
     expect(flatten).toHaveBeenCalled();
     expect(result).toBeInstanceOf(Map);
+  });
+
+  it('should publish plain volume memory stats and clear them on exit', () => {
+    const diagnosticVolume = {
+      ...mockVolume,
+      volumeId: mockVolumeInput.volumeId,
+      dimensions: [512, 512, 100],
+      dataType: 'Int16Array',
+      imageIds: new Array(100),
+      metadata: {
+        SeriesInstanceUID: 'test-series-uid',
+        Modality: 'CT',
+      },
+    };
+    Object.defineProperty(diagnosticVolume, 'sizeInBytes', {
+      get: () => {
+        throw new Error('voxelManager is not ready');
+      },
+    });
+    (cache.getVolume as jest.Mock).mockReturnValue(diagnosticVolume);
+
+    interleaveTopToBottom(defaultParameters);
+
+    const stats = (globalThis as any).__tmtvVolumeMemoryStats;
+    expect(stats.uniqueVolumeCount).toBe(1);
+    expect(stats.totalRawMB).toBe(50);
+    expect(stats.volumes[0]).toEqual(
+      expect.objectContaining({
+        volumeId: mockVolumeInput.volumeId,
+        modality: 'CT',
+        dimensions: [512, 512, 100],
+        dataType: 'Int16Array',
+        imageCount: 100,
+        rawMB: 50,
+        viewportIds: ['test-viewport-id'],
+      })
+    );
+    expect(JSON.stringify(stats)).not.toContain('getImageLoadRequests');
+
+    clearLoaderCache();
+
+    expect((globalThis as any).__tmtvVolumeMemoryStats).toBeUndefined();
+  });
+
+  it('should never interrupt image loading when memory diagnostics fail', () => {
+    const unstableVolume = {
+      ...mockVolume,
+      volumeId: mockVolumeInput.volumeId,
+      get dimensions() {
+        throw new Error('volume metadata is not ready');
+      },
+    };
+    (cache.getVolume as jest.Mock).mockReturnValue(unstableVolume);
+
+    expect(() => interleaveTopToBottom(defaultParameters)).not.toThrow();
+    expect(imageLoadPoolManager.addRequest).toHaveBeenCalled();
+    expect((globalThis as any).__tmtvVolumeMemoryStats).toBeUndefined();
   });
 
   it('should process displaySets without skipLoading option', () => {

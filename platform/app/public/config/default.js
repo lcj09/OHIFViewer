@@ -46,10 +46,9 @@ window.config = {
     interaction: 100,
     // [2026-07-22 内存优化] 从75降到25，减少缩略图并发请求
     thumbnail: 25,
-    // [2026-07-22 内存优化] 从25降到6，匹配3个web worker的解码能力
-    // 25个并发请求导致大量未解码DICOM数据堆积在内存中，触发C++ GC(3984ms)
-    // 6个并发请求让下载速度匹配解码速度，避免内存堆积
-    prefetch: 6,
+    // 2026-09-09 功能说明：与3个解码 Worker 对齐，
+    // 避免每个 Worker 外再积压一份大切片上传缓冲。
+    prefetch: 3,
   },
   showErrorDetails: 'always', // 'always', 'dev', 'production'
   // filterQueryParam: false,
