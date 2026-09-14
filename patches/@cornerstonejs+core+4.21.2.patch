@@ -148,6 +148,83 @@ index 2d19188..763edd8 100644
          if (volume.isDynamicVolume()) {
              updateDynamicVolumeTexture();
              return;
+diff --git a/node_modules/@cornerstonejs/core/dist/esm/eventTarget.js b/node_modules/@cornerstonejs/core/dist/esm/eventTarget.js
+index 20c9dda..4288a68 100644
+--- a/node_modules/@cornerstonejs/core/dist/esm/eventTarget.js
++++ b/node_modules/@cornerstonejs/core/dist/esm/eventTarget.js
+@@ -4,6 +4,9 @@ class CornerstoneEventTarget {
+         this.debouncedListeners = {};
+     }
+     reset() {
++        Object.values(this.debouncedListeners).forEach((debouncedCallbacks) => {
++            debouncedCallbacks.forEach((debounced) => clearTimeout(debounced.timeoutId));
++        });
+         this.listeners = {};
+         this.debouncedListeners = {};
+     }
+@@ -24,34 +27,50 @@ class CornerstoneEventTarget {
+         this.listeners[type].push(callback);
+     }
+     addEventListenerDebounced(type, callback, delay) {
+-        this.debouncedListeners[type] = this.debouncedListeners[type] || {};
++        // 2026-09-10 功能说明：按函数引用保存防抖监听器，避免同名闭包字符串化后互相覆盖。
++        this.debouncedListeners[type] = this.debouncedListeners[type] || new Map();
+         const debouncedCallbacks = this.debouncedListeners[type];
+-        if (!debouncedCallbacks[callback]) {
++        if (!debouncedCallbacks.has(callback)) {
+             const handle = (event) => {
+-                if (debouncedCallbacks[callback]) {
+-                    clearTimeout(debouncedCallbacks[callback].timeoutId);
++                const debounced = debouncedCallbacks.get(callback);
++                if (debounced) {
++                    clearTimeout(debounced.timeoutId);
++                    debounced.timeoutId = setTimeout(() => {
++                        callback.call(this, event);
++                    }, delay);
+                 }
+-                debouncedCallbacks[callback].timeoutId = setTimeout(() => {
+-                    callback.call(this, event);
+-                }, delay);
+             };
+-            debouncedCallbacks[callback] = {
++            debouncedCallbacks.set(callback, {
+                 original: callback,
+                 handle,
+                 timeoutId: null,
+-            };
++            });
+             this.addEventListener(type, handle);
+         }
+     }
+     removeEventListenerDebounced(type, callback) {
+-        if (this.debouncedListeners[type]?.[callback]) {
+-            const debounced = this.debouncedListeners[type][callback];
++        const debouncedCallbacks = this.debouncedListeners[type];
++        const debounced = debouncedCallbacks?.get(callback);
++        if (debounced) {
+             this.removeEventListener(type, debounced.handle);
+             clearTimeout(debounced.timeoutId);
+-            delete this.debouncedListeners[type][callback];
++            debouncedCallbacks.delete(callback);
++            if (debouncedCallbacks.size === 0) {
++                delete this.debouncedListeners[type];
++            }
+         }
+     }
+     removeEventListener(type, callback) {
++        const debouncedCallbacks = this.debouncedListeners[type];
++        const debounced = debouncedCallbacks?.get(callback);
++        if (debounced) {
++            callback = debounced.handle;
++            clearTimeout(debounced.timeoutId);
++            debouncedCallbacks.delete(debounced.original);
++            if (debouncedCallbacks.size === 0) {
++                delete this.debouncedListeners[type];
++            }
++        }
+         if (!this.listeners[type]) {
+             return;
+         }
 diff --git a/node_modules/@cornerstonejs/core/dist/esm/utilities/generateVolumePropsFromImageIds.js b/node_modules/@cornerstonejs/core/dist/esm/utilities/generateVolumePropsFromImageIds.js
 index cba0ad6..2eeafdd 100644
 --- a/node_modules/@cornerstonejs/core/dist/esm/utilities/generateVolumePropsFromImageIds.js
@@ -219,73 +296,3 @@ index cba0ad6..2eeafdd 100644
          case 24:
              return 'Uint8Array';
          case 32:
-diff --git a/node_modules/@cornerstonejs/core/node_modules/.bin/vtkDataConverter b/node_modules/@cornerstonejs/core/node_modules/.bin/vtkDataConverter
-new file mode 100644
-index 0000000..654903c
---- /dev/null
-+++ b/node_modules/@cornerstonejs/core/node_modules/.bin/vtkDataConverter
-@@ -0,0 +1,15 @@
-+#!/bin/sh
-+basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
-+
-+case `uname` in
-+    *CYGWIN*) basedir=`cygpath -w "$basedir"`;;
-+esac
-+
-+if [ -x "$basedir/node" ]; then
-+  "$basedir/node"  "$basedir/../../../../@kitware/vtk.js/Utilities/DataGenerator/convert-cli.js" "$@"
-+  ret=$?
-+else 
-+  node  "$basedir/../../../../@kitware/vtk.js/Utilities/DataGenerator/convert-cli.js" "$@"
-+  ret=$?
-+fi
-+exit $ret
-diff --git a/node_modules/@cornerstonejs/core/node_modules/.bin/vtkDataConverter.cmd b/node_modules/@cornerstonejs/core/node_modules/.bin/vtkDataConverter.cmd
-new file mode 100644
-index 0000000..1e63992
---- /dev/null
-+++ b/node_modules/@cornerstonejs/core/node_modules/.bin/vtkDataConverter.cmd
-@@ -0,0 +1,7 @@
-+@IF EXIST "%~dp0\node.exe" (
-+  "%~dp0\node.exe"  "%~dp0\..\..\..\..\@kitware\vtk.js\Utilities\DataGenerator\convert-cli.js" %*
-+) ELSE (
-+  @SETLOCAL
-+  @SET PATHEXT=%PATHEXT:;.JS;=;%
-+  node  "%~dp0\..\..\..\..\@kitware\vtk.js\Utilities\DataGenerator\convert-cli.js" %*
-+)
-\ No newline at end of file
-diff --git a/node_modules/@cornerstonejs/core/node_modules/.bin/xml2json b/node_modules/@cornerstonejs/core/node_modules/.bin/xml2json
-new file mode 100644
-index 0000000..81288c6
---- /dev/null
-+++ b/node_modules/@cornerstonejs/core/node_modules/.bin/xml2json
-@@ -0,0 +1,15 @@
-+#!/bin/sh
-+basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
-+
-+case `uname` in
-+    *CYGWIN*) basedir=`cygpath -w "$basedir"`;;
-+esac
-+
-+if [ -x "$basedir/node" ]; then
-+  "$basedir/node"  "$basedir/../../../../@kitware/vtk.js/Utilities/XMLConverter/xml2json-cli.js" "$@"
-+  ret=$?
-+else 
-+  node  "$basedir/../../../../@kitware/vtk.js/Utilities/XMLConverter/xml2json-cli.js" "$@"
-+  ret=$?
-+fi
-+exit $ret
-diff --git a/node_modules/@cornerstonejs/core/node_modules/.bin/xml2json.cmd b/node_modules/@cornerstonejs/core/node_modules/.bin/xml2json.cmd
-new file mode 100644
-index 0000000..e185e49
---- /dev/null
-+++ b/node_modules/@cornerstonejs/core/node_modules/.bin/xml2json.cmd
-@@ -0,0 +1,7 @@
-+@IF EXIST "%~dp0\node.exe" (
-+  "%~dp0\node.exe"  "%~dp0\..\..\..\..\@kitware\vtk.js\Utilities\XMLConverter\xml2json-cli.js" %*
-+) ELSE (
-+  @SETLOCAL
-+  @SET PATHEXT=%PATHEXT:;.JS;=;%
-+  node  "%~dp0\..\..\..\..\@kitware\vtk.js\Utilities\XMLConverter\xml2json-cli.js" %*
-+)
-\ No newline at end of file
