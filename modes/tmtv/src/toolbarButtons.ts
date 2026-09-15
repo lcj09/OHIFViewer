@@ -488,6 +488,10 @@ const toolbarButtons = [
       ),
       evaluate: [
         {
+          name: 'evaluate.cornerstone.webGPU',
+          disabledText: '当前浏览器或显卡未提供 WebGPU，无法使用打点分割',
+        },
+        {
           name: 'evaluate.cornerstone.segmentation',
           toolNames: ['RegionSegmentPlus'],
           disabledText: i18n.t('Buttons:Create new segmentation to enable this tool.'),

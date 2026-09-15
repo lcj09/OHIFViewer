@@ -419,6 +419,21 @@ export default function getToolbarModule({ servicesManager, extensionManager }: 
       },
     },
     {
+      name: 'evaluate.cornerstone.webGPU',
+      evaluate: ({ disabledText }) => {
+        // [2026-09-14 修复] WebGPU 不可用或 GrowCut 已探测失败时禁用依赖 GPU 的分割工具。
+        const growCutWebGPUStatus = (window as any).__cornerstoneGrowCutWebGPUSupported;
+
+        if (!navigator.gpu || growCutWebGPUStatus === false) {
+          return getDisabledState(disabledText ?? i18n.t('Buttons:WebGPU is not available'));
+        }
+
+        return {
+          disabled: false,
+        };
+      },
+    },
+    {
       name: 'evaluate.cornerstoneTool',
       evaluate: ({ viewportId, button, toolNames, disabledText }) => {
         const toolGroup = toolGroupService.getToolGroupForViewport(viewportId);

@@ -48,7 +48,7 @@ window.config = {
     thumbnail: 25,
     // 2026-09-09 功能说明：与3个解码 Worker 对齐，
     // 避免每个 Worker 外再积压一份大切片上传缓冲。
-    prefetch: 3,
+    prefetch: 6,
   },
   showErrorDetails: 'always', // 'always', 'dev', 'production'
   // filterQueryParam: false,
