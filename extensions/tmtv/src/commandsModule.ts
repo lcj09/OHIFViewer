@@ -116,8 +116,8 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
   // 功能：根据PT DisplaySet的元数据判断SUV是否可用，返回对应的VOI范围
   //
   // 返回值：
-  //   - SUV可用时：{ windowWidth: 5, windowCenter: 2.5 }
-  //     对应SUV值范围 0~5（临床常用PET显示范围）
+  //   - SUV可用时：{ windowWidth: 6, windowCenter: 3 }
+  //     对应SUV值范围 0~6（TMTV PET默认对比显示范围）
   //   - SUV不可用时：null（由调用方决定回退策略）
   //
   // 数据来源：
@@ -145,9 +145,9 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     const isSUVAvailable = imageIdScalingFactor && imageIdScalingFactor.suvbw;
 
     if (isSUVAvailable) {
-      // [2026-08-14 修复] 与index.ts中getPTVOIRange初始加载值保持一致（WW=5, WC=2.5 → SUV 0~5）
-      // 此前此处返回WW=10/WC=5，导致点击重置按钮后窗宽窗位被改变
-      return { windowWidth: 5, windowCenter: 2.5 };
+      // 2026-09-15 功能说明：与index.ts中getPTVOIRange初始加载值保持一致
+      // （WW=6, WC=3 → SUV 0~6）。
+      return { windowWidth: 6, windowCenter: 3 };
     }
     return null;
   }
@@ -1285,7 +1285,7 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     // 根因分析：
     //   基础resetViewport命令调用viewport.resetProperties()，
     //   该方法将VOI（窗宽窗位）重置为图像默认值（来自DICOM元数据），
-    //   而非TMTV模式使用的自定义SUV值（WW:5, WC:2.5）。
+    //   而非TMTV模式使用的自定义SUV值（WW:6, WC:3）。
     //   对于SUV缩放的PET数据，默认VOI范围完全错误，导致黑屏。
     //   同时ptWLSync同步组会将错误的VOI传播到MIP视口，导致MIP也黑屏。
     //
@@ -1307,19 +1307,19 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     // │               │                  │ + 恢复SUV VOI + invert               │
     // ├───────────────┼──────────────────┼──────────────────────────────────────┤
     // │ Fusion视口    │ fusionToolGroup  │ resetProperties + resetCamera        │
-    // │               │                  │ + 恢复PT VOI + 恢复HSV色彩映射       │
+    // │               │                  │ + 恢复PT VOI + 恢复red_hot映射       │
     // ├───────────────┼──────────────────┼──────────────────────────────────────┤
     // │ 其他视口      │ (其他)           │ resetProperties + resetCamera        │
     // │               │                  │ （默认行为）                         │
     // └───────────────┴──────────────────┴──────────────────────────────────────┘
     //
     // SUV VOI恢复逻辑：
-    //   - SUV可用时：WW=5, WC=2.5 → lower=0, upper=5（SUV范围0~5）
+    //   - SUV可用时：WW=6, WC=3 → lower=0, upper=6（SUV范围0~6）
     //   - SUV不可用时：使用resetProperties默认值，但仍设置invert=true
     //
     // Fusion视口的特殊处理：
     //   Fusion视口同时加载CT和PT两个volume，resetProperties会重置所有volume的属性。
-    //   因此需要在resetProperties之后，单独恢复PT volume的VOI和HSV色彩映射。
+    //   因此需要在resetProperties之后，单独恢复PT volume的VOI和red_hot色彩映射。
     //   通过_getPTVolumeId()获取PT volume的volumeId，然后使用
     //   viewport.setProperties(properties, volumeId)单独设置PT的属性。
     //
@@ -1397,11 +1397,12 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
               {
                 voiRange: { lower, upper },
                 colormap: {
-                  name: 'hsv',
+                  // 2026-09-16 功能说明：重置 Fusion 视口时恢复 red_hot，保持医生对比确认后的默认观感。
+                  name: 'red_hot',
                   opacity: [
                     { value: 0, opacity: 0 },
-                    { value: 0.1, opacity: 0.8 },
-                    { value: 1, opacity: 0.9 },
+                    { value: 0.05, opacity: 0.88 },
+                    { value: 1, opacity: 0.95 },
                   ],
                 },
               },

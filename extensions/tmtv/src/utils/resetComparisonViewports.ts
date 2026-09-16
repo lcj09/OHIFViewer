@@ -17,7 +17,7 @@ function getInitialRange(volume, metadataProvider) {
   const imageId = imageIds[Math.floor(imageIds.length / 2)];
   const scaling = firstImageId && metadataProvider.get('scalingModule', firstImageId);
   if (volume.metadata?.Modality === 'PT' && scaling?.suvbw) {
-    return utilities.windowLevel.toLowHighRange(5, 2.5);
+    return utilities.windowLevel.toLowHighRange(6, 3);
   }
 
   const voi =
@@ -59,11 +59,12 @@ function resetViewport(viewport, modality, metadataProvider) {
       invert: false,
       colormap: isFusionPT
         ? {
-            name: 'hsv',
+            // 2026-09-16 功能说明：对比模式重置 Fusion 时恢复 red_hot，保持医生对比确认后的默认观感。
+            name: 'red_hot',
             opacity: [
               { value: 0, opacity: 0 },
-              { value: 0.1, opacity: 0.8 },
-              { value: 1, opacity: 0.9 },
+              { value: 0.05, opacity: 0.88 },
+              { value: 1, opacity: 0.95 },
             ],
           }
         : { name: 'Grayscale' },

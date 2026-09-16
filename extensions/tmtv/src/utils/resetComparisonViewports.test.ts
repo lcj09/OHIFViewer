@@ -7,7 +7,9 @@ import crosshairs from '../services/TMTVCrosshairService';
 import resetComparisonViewports from './resetComparisonViewports';
 import initialState from '../services/TMTVComparisonInitialState';
 
-jest.mock('@cornerstonejs/tools', () => ({ SynchronizerManager: { createSynchronizer: jest.fn() } }));
+jest.mock('@cornerstonejs/tools', () => ({
+  SynchronizerManager: { createSynchronizer: jest.fn() },
+}));
 
 jest.mock('@cornerstonejs/core', () => ({
   cache: { getVolume: jest.fn(), getImage: jest.fn() },
@@ -182,7 +184,7 @@ describe('comparison viewport reset', () => {
   it('restores each PET volume using its own SUV metadata and retains MIP thickness', () => {
     resetComparisonViewports(manager, metadata);
     expect(viewports.get('baselinePTAxial').setProperties).toHaveBeenCalledWith(
-      expect.objectContaining({ voiRange: { lower: 0, upper: 4 }, invert: false }),
+      expect.objectContaining({ voiRange: { lower: 0, upper: 5 }, invert: false }),
       'baseline-PT'
     );
     expect(viewports.get('followupPTAxial').setProperties).toHaveBeenCalledWith(
@@ -190,7 +192,7 @@ describe('comparison viewport reset', () => {
       'followup-PT'
     );
     expect(viewports.get('baselineMIPSagittal').setProperties).toHaveBeenCalledWith(
-      expect.objectContaining({ slabThickness: 500, voiRange: { lower: 0, upper: 4 } }),
+      expect.objectContaining({ slabThickness: 500, voiRange: { lower: 0, upper: 5 } }),
       'baseline-PT'
     );
   });
@@ -209,8 +211,8 @@ describe('comparison viewport reset', () => {
     );
     expect(fusion.setProperties).toHaveBeenCalledWith(
       expect.objectContaining({
-        voiRange: { lower: 0, upper: 4 },
-        colormap: expect.objectContaining({ name: 'hsv' }),
+        voiRange: { lower: 0, upper: 5 },
+        colormap: expect.objectContaining({ name: 'red_hot' }),
         invert: false,
       }),
       'baseline-PT'

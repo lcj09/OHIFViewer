@@ -38,6 +38,11 @@ const COLORMAPS = [
     gradient: 'linear-gradient(to right, #000, #800, #f00, #ff0, #fff)',
   },
   {
+    name: 'aw_red_hot',
+    label: 'AW Red Hot',
+    gradient: 'linear-gradient(to right, #000, #3b0000, #d11400, #ff5200, #ffb80f, #fff7a0)',
+  },
+  {
     name: 'red_hot',
     label: 'Red Hot',
     gradient: 'linear-gradient(to right, #000, #f00, #ff0, #fff)',
@@ -81,7 +86,7 @@ const COLORMAPS = [
 
 function ColormapMenu({ commandsManager, servicesManager, ...props }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [currentColormap, setCurrentColormap] = useState('hsv');
+  const [currentColormap, setCurrentColormap] = useState('red_hot');
 
   const { cornerstoneViewportService, viewportGridService } = servicesManager.services;
 
@@ -89,13 +94,13 @@ function ColormapMenu({ commandsManager, servicesManager, ...props }) {
   const getCurrentColormap = useCallback(() => {
     try {
       const { activeViewportId } = viewportGridService.getState();
-      if (!activeViewportId) return 'hsv';
+      if (!activeViewportId) return 'red_hot';
 
       const viewport = cornerstoneViewportService.getCornerstoneViewport(activeViewportId);
-      if (!viewport || !(viewport instanceof BaseVolumeViewport)) return 'hsv';
+      if (!viewport || !(viewport instanceof BaseVolumeViewport)) return 'red_hot';
 
       const volumeIds = viewport.getAllVolumeIds();
-      if (!volumeIds?.length) return 'hsv';
+      if (!volumeIds?.length) return 'red_hot';
 
       // 查找 PT volume
       for (const volId of volumeIds) {
@@ -109,9 +114,9 @@ function ColormapMenu({ commandsManager, servicesManager, ...props }) {
           }
         }
       }
-      return 'hsv';
+      return 'red_hot';
     } catch (e) {
-      return 'hsv';
+      return 'red_hot';
     }
   }, [cornerstoneViewportService, viewportGridService]);
 
@@ -173,8 +178,8 @@ function ColormapMenu({ commandsManager, servicesManager, ...props }) {
             name: colormapName,
             opacity: [
               { value: 0, opacity: 0 },
-              { value: 0.1, opacity: 0.8 },
-              { value: 1, opacity: 0.9 },
+              { value: 0.05, opacity: 0.88 },
+              { value: 1, opacity: 0.95 },
             ],
           },
         },

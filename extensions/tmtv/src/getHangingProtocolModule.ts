@@ -81,10 +81,10 @@ const createCompareVolumeViewport = ({
       modality === 'CT'
         ? 'ctToolGroup'
         : modality === 'PT'
-        ? 'ptToolGroup'
-        : modality === 'MIP'
-        ? 'mipToolGroup'
-        : 'fusionToolGroup',
+          ? 'ptToolGroup'
+          : modality === 'MIP'
+            ? 'mipToolGroup'
+            : 'fusionToolGroup',
     ...(modality === 'PT' || modality === 'MIP' ? { background: [1, 1, 1] } : {}),
     initialImageOptions: {
       // 2026-08-31 功能说明：MIP 围绕体积中心旋转，不能像普通切片一样定位在首层。
@@ -110,11 +110,12 @@ const ptCompareDisplaySetOptions = {
 
 const fusionComparePTDisplaySetOptions = {
   colormap: {
-    name: 'hsv',
+    // 2026-09-16 功能说明：对比模式 Fusion 默认使用 red_hot，与实际医生偏好的对比截图保持一致。
+    name: 'red_hot',
     opacity: [
       { value: 0, opacity: 0 },
-      { value: 0.1, opacity: 0.8 },
-      { value: 1, opacity: 0.9 },
+      { value: 0.05, opacity: 0.88 },
+      { value: 1, opacity: 0.95 },
     ],
   },
   voi: {

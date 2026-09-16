@@ -413,9 +413,11 @@ function modeFactory({ modeConfiguration }) {
           const isSUVAvailable = imageIdScalingFactor && imageIdScalingFactor.suvbw;
 
           if (isSUVAvailable) {
+            // 2026-09-16 功能说明：TMTV 默认 PET 显示范围固定为 SUV 0~6，
+            // 让 red_hot 热点更接近常见工作站的红色观感，同时避免 0~5 过早饱和。
             return {
-              windowWidth: 5,
-              windowCenter: 2.5,
+              windowWidth: 6,
+              windowCenter: 3,
             };
           }
 

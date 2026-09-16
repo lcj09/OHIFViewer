@@ -19,15 +19,15 @@ const hydrateSegSync = {
 const ctAXIAL: AppTypes.HangingProtocol.Viewport = {
   viewportOptions: {
     viewportId: 'ctAXIAL',
-    viewportType: 'volume',//体积视图
-    orientation: 'axial',//横截面
-    toolGroupId: 'ctToolGroup',//CT工具组
+    viewportType: 'volume', //体积视图
+    orientation: 'axial', //横截面
+    toolGroupId: 'ctToolGroup', //CT工具组
     initialImageOptions: {
       // index: 5,
       preset: 'first', // 'first', 'last', 'middle'
     },
     syncGroups: [
-      cameraPositionSync('axialSync'),//与其他轴向视图同步机制
+      cameraPositionSync('axialSync'), //与其他轴向视图同步机制
       {
         type: 'voi',
         id: 'ctWLSync',
@@ -281,21 +281,22 @@ const fusionAXIAL: AppTypes.HangingProtocol.Viewport = {
   },
   displaySets: [
     {
-      id: 'ctDisplaySet',//底层：CT图像
+      id: 'ctDisplaySet', //底层：CT图像
     },
     {
-      id: 'ptDisplaySet',//上层：PT图像
+      id: 'ptDisplaySet', //上层：PT图像
       options: {
         colormap: {
-          name: 'hsv',
+          // 2026-09-16 功能说明：Fusion 默认使用 red_hot，保持医生对比确认后的默认观感。
+          name: 'red_hot',
           opacity: [
             { value: 0, opacity: 0 },
-            { value: 0.1, opacity: 0.8 },
-            { value: 1, opacity: 0.9 },
+            { value: 0.05, opacity: 0.88 },
+            { value: 1, opacity: 0.95 },
           ],
         },
         voi: {
-          custom: 'getPTVOIRange',// ← 使用自定义SUV窗宽窗位
+          custom: 'getPTVOIRange', // ← 使用自定义SUV窗宽窗位
         },
       },
     },
@@ -350,11 +351,12 @@ const fusionSAGITTAL = {
       id: 'ptDisplaySet',
       options: {
         colormap: {
-          name: 'hsv',
+          // 2026-09-16 功能说明：Fusion 默认使用 red_hot，保持医生对比确认后的默认观感。
+          name: 'red_hot',
           opacity: [
             { value: 0, opacity: 0 },
-            { value: 0.1, opacity: 0.8 },
-            { value: 1, opacity: 0.9 },
+            { value: 0.05, opacity: 0.88 },
+            { value: 1, opacity: 0.95 },
           ],
         },
         voi: {
@@ -413,11 +415,12 @@ const fusionCORONAL = {
       id: 'ptDisplaySet',
       options: {
         colormap: {
-          name: 'hsv',
+          // 2026-09-16 功能说明：Fusion 默认使用 red_hot，保持医生对比确认后的默认观感。
+          name: 'red_hot',
           opacity: [
             { value: 0, opacity: 0 },
-            { value: 0.1, opacity: 0.8 },
-            { value: 1, opacity: 0.9 },
+            { value: 0.05, opacity: 0.88 },
+            { value: 1, opacity: 0.95 },
           ],
         },
         voi: {
@@ -498,7 +501,7 @@ const mipAXIAL: AppTypes.HangingProtocol.Viewport = {
   viewportOptions: {
     viewportId: 'mipAxial',
     viewportType: 'volume',
-    orientation: 'axial',  // 轴向（横截面）
+    orientation: 'axial', // 轴向（横截面）
     background: [1, 1, 1],
     toolGroupId: 'mipToolGroup',
     syncGroups: [
@@ -532,7 +535,7 @@ const mipAXIAL: AppTypes.HangingProtocol.Viewport = {
       // [2026-05-11 优化] slabThickness: 500mm（减少GPU显存占用）
       options: {
         blendMode: 'MIP',
-        slabThickness: 500,  // 原: 'fullVolume'
+        slabThickness: 500, // 原: 'fullVolume'
         voi: {
           custom: 'getPTVOIRange',
         },
@@ -558,7 +561,7 @@ const mipCORONAL: AppTypes.HangingProtocol.Viewport = {
   viewportOptions: {
     viewportId: 'mipCoronal',
     viewportType: 'volume',
-    orientation: 'coronal',  // 冠状向
+    orientation: 'coronal', // 冠状向
     background: [1, 1, 1],
     toolGroupId: 'mipToolGroup',
     syncGroups: [
@@ -614,6 +617,6 @@ export {
   fusionSAGITTAL,
   fusionCORONAL,
   mipSAGITTAL,
-  mipAXIAL,    // [2026-05-11 新增] MIP轴位视图
-  mipCORONAL,  // [2026-05-11 新增] MIP冠状位视图
+  mipAXIAL, // [2026-05-11 新增] MIP轴位视图
+  mipCORONAL, // [2026-05-11 新增] MIP冠状位视图
 };
