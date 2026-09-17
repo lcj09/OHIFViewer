@@ -468,6 +468,7 @@ const mipSAGITTAL: AppTypes.HangingProtocol.Viewport = {
       // in mip and we set the scrollbar according to their rotation index
       // in the cornerstone extension.
       hideOverlays: true,
+      showPatientOverlay: true,
     },
   },
   displaySets: [
@@ -528,6 +529,7 @@ const mipAXIAL: AppTypes.HangingProtocol.Viewport = {
     ],
     customViewportProps: {
       hideOverlays: true,
+      showPatientOverlay: true,
     },
   },
   displaySets: [
@@ -588,6 +590,7 @@ const mipCORONAL: AppTypes.HangingProtocol.Viewport = {
     ],
     customViewportProps: {
       hideOverlays: true,
+      showPatientOverlay: true,
     },
   },
   displaySets: [

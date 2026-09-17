@@ -44,8 +44,20 @@ function CornerstoneOverlays(props: withAppTypes) {
       // [2026-08-12 修复] 当 hideOverlays 为 true 时，仍渲染方位标记，
       // 但隐藏其他叠加层（滚动条、文字叠加、切片加载指示器、像素信息）。
       // 解决 MIP 视口在 3x4 布局中窄高尺寸下 VTK OrientationMarkerTool 渲染变形的问题。
+      // 2026-09-17 功能说明：TMTV MIP 可单独开启四角文字，仍不挂载滚动条和像素探针。
+      const showPatientOverlay =
+        viewportInfo.viewportOptions.customViewportProps.showPatientOverlay === true;
       return (
         <div className="noselect">
+          {showPatientOverlay && (
+            <CustomizableViewportOverlay
+              imageSliceData={imageSliceData}
+              viewportData={viewportData}
+              viewportId={viewportId}
+              servicesManager={servicesManager}
+              element={element}
+            />
+          )}
           <ViewportOrientationMarkers
             imageSliceData={imageSliceData}
             element={element}

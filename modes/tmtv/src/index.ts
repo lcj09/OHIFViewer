@@ -388,6 +388,16 @@ function modeFactory({ modeConfiguration }) {
             condition: ({ referenceInstance }) => referenceInstance?.PatientID,
             contentF: ({ referenceInstance }) => referenceInstance.PatientID,
           },
+          // 2026-09-17 功能说明：MIP 额外显示检查号，缺失时不占位。
+          {
+            id: 'TMTVMIPAccessionNumber',
+            inheritsFrom: 'ohif.overlayItem',
+            title: 'Accession Number',
+            label: '检查号:',
+            condition: ({ viewportId, referenceInstance }) =>
+              viewportId?.toLowerCase().includes('mip') && referenceInstance?.AccessionNumber,
+            contentF: ({ referenceInstance }) => referenceInstance.AccessionNumber,
+          },
         ],
       });
 
