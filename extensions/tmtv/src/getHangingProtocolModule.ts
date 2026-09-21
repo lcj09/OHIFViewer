@@ -376,6 +376,40 @@ const stage3: AppTypes.HangingProtocol.ProtocolStage = {
   viewports: [ctAXIAL, ptAXIAL, fusionAXIAL, mipSAGITTAL],
 };
 
+/** 2026-09-18 功能说明：通过 URL 参数隔离 CT、PET 和后续视口，定位 GPU 进程内存增量。 */
+function getMemoryProbeStage(): AppTypes.HangingProtocol.ProtocolStage | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const probe = new URLSearchParams(window.location.search).get('tmtvMemoryProbe');
+  let diagnosticViewports: typeof stage3.viewports | null = null;
+  switch (probe) {
+    case 'ct':
+      diagnosticViewports = [ctAXIAL];
+      break;
+    case 'pt':
+      diagnosticViewports = [ptAXIAL];
+      break;
+    case 'ctpt':
+      diagnosticViewports = stage3.viewports.slice(0, 2);
+      break;
+    case 'fusion':
+      diagnosticViewports = stage3.viewports.slice(0, 3);
+      break;
+  }
+  if (!diagnosticViewports) {
+    return null;
+  }
+
+  return {
+    ...stage3,
+    id: `tmtv-memory-probe-${probe}`,
+    name: `Memory probe ${probe}`,
+    viewports: diagnosticViewports,
+  };
+}
+
 /**
  * [2026-05-11 修改] 矢状位 2×2 布局
  *
@@ -635,7 +669,7 @@ const ptCT: AppTypes.HangingProtocol.Protocol = {
   // [2026-05-11 修改] 扩展stages数组，新增冠状位2x2、原始2x3、原始2x4、TMTV MPR布局
   // [2026-06-30 修改] 默认布局改为 Axial（stage3），将 stage3 放到第一位
   //可选的多种布局
-  stages: [stage3, stage1, stage2, stage4, stage5, stage6, stage7, stage8],
+  stages: [getMemoryProbeStage() || stage3, stage1, stage2, stage4, stage5, stage6, stage7, stage8],
   numberOfPriorsReferenced: -1,
 };
 

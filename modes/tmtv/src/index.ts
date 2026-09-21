@@ -11,6 +11,7 @@ import tmtvSegmentMaskStorageService from '../../../extensions/tmtv/src/services
 import tmtvCrosshairService from '../../../extensions/tmtv/src/services/TMTVCrosshairService';
 import ensureMIPWheelBinding from '../../../extensions/tmtv/src/utils/ensureMIPWheelBinding';
 import { installComparisonMeasurementIsolation } from '../../../extensions/tmtv/src/utils/comparisonMeasurements';
+import installGpuUploadProbe from '../../../extensions/tmtv/src/utils/installGpuUploadProbe';
 import crosshairDisplayService from '../../../extensions/tmtv/src/services/CrosshairDisplayService';
 import tmtvComparisonService from '../../../extensions/tmtv/src/services/TMTVComparisonService';
 import tmtvSessionService from '../../../extensions/tmtv/src/services/TMTVSessionService';
@@ -60,6 +61,7 @@ let metadataClearTimer: ReturnType<typeof setTimeout> | null = null;
 // [内存排查] 跟踪 PROTOCOL_CHANGED 回调中的 resize setTimeout。
 // 原代码未跟踪此 timer，mode exit 后 200ms 内回调可能在已销毁的 service 上执行。
 let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+let gpuUploadProbeCleanup: (() => void) | null = null;
 
 function modeFactory({ modeConfiguration }) {
   return {
@@ -73,6 +75,9 @@ function modeFactory({ modeConfiguration }) {
      */
     //点击按钮，启动TMTV模式
     onModeEnter: ({ servicesManager, extensionManager, commandsManager }: withAppTypes) => {
+      // 2026-09-18 功能说明：仅诊断 URL 启用 GPU 上传统计，避免影响正常 TMTV 阅片。
+      gpuUploadProbeCleanup?.();
+      gpuUploadProbeCleanup = installGpuUploadProbe();
       // 2026-09-04 功能说明：异常退出后再次进入时先清除遗留订阅，避免事件监听随进入次数累积。
       drainLifecycleSubscriptions(unsubscriptions);
       // Cancel any pending delayed metadata clear from a previous mode exit.
@@ -436,6 +441,8 @@ function modeFactory({ modeConfiguration }) {
       );
     },
     onModeExit: ({ servicesManager, extensionManager }: withAppTypes) => {
+      gpuUploadProbeCleanup?.();
+      gpuUploadProbeCleanup = null;
       const {
         toolGroupService,
         syncGroupService,
