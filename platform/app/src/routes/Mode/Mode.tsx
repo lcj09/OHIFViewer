@@ -204,6 +204,7 @@ export default function ModeRoute({
       return;
     }
 
+    const abortController = new AbortController();
     const setupRouteInit = async () => {
       // TODO: For some reason this is running before the Providers
       // are calling setServiceImplementation
@@ -297,6 +298,11 @@ export default function ModeRoute({
         );
       }
 
+      if (abortController.signal.aborted) {
+        unsubs?.forEach(unsub => unsub());
+        return [];
+      }
+
       return defaultRouteInit(
         {
           servicesManager,
@@ -304,6 +310,7 @@ export default function ModeRoute({
           dataSource,
           filters,
           appConfig,
+          signal: abortController.signal,
         },
         hangingProtocolIdToUse,
         stageIndexToUse
@@ -312,6 +319,10 @@ export default function ModeRoute({
 
     let unsubscriptions;
     setupRouteInit().then(unsubs => {
+      if (abortController.signal.aborted) {
+        unsubs?.forEach(unsub => unsub());
+        return;
+      }
       unsubscriptions = unsubs;
 
       mode?.onSetupRouteComplete?.({
@@ -319,9 +330,15 @@ export default function ModeRoute({
         extensionManager,
         commandsManager,
       });
+    }).catch(error => {
+      if (!abortController.signal.aborted) {
+        console.error('mode route initialization failed', error);
+      }
     });
 
     return () => {
+      // 2026-09-22 功能说明：先终止异步挂片，避免退出后重新写入视口和元数据服务。
+      abortController.abort();
       // The mode.onModeExit must be done first to allow it to store
       // information, and must be in a try/catch to ensure subscriptions
       // are unsubscribed.

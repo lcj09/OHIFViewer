@@ -19,7 +19,8 @@ export async function defaultRouteInit(
     studyInstanceUIDs,
     dataSource,
     filters,
-  }: withAppTypes & { studyInstanceUIDs?: string[] },
+    signal,
+  }: withAppTypes & { studyInstanceUIDs?: string[]; signal?: AbortSignal },
   hangingProtocolId,
   stageIndex
 ) {
@@ -31,6 +32,9 @@ export async function defaultRouteInit(
    * @returns
    */
   function applyHangingProtocol() {
+    if (signal?.aborted) {
+      return;
+    }
     const displaySets = displaySetService.getActiveDisplaySets();
     // The display sets are not necessarily in load order, even though the
     // series got started in load order, so re-sort them before hanging
@@ -85,7 +89,23 @@ export async function defaultRouteInit(
     }
   );
 
-  unsubscriptions.push(instanceAddedUnsubscribe);
+  let instanceSubscriptionActive = true;
+  const unsubscribeInstanceAdded = () => {
+    if (!instanceSubscriptionActive) {
+      return;
+    }
+    instanceSubscriptionActive = false;
+    instanceAddedUnsubscribe();
+  };
+  unsubscriptions.push(unsubscribeInstanceAdded);
+
+  // 2026-09-22 功能说明：退出模式时立即退订，未完成的元数据请求不再创建显示集。
+  const onAbort = () => unsubscribeInstanceAdded();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) {
+    onAbort();
+    return unsubscriptions;
+  }
 
   log.time(Enums.TimingEnum.STUDY_TO_DISPLAY_SETS);
   log.time(Enums.TimingEnum.STUDY_TO_FIRST_IMAGE);
@@ -119,6 +139,9 @@ export async function defaultRouteInit(
   }
 
   await Promise.allSettled(allRetrieves).then(async promises => {
+    if (signal?.aborted) {
+      return;
+    }
     log.timeEnd(Enums.TimingEnum.STUDY_TO_DISPLAY_SETS);
     log.time(Enums.TimingEnum.DISPLAY_SETS_TO_FIRST_IMAGE);
     log.time(Enums.TimingEnum.DISPLAY_SETS_TO_ALL_IMAGES);
@@ -127,6 +150,9 @@ export async function defaultRouteInit(
     const remainingPromises = [];
 
     function startRemainingPromises(remainingPromises) {
+      if (signal?.aborted) {
+        return;
+      }
       remainingPromises.forEach(p => p.forEach(p => p.start()));
     }
 
@@ -153,9 +179,14 @@ export async function defaultRouteInit(
     });
 
     await Promise.allSettled(allPromises).then(applyHangingProtocol);
+    if (signal?.aborted) {
+      return;
+    }
     startRemainingPromises(remainingPromises);
     applyHangingProtocol();
   });
+
+  signal?.removeEventListener('abort', onAbort);
 
   return unsubscriptions;
 }

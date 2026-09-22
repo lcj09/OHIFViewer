@@ -279,10 +279,32 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     // 统一交给 renderingEngine.destroy() 销毁，避免 loseContext 后继续执行 GL 命令。
     this._releaseWebGLResources();
 
+    // 2026-09-22 功能说明：保留已有 WebGL context，待引擎完成销毁后请求驱动立即释放显存。
+    let webGLContexts: any[] = [];
+    try {
+      const engine = this.renderingEngine as any;
+      const contextPool = engine?._implementation?.contextPool || engine?.contextPool;
+      const contexts = contextPool?.getAllContexts?.() || contextPool?.contexts || [];
+      webGLContexts = contexts
+        .map(context => context?.getOpenGLRenderWindow?.()?.getContext?.())
+        .filter(Boolean);
+    } catch (e) {
+      console.warn('[ViewportService] WebGL context capture failed', e);
+    }
+
     try {
       this.renderingEngine?.destroy?.();
     } catch (e) {
       console.warn('[ViewportService] renderingEngine.destroy() failed', e);
+    } finally {
+      webGLContexts.forEach(gl => {
+        try {
+          gl.getExtension?.('WEBGL_lose_context')?.loseContext?.();
+        } catch (e) {
+          console.warn('[ViewportService] WebGL context release failed', e);
+        }
+      });
+      webGLContexts = [];
     }
 
     // Clear all viewport info to release DOM element references
