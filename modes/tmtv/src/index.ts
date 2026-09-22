@@ -605,7 +605,9 @@ function modeFactory({ modeConfiguration }) {
         /*init: ({ servicesManager, extensionManager }) => {
           //defaultViewerRouteInit
         },*/
-        layoutTemplate: () => {
+        layoutTemplate: ({ studyInstanceUIDs }) => {
+          // 2026-09-22 功能说明：单次检查使用窄审核栏；双检查保留审核与对比并列所需宽度。
+          const isComparisonStudy = Array.isArray(studyInstanceUIDs) && studyInstanceUIDs.length > 1;
           return {
             id: ohif.layout,
             props: {
@@ -614,6 +616,8 @@ function modeFactory({ modeConfiguration }) {
               leftPanelClosed: true,
               rightPanels: [tmtv.tmtv, tmtv.petSUV],
               rightPanelResizable: true,
+              rightPanelInitialExpandedWidth: isComparisonStudy ? 420 : 300,
+              rightPanelMinimumExpandedWidth: isComparisonStudy ? 400 : 280,
               // [2026-08-21 修改] 右侧面板默认展开
               rightPanelClosed: false,
               // [2026-09-04 新增] 屏蔽右侧面板顶部两个 tab 切换按钮（仅隐藏，不删除）

@@ -178,8 +178,12 @@ function setPrimaryTMTVSegmentationActive({
 export default function PanelRoiThresholdSegmentation() {
   const { t } = useTranslation('ROIThresholdConfiguration');
   const { commandsManager, servicesManager } = useSystem();
-  const { cornerstoneViewportService, displaySetService, segmentationService, viewportGridService } =
-    servicesManager.services;
+  const {
+    cornerstoneViewportService,
+    displaySetService,
+    segmentationService,
+    viewportGridService,
+  } = servicesManager.services;
   const { segmentationsWithRepresentations: segmentationsInfo } =
     useActiveViewportSegmentationRepresentations();
   const [activeSession, setActiveSession] = useState<TMTVSession | null>(() =>
@@ -242,8 +246,8 @@ export default function PanelRoiThresholdSegmentation() {
   const [isAutoSegmentationExpanded, setIsAutoSegmentationExpanded] = useState(true);
   const [isPatientComparisonExpanded, setIsPatientComparisonExpanded] = useState(true);
   const [displaySetRevision, setDisplaySetRevision] = useState(0);
-  // 2026-09-04 功能说明：病灶候选匹配属于辅助信息，进入面板时默认收起以节省右侧空间。
-  const [isLesionComparisonExpanded, setIsLesionComparisonExpanded] = useState(false);
+  // 2026-09-21 功能说明：对比结果使用独立面板，默认展开匹配列表以利用完整可用高度。
+  const [isLesionComparisonExpanded, setIsLesionComparisonExpanded] = useState(true);
   const [lesionSortKey, setLesionSortKey] = useState('volume');
   const [lesionSortDirection, setLesionSortDirection] = useState<'asc' | 'desc'>('desc');
   const hasAttemptedInitialMaskRestoreRef = useRef(false);
@@ -736,12 +740,42 @@ export default function PanelRoiThresholdSegmentation() {
           followupComparisonSession?.totals
         )
       : null;
+  // 2026-09-21 功能说明：转置总量表，使用“项目 + TMTV + TLG”三列适配窄对比栏。
   const patientComparisonRows = patientComparison
     ? [
-        { label: 'TMTV', metric: patientComparison.tmtv },
-        { label: 'TLG', metric: patientComparison.tlg },
+        {
+          label: '检查一',
+          tmtv: formatComparisonStat(patientComparison.tmtv.baseline),
+          tlg: formatComparisonStat(patientComparison.tlg.baseline),
+        },
+        {
+          label: '检查二',
+          tmtv: formatComparisonStat(patientComparison.tmtv.followup),
+          tlg: formatComparisonStat(patientComparison.tlg.followup),
+        },
+        {
+          label: '差值',
+          tmtv: formatComparisonStat(patientComparison.tmtv.delta, { signed: true }),
+          tlg: formatComparisonStat(patientComparison.tlg.delta, { signed: true }),
+        },
+        {
+          label: '变化率',
+          tmtv: formatComparisonStat(patientComparison.tmtv.percentChange, {
+            digits: 1,
+            signed: true,
+            suffix: '%',
+          }),
+          tlg: formatComparisonStat(patientComparison.tlg.percentChange, {
+            digits: 1,
+            signed: true,
+            suffix: '%',
+          }),
+        },
       ]
     : [];
+  const hasPatientComparison = !!patientComparison;
+  // 2026-09-22 功能说明：对比时收窄审核列，并让右侧筛选按钮贴近两栏分界线。
+  const reviewPaneWidthClass = hasPatientComparison ? 'w-[56%]' : 'w-full';
   const baselineComparisonState = baselineComparisonSession
     ? tmtvLesionService.getState(
         baselineComparisonSession.segmentationIds,
@@ -1351,10 +1385,14 @@ export default function PanelRoiThresholdSegmentation() {
   return (
     <div className="mb-2 flex min-h-0 flex-1 flex-col">
       {/* [2026-08-26 功能] Lesion 管理区使用 flex 剩余高度，避免阈值工具展开后高级分割数据栏悬浮/重叠 */}
-      <div className="bg-background flex min-h-[180px] flex-1 flex-col overflow-hidden">
-        {/* [2026-08-26 功能] 压缩 TMTV 顶部统计区：统计一行、导出一行，给 Lesion 列表释放更多可视高度 */}
-        <div className="bg-popover flex flex-shrink-0 flex-col gap-1 px-2 py-1">
-          <div className="grid grid-cols-2 gap-2 text-sm leading-5">
+      <div className="bg-background relative flex min-h-[180px] flex-1 flex-col overflow-hidden">
+        {/* [2026-09-22 功能说明] 对比模式下统计分两行显示，避免窄审核栏中的数值互相覆盖。 */}
+        <div
+          className={`bg-popover flex min-w-0 flex-shrink-0 flex-col gap-1 px-2 py-1 ${reviewPaneWidthClass}`}
+        >
+          <div
+            className={`grid gap-1 leading-4 ${hasPatientComparison ? 'grid-cols-1 text-xs' : 'grid-cols-2 text-sm'}`}
+          >
             <div className="min-w-0 whitespace-nowrap">
               <span className="text-muted-foreground font-bold uppercase">{'TMTV：'}</span>
               <span className="text-foreground">{`${formatStat(tmtvValue)} mL`}</span>
@@ -1377,175 +1415,168 @@ export default function PanelRoiThresholdSegmentation() {
           )}
           {patientComparison && (
             <div
-              data-cy="tmtvPatientComparisonTotals"
-              className="border-border border-t pt-0.5"
+              data-cy="tmtvComparisonPane"
+              className="bg-popover border-border absolute inset-y-0 right-0 z-20 flex min-h-0 w-[44%] flex-col border-l px-1.5 py-0.5"
             >
-              {/* 2026-09-03 功能说明：总量对比可折叠，释放紧凑右侧面板的病灶列表空间。 */}
-              <button
-                type="button"
-                data-cy="toggleTmtvPatientComparisonTotals"
-                className="text-muted-foreground flex h-5 w-full items-center justify-between text-[11px] font-semibold"
-                aria-expanded={isPatientComparisonExpanded}
-                title={isPatientComparisonExpanded ? '收起总量对比' : '展开总量对比'}
-                onClick={() => setIsPatientComparisonExpanded(isExpanded => !isExpanded)}
+              <div className="border-border flex h-7 flex-shrink-0 items-center border-b text-xs font-semibold">
+                <span>对比结果</span>
+              </div>
+              <div
+                data-cy="tmtvPatientComparisonTotals"
+                className="border-border flex-shrink-0 border-t pt-0.5"
               >
-                <span>总量对比</span>
-                <Icons.ChevronDown
-                  className={`h-3.5 w-3.5 transition-transform ${
-                    isPatientComparisonExpanded ? '' : '-rotate-90'
-                  }`}
-                />
-              </button>
-              {isPatientComparisonExpanded && (
-                <div className="grid grid-cols-[2.75rem_repeat(4,minmax(0,1fr))] gap-x-1 text-[10px] leading-4">
-                  <span />
-                  <span className="text-muted-foreground truncate text-right">检查一</span>
-                  <span className="text-muted-foreground truncate text-right">检查二</span>
-                  <span className="text-muted-foreground truncate text-right">差值</span>
-                  <span className="text-muted-foreground truncate text-right">变化率</span>
-                  {patientComparisonRows.map(({ label, metric }) => (
-                    <React.Fragment key={label}>
-                      <span className="text-muted-foreground font-semibold">{label}</span>
-                      <span
-                        className="text-foreground truncate text-right tabular-nums"
-                        title={formatComparisonStat(metric.baseline)}
-                      >
-                        {formatComparisonStat(metric.baseline)}
-                      </span>
-                      <span
-                        className="text-foreground truncate text-right tabular-nums"
-                        title={formatComparisonStat(metric.followup)}
-                      >
-                        {formatComparisonStat(metric.followup)}
-                      </span>
-                      <span
-                        className="text-foreground truncate text-right tabular-nums"
-                        title={formatComparisonStat(metric.delta, { signed: true })}
-                      >
-                        {formatComparisonStat(metric.delta, { signed: true })}
-                      </span>
-                      <span
-                        className="text-foreground truncate text-right tabular-nums"
-                        title={formatComparisonStat(metric.percentChange, {
-                          digits: 1,
-                          signed: true,
-                          suffix: '%',
-                        })}
-                      >
-                        {formatComparisonStat(metric.percentChange, {
-                          digits: 1,
-                          signed: true,
-                          suffix: '%',
-                        })}
-                      </span>
-                    </React.Fragment>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          {patientComparison && (
-            <div
-              data-cy="tmtvLesionComparison"
-              className="border-border border-t pt-0.5"
-            >
-              {/* 2026-09-03 功能说明：病灶匹配列表只读且可折叠，手动校正留到阶段 2.4.3。 */}
-              <button
-                type="button"
-                data-cy="toggleTmtvLesionComparison"
-                className="text-muted-foreground flex h-5 w-full items-center justify-between text-[11px] font-semibold"
-                aria-expanded={isLesionComparisonExpanded}
-                title={isLesionComparisonExpanded ? '收起病灶对比' : '展开病灶对比'}
-                onClick={() => setIsLesionComparisonExpanded(isExpanded => !isExpanded)}
+                {/* 2026-09-03 功能说明：总量对比可折叠，释放紧凑右侧面板的病灶列表空间。 */}
+                <button
+                  type="button"
+                  data-cy="toggleTmtvPatientComparisonTotals"
+                  className="text-muted-foreground flex h-5 w-full items-center justify-between text-[11px] font-semibold"
+                  aria-expanded={isPatientComparisonExpanded}
+                  title={isPatientComparisonExpanded ? '收起总量对比' : '展开总量对比'}
+                  onClick={() => setIsPatientComparisonExpanded(isExpanded => !isExpanded)}
+                >
+                  <span>总量对比</span>
+                  <Icons.ChevronDown
+                    className={`h-3.5 w-3.5 transition-transform ${
+                      isPatientComparisonExpanded ? '' : '-rotate-90'
+                    }`}
+                  />
+                </button>
+                {/* 2026-09-22 功能说明：数值列弹性分配宽度，长结果换行而不截断，同时限制整表宽度保持列距紧凑。 */}
+                {isPatientComparisonExpanded && (
+                  <div
+                    className="grid gap-x-0.5 text-[10px] leading-4"
+                    style={{
+                      gridTemplateColumns: '2.25rem repeat(2, minmax(0, 1fr))',
+                      maxWidth: '13rem',
+                    }}
+                  >
+                    <span className="text-muted-foreground">项目</span>
+                    <span className="text-muted-foreground text-right">TMTV</span>
+                    <span className="text-muted-foreground text-right">TLG</span>
+                    {patientComparisonRows.map(({ label, tmtv, tlg }) => (
+                      <React.Fragment key={label}>
+                        <span className="text-muted-foreground font-semibold">{label}</span>
+                        <span
+                          className="text-foreground min-w-0 break-all text-right tabular-nums"
+                          title={tmtv}
+                        >
+                          {tmtv}
+                        </span>
+                        <span
+                          className="text-foreground min-w-0 break-all text-right tabular-nums"
+                          title={tlg}
+                        >
+                          {tlg}
+                        </span>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div
+                data-cy="tmtvLesionComparison"
+                className="border-border flex min-h-0 flex-1 flex-col border-t pt-0.5"
               >
-                <span>病灶对比</span>
-                <Icons.ChevronDown
-                  className={`h-3.5 w-3.5 transition-transform ${
-                    isLesionComparisonExpanded ? '' : '-rotate-90'
-                  }`}
-                />
-              </button>
-              {isLesionComparisonExpanded && (
-                <div className="flex flex-col gap-1 pb-0.5">
-                  {effectiveLesionComparisonResult ? (
-                    <>
-                      <div className="flex flex-wrap gap-x-2 gap-y-0 text-[10px] leading-4">
-                        <span className="text-green-400">
-                          {`持续 ${effectiveLesionComparisonResult.counts.persistent}`}
-                        </span>
-                        <span className="text-primary">
-                          {`新发 ${effectiveLesionComparisonResult.counts.new}`}
-                        </span>
-                        <span className="text-orange-300">
-                          {`消退 ${effectiveLesionComparisonResult.counts.resolved}`}
-                        </span>
-                        <span className="text-yellow-300">
-                          {`未匹配 ${effectiveLesionComparisonResult.counts.unmatched}`}
-                        </span>
-                      </div>
-                      {visibleLesionMatches?.length ? (
-                        <div className="ohif-scrollbar max-h-36 overflow-y-auto border-t border-white/10">
-                          {visibleLesionMatches.map(match => {
-                            const baselineLabel = match.baselineLesionId
-                              ? comparisonLesionLabels.baseline.get(match.baselineLesionId) ||
-                                '检查一病灶'
-                              : '';
-                            const followupLabel = match.followupLesionId
-                              ? comparisonLesionLabels.followup.get(match.followupLesionId) ||
-                                '检查二病灶'
-                              : '';
-                            const lesionPairLabel =
-                              baselineLabel && followupLabel
-                                ? `${baselineLabel} → ${followupLabel}`
-                                : baselineLabel || followupLabel;
-
-                            return (
-                              <div
-                                key={match.matchId}
-                                className="grid grid-cols-[4.5rem_minmax(0,1fr)_3.5rem] items-center gap-1 border-b border-white/5 py-0.5 text-[10px] leading-4 last:border-b-0"
-                                title={`${match.baselineLesionId || '-'} → ${
-                                  match.followupLesionId || '-'
-                                }`}
-                              >
-                                <span
-                                  className={`truncate font-semibold ${getLesionMatchStatusClassName(
-                                    match.status
-                                  )}`}
-                                >
-                                  {getLesionMatchStatusLabel(match.status)}
-                                </span>
-                                <span className="text-foreground truncate">{lesionPairLabel}</span>
-                                <span className="text-muted-foreground text-right tabular-nums">
-                                  {typeof match.distanceMM === 'number'
-                                    ? `${match.distanceMM.toFixed(1)} mm`
-                                    : match.reason === 'conflict'
-                                      ? '待确认'
-                                      : ''}
-                                </span>
-                              </div>
-                            );
-                          })}
-                          {hiddenLesionMatchCount > 0 && (
-                            <div className="text-muted-foreground py-1 text-center text-[10px]">
-                              {`另有 ${hiddenLesionMatchCount} 项未展开`}
-                            </div>
-                          )}
+                {/* 2026-09-03 功能说明：病灶匹配列表只读且可折叠，手动校正留到阶段 2.4.3。 */}
+                <button
+                  type="button"
+                  data-cy="toggleTmtvLesionComparison"
+                  className="text-muted-foreground flex h-5 w-full flex-shrink-0 items-center justify-between text-[11px] font-semibold"
+                  aria-expanded={isLesionComparisonExpanded}
+                  title={isLesionComparisonExpanded ? '收起病灶对比' : '展开病灶对比'}
+                  onClick={() => setIsLesionComparisonExpanded(isExpanded => !isExpanded)}
+                >
+                  <span>病灶对比</span>
+                  <Icons.ChevronDown
+                    className={`h-3.5 w-3.5 transition-transform ${
+                      isLesionComparisonExpanded ? '' : '-rotate-90'
+                    }`}
+                  />
+                </button>
+                {isLesionComparisonExpanded && (
+                  <div className="flex min-h-0 flex-1 flex-col gap-1 pb-0.5">
+                    {effectiveLesionComparisonResult ? (
+                      <>
+                        <div className="flex flex-wrap gap-x-1.5 gap-y-0 text-[9px] leading-4">
+                          <span className="text-green-400">
+                            {`持续 ${effectiveLesionComparisonResult.counts.persistent}`}
+                          </span>
+                          <span className="text-primary">
+                            {`新发 ${effectiveLesionComparisonResult.counts.new}`}
+                          </span>
+                          <span className="text-orange-300">
+                            {`消退 ${effectiveLesionComparisonResult.counts.resolved}`}
+                          </span>
+                          <span className="text-yellow-300">
+                            {`未匹配 ${effectiveLesionComparisonResult.counts.unmatched}`}
+                          </span>
                         </div>
-                      ) : (
-                        <div className="text-muted-foreground text-[10px]">暂无已确认病灶</div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="text-muted-foreground text-[10px]">
-                      {lesionComparisonPendingMessage}
-                    </div>
-                  )}
-                </div>
-              )}
+                        {visibleLesionMatches?.length ? (
+                          <div className="ohif-scrollbar min-h-0 flex-1 overflow-y-auto border-t border-white/10">
+                            {visibleLesionMatches.map(match => {
+                              const baselineLabel = match.baselineLesionId
+                                ? comparisonLesionLabels.baseline.get(match.baselineLesionId) ||
+                                  '检查一病灶'
+                                : '';
+                              const followupLabel = match.followupLesionId
+                                ? comparisonLesionLabels.followup.get(match.followupLesionId) ||
+                                  '检查二病灶'
+                                : '';
+                              const lesionPairLabel =
+                                baselineLabel && followupLabel
+                                  ? `${baselineLabel} → ${followupLabel}`
+                                  : baselineLabel || followupLabel;
+
+                              return (
+                                <div
+                                  key={match.matchId}
+                                  className="grid grid-cols-[3.75rem_minmax(0,1fr)_3rem] items-center gap-0.5 border-b border-white/5 py-0.5 text-[9px] leading-4 last:border-b-0"
+                                  title={`${match.baselineLesionId || '-'} → ${
+                                    match.followupLesionId || '-'
+                                  }`}
+                                >
+                                  <span
+                                    className={`truncate font-semibold ${getLesionMatchStatusClassName(
+                                      match.status
+                                    )}`}
+                                  >
+                                    {getLesionMatchStatusLabel(match.status)}
+                                  </span>
+                                  <span className="text-foreground truncate">
+                                    {lesionPairLabel}
+                                  </span>
+                                  <span className="text-muted-foreground text-right tabular-nums">
+                                    {typeof match.distanceMM === 'number'
+                                      ? `${match.distanceMM.toFixed(1)} mm`
+                                      : match.reason === 'conflict'
+                                        ? '待确认'
+                                        : ''}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                            {hiddenLesionMatchCount > 0 && (
+                              <div className="text-muted-foreground py-1 text-center text-[10px]">
+                                {`另有 ${hiddenLesionMatchCount} 项未展开`}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-muted-foreground text-[10px]">暂无已确认病灶</div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="text-muted-foreground text-[10px]">
+                        {lesionComparisonPendingMessage}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
-          <div className="flex items-center justify-between gap-2">
-            <label className="text-muted-foreground flex min-w-0 cursor-pointer items-center gap-1 whitespace-nowrap text-[11px]">
+          <div className="flex flex-shrink-0 items-center justify-between gap-1">
+            <label className="text-muted-foreground flex min-w-0 cursor-pointer items-center gap-1 whitespace-nowrap text-[10px]">
               <input
                 type="checkbox"
                 className="accent-primary h-3 w-3 flex-shrink-0"
@@ -1554,13 +1585,13 @@ export default function PanelRoiThresholdSegmentation() {
               />
               <span>{t('Export confirmed only', { defaultValue: 'Export confirmed only' })}</span>
             </label>
-            <div className="flex flex-shrink-0 items-center gap-1">
+            <div className="flex flex-shrink-0 items-center gap-0.5">
               {/* [2026-08-26 功能] 本地报告导出：CSV/XLS/PDF 使用紧凑按钮，避免压缩 Lesion 列表高度 */}
               <Button
                 dataCY="exportTmtvCsvReport"
                 size="sm"
                 variant="ghost"
-                className="h-6 px-1.5 text-xs"
+                className="h-6 px-1 text-[10px]"
                 onClick={handleExportCSV}
               >
                 <span>CSV</span>
@@ -1569,7 +1600,7 @@ export default function PanelRoiThresholdSegmentation() {
                 dataCY="exportTmtvExcelReport"
                 size="sm"
                 variant="ghost"
-                className="h-6 px-1.5 text-xs"
+                className="h-6 px-1 text-[10px]"
                 onClick={handleExportExcel}
               >
                 <span>XLS</span>
@@ -1578,7 +1609,7 @@ export default function PanelRoiThresholdSegmentation() {
                 dataCY="exportTmtvPdfReport"
                 size="sm"
                 variant="ghost"
-                className="h-6 px-1.5 text-xs"
+                className="h-6 px-1 text-[10px]"
                 onClick={handleExportPDF}
               >
                 <span>PDF</span>
@@ -1586,7 +1617,9 @@ export default function PanelRoiThresholdSegmentation() {
             </div>
           </div>
         </div>
-        <div className="border-border bg-background flex flex-shrink-0 flex-col border-t px-2 py-1">
+        <div
+          className={`border-border bg-background flex flex-shrink-0 flex-col border-t px-2 py-1 ${reviewPaneWidthClass}`}
+        >
           {/* [2026-08-26 功能] 自动分割区折叠展示：运行后收起参数，给病灶审核列表让出高度 */}
           <div className="flex items-center gap-1">
             <button
@@ -1623,7 +1656,7 @@ export default function PanelRoiThresholdSegmentation() {
             </Button>
           </div>
           {isAutoSegmentationExpanded && (
-            <div className="mt-1 grid grid-cols-[1fr_1fr_1.15fr] gap-1">
+            <div className="mt-1 grid grid-cols-[4.25rem_4.75rem_minmax(0,1fr)] gap-1">
               <label className="text-muted-foreground flex min-w-0 flex-col gap-0.5 text-[11px]">
                 <span>{t('SUV threshold', { defaultValue: 'SUV threshold' })}</span>
                 <input
@@ -1631,7 +1664,7 @@ export default function PanelRoiThresholdSegmentation() {
                   type="number"
                   min="0"
                   step="0.1"
-                  className="border-input bg-popover text-foreground h-7 rounded border px-1.5 text-xs"
+                  className="border-input bg-popover text-foreground h-7 min-w-0 w-full rounded border px-1 text-xs"
                   value={autoSUVThreshold}
                   onChange={event =>
                     setAutoSUVThreshold(getFiniteInputNumber(event.target.value, 2.5))
@@ -1645,7 +1678,7 @@ export default function PanelRoiThresholdSegmentation() {
                   type="number"
                   min="0"
                   step="0.1"
-                  className="border-input bg-popover text-foreground h-7 rounded border px-1.5 text-xs"
+                  className="border-input bg-popover text-foreground h-7 min-w-0 w-full rounded border px-1 text-xs"
                   value={autoMinVolumeML}
                   onChange={event =>
                     setAutoMinVolumeML(getFiniteInputNumber(event.target.value, 0.1))
@@ -1656,7 +1689,7 @@ export default function PanelRoiThresholdSegmentation() {
                 <span>{t('Write mode', { defaultValue: 'Write mode' })}</span>
                 <select
                   data-cy="tmtvAutoWriteMode"
-                  className="border-input bg-popover text-foreground h-7 min-w-0 rounded border px-1.5 text-xs"
+                  className="border-input bg-popover text-foreground h-7 min-w-0 w-full rounded border px-1 text-xs"
                   value={autoWriteMode}
                   onChange={event =>
                     setAutoWriteMode(event.target.value === 'append' ? 'append' : 'overwrite')
@@ -1674,7 +1707,9 @@ export default function PanelRoiThresholdSegmentation() {
             </div>
           )}
         </div>
-        <div className="border-border bg-background flex flex-shrink-0 items-center justify-between gap-2 border-t px-2 py-1">
+        <div
+          className={`border-border bg-background flex flex-shrink-0 items-center justify-between gap-2 border-t px-2 py-1 ${reviewPaneWidthClass}`}
+        >
           {/* [2026-08-27 功能] 本地存储管理 UI：显示当前病例 Segment 1 浏览器本地保存状态，并支持一键清除本地备份 */}
           <div className="min-w-0 text-[11px] leading-4">
             <div className="flex min-w-0 items-center gap-1.5">
@@ -1728,9 +1763,11 @@ export default function PanelRoiThresholdSegmentation() {
             </Button>
           )}
         </div>
-        <div className="border-border flex flex-shrink-0 flex-col gap-1 border-t px-2 py-1">
+        <div
+          className={`border-border flex flex-shrink-0 flex-col gap-0.5 border-t px-1.5 py-0.5 ${reviewPaneWidthClass}`}
+        >
           {/* [2026-08-26 功能] 病灶审核头部：计数压缩成一行状态摘要，减少自动分割后右侧面板拥挤 */}
-          <div className="text-muted-foreground flex items-center gap-2 text-xs font-semibold uppercase">
+          <div className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 text-[11px] font-semibold uppercase">
             <span className="text-foreground">{`${t('Lesions', {
               defaultValue: 'Lesions',
             })} ${lesionCount}`}</span>
@@ -1743,7 +1780,9 @@ export default function PanelRoiThresholdSegmentation() {
             })} ${rejectedCount}`}</span>
           </div>
         </div>
-        <div className="border-border flex flex-shrink-0 flex-col gap-1 border-t px-2 py-1">
+        <div
+          className={`border-border flex flex-shrink-0 flex-col gap-0.5 border-t px-1.5 py-0.5 ${reviewPaneWidthClass}`}
+        >
           {/* [2026-08-25 功能] Lesion 过滤仅改变右侧展示，不触发重新分割或统计，避免额外性能开销 */}
           <div className="flex flex-wrap gap-1">
             {LESION_FILTERS.map(filter => {
@@ -1753,7 +1792,7 @@ export default function PanelRoiThresholdSegmentation() {
                 <button
                   key={filter}
                   type="button"
-                  className={`rounded px-2 py-0.5 text-[11px] ${
+                  className={`rounded px-1.5 py-0.5 text-[10px] ${
                     isActive
                       ? 'bg-primary text-primary-foreground'
                       : 'bg-muted text-muted-foreground'
@@ -1765,10 +1804,10 @@ export default function PanelRoiThresholdSegmentation() {
               );
             })}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center justify-end gap-1">
             <select
               data-cy="tmtvLesionQualityFilter"
-              className="border-input bg-popover text-foreground h-7 min-w-0 flex-1 rounded border px-1.5 text-xs"
+              className="border-input bg-popover text-foreground h-6 min-w-0 w-[5.75rem] rounded border px-1 text-[11px]"
               value={lesionQualityFilter}
               onChange={event => setLesionQualityFilter(event.target.value)}
             >
@@ -1783,7 +1822,7 @@ export default function PanelRoiThresholdSegmentation() {
             </select>
             <select
               data-cy="tmtvLesionSort"
-              className="border-input bg-popover text-foreground h-7 min-w-0 flex-1 rounded border px-1.5 text-xs"
+              className="border-input bg-popover text-foreground h-6 min-w-0 w-[4.25rem] rounded border px-1 text-[11px]"
               value={lesionSortKey}
               onChange={event => setLesionSortKey(event.target.value)}
             >
@@ -1798,7 +1837,7 @@ export default function PanelRoiThresholdSegmentation() {
             </select>
             <button
               type="button"
-              className="bg-muted text-muted-foreground h-7 w-12 rounded text-xs"
+              className="bg-muted text-muted-foreground h-6 w-9 flex-shrink-0 rounded text-[11px]"
               onClick={() =>
                 setLesionSortDirection(direction => (direction === 'asc' ? 'desc' : 'asc'))
               }
@@ -1818,7 +1857,9 @@ export default function PanelRoiThresholdSegmentation() {
           filteredDeleteCount > 0 ||
           selectedDeleteCount > 0 ||
           mergeSelectionIds.length >= 2) && (
-          <div className="border-border flex flex-shrink-0 flex-wrap gap-1 border-t px-2 py-1">
+          <div
+            className={`border-border flex flex-shrink-0 flex-wrap gap-1 border-t px-2 py-1 ${reviewPaneWidthClass}`}
+          >
             {/* [2026-08-26 功能] 自动分割批量审核：当前筛选和勾选病灶都支持一键 Confirm/Reject */}
             {filteredConfirmCount > 0 && (
               <Button
@@ -1931,7 +1972,9 @@ export default function PanelRoiThresholdSegmentation() {
           </div>
         )}
         {/* [2026-08-26 功能] Lesion 列表紧凑显示：减少卡片间距，提升右侧小面板中的可见病灶数量 */}
-        <div className="ohif-scrollbar ohif-scrollbar-stable-gutter min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-1.5 py-1">
+        <div
+          className={`ohif-scrollbar ohif-scrollbar-stable-gutter min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-1.5 py-1 ${reviewPaneWidthClass}`}
+        >
           {!lesionCount && (
             <div className="text-muted-foreground flex flex-col gap-2 py-2 text-sm">
               <span>
@@ -1979,7 +2022,7 @@ export default function PanelRoiThresholdSegmentation() {
                 key={lesion.id}
                 role="button"
                 tabIndex={0}
-                className={`border-border mb-1.5 w-full rounded-md border border-l-2 pb-1.5 text-left shadow-sm last:mb-0 ${getStatusAccentClass(
+                className={`border-border mb-1 w-full rounded-md border border-l-2 pb-1 text-left shadow-sm last:mb-0 ${getStatusAccentClass(
                   lesion
                 )} ${isSelected ? 'ring-primary/80 bg-primary/10 ring-1' : ''}`}
                 onClick={() => handleSelectLesion(lesion.id)}
@@ -1989,8 +2032,8 @@ export default function PanelRoiThresholdSegmentation() {
                   }
                 }}
               >
-                <div className="mb-0.5 flex items-start justify-between gap-1.5 px-1 pt-1">
-                  <div className="flex min-w-0 gap-2">
+                <div className="mb-0.5 flex items-start justify-between gap-1 px-1 pt-0.5">
+                  <div className="flex min-w-0 gap-1.5">
                     <input
                       type="checkbox"
                       className="accent-primary mt-1 h-3 w-3 flex-shrink-0"
@@ -2002,7 +2045,7 @@ export default function PanelRoiThresholdSegmentation() {
                       })} ${lesion.displayIndex ?? lesion.lesionNumber}`}
                     />
                     <div>
-                      <div className="text-foreground text-sm font-semibold">
+                      <div className="text-foreground text-xs font-semibold">
                         <span className="inline-flex items-center gap-1.5">
                           <span
                             className={`h-2 w-2 rounded-full ${getStatusDotClass(lesion.status)}`}
@@ -2015,7 +2058,7 @@ export default function PanelRoiThresholdSegmentation() {
                         </span>
                       </div>
                       <div
-                        className={`mt-0.5 text-[11px] font-semibold uppercase ${
+                        className={`text-[10px] font-semibold uppercase ${
                           isConfirmed
                             ? 'text-green-400'
                             : isRejected
@@ -2038,11 +2081,11 @@ export default function PanelRoiThresholdSegmentation() {
                         )}
                       </div>
                       {!!qualityTags.length && (
-                        <div className="mt-1 flex max-w-[190px] flex-wrap gap-1">
+                        <div className="mt-0.5 flex max-w-[190px] flex-wrap gap-0.5">
                           {qualityTags.slice(0, 3).map(tag => (
                             <span
                               key={tag.key}
-                              className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-3 ${getQualityTagClass(
+                              className={`rounded border px-1 py-0 text-[9px] font-semibold leading-3 ${getQualityTagClass(
                                 tag.tone
                               )}`}
                             >
@@ -2059,7 +2102,7 @@ export default function PanelRoiThresholdSegmentation() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="h-6 px-1.5 text-xs text-green-400 hover:text-green-300"
+                          className="h-5 px-1 text-[10px] text-green-400 hover:text-green-300"
                           onClick={event => handleSetLesionStatus(event, lesion.id, 'confirmed')}
                         >
                           {t('Confirm', { defaultValue: 'Confirm' })}
@@ -2067,7 +2110,7 @@ export default function PanelRoiThresholdSegmentation() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="h-6 px-1.5 text-xs text-red-300 hover:text-red-200"
+                          className="h-5 px-1 text-[10px] text-red-300 hover:text-red-200"
                           onClick={event => handleSetLesionStatus(event, lesion.id, 'rejected')}
                         >
                           {t('Reject', { defaultValue: 'Reject' })}
@@ -2078,7 +2121,7 @@ export default function PanelRoiThresholdSegmentation() {
                       <Button
                         size="sm"
                         variant="ghost"
-                        className="h-6 px-1.5 text-xs text-red-300 hover:text-red-200"
+                        className="h-5 px-1 text-[10px] text-red-300 hover:text-red-200"
                         onClick={event => handleSetLesionStatus(event, lesion.id, 'rejected')}
                       >
                         {t('Reject', { defaultValue: 'Reject' })}
@@ -2089,7 +2132,7 @@ export default function PanelRoiThresholdSegmentation() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="text-primary h-6 px-1.5 text-xs"
+                          className="text-primary h-5 px-1 text-[10px]"
                           onClick={event => handleSetLesionStatus(event, lesion.id, 'candidate')}
                         >
                           {t('Restore', { defaultValue: 'Restore' })}
@@ -2097,7 +2140,7 @@ export default function PanelRoiThresholdSegmentation() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="h-6 px-1.5 text-xs text-red-400 hover:text-red-300"
+                          className="h-5 px-1 text-[10px] text-red-400 hover:text-red-300"
                           onClick={event => handleDeleteLesion(event, lesion.id)}
                         >
                           {t('Delete', { defaultValue: 'Delete' })}
@@ -2107,7 +2150,7 @@ export default function PanelRoiThresholdSegmentation() {
                   </div>
                 </div>
                 {/* [2026-08-26 功能] Lesion 指标改成两列紧凑格，减少单个病灶卡片高度 */}
-                <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 px-1 pb-0.5 text-[11px] leading-5">
+                <div className="grid grid-cols-2 gap-x-1.5 px-1 pb-0.5 text-[10px] leading-4">
                   <div className="flex min-w-0 justify-between gap-1">
                     <span className="text-muted-foreground">
                       {t('Volume', { defaultValue: 'Volume' })}
