@@ -509,22 +509,21 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
       }
 
       if (restoreOnlyIfPersistedMask) {
-        const ptViewport = cornerstoneViewportService.getCornerstoneViewport(withPTViewportId);
-        const ptVolumeId = _getPTVolumeId(ptViewport);
-        const ptVolume = ptVolumeId ? cs.cache.getVolume(ptVolumeId) : null;
-        const dimensions = getDimensions(ptVolume);
+        // 2026-09-22 功能说明：恢复校验与“本地已保存”使用同一 PT 参考体积，兼容对比视口 volumeId 尚未可用时的图像缓存。
+        const referenceContext = actions.getTMTVSegmentMaskReferenceContext({ segmentIndex: 1 });
         const hasPersistedMask =
-          !!ptVolume &&
-          !!dimensions &&
-          (await tmtvSegmentMaskStorageService.hasSegmentMaskForReferenceVolume({
-            referenceVolume: ptVolume,
-            segmentIndex: 1,
-            dimensions,
-          }));
+          !!referenceContext &&
+          (await tmtvSegmentMaskStorageService.hasSegmentMaskForReferenceVolume(referenceContext));
 
         if (!hasPersistedMask) {
+          showTMTVError('No recoverable local segmentation found for current examination');
           return;
         }
+      }
+
+      // 2026-09-22 功能说明：异步查询本地 mask 期间若切换检查，停止旧侧的分割创建。
+      if (tmtvSessionService.getActiveSide() !== activeSide) {
+        return;
       }
 
       const currentSegmentations =
