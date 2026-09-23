@@ -11,6 +11,9 @@ import {
   getScalarData,
 } from './TMTVStatisticsService';
 import tmtvSegmentMaskStorageService from './TMTVSegmentMaskStorageService';
+import classifyPhysiologicalUptake, {
+  type PhysiologicalUptakeSuggestion,
+} from '../utils/classifyPhysiologicalUptake';
 
 const { SegmentationRepresentations } = csTools.Enums;
 
@@ -42,6 +45,8 @@ export type TMTVLesion = {
   status: TMTVLesionStatus;
   createdBy: TMTVLesionCreatedBy;
   modified: boolean;
+  // 2026-09-23 功能说明：保守规则生成的生理摄取审核提示，不改变 lesion 状态或底层 mask。
+  physiologicalUptake?: PhysiologicalUptakeSuggestion;
   // [2026-08-26 功能] Merge Lesions：业务合并可包含多个非连续 connected components，但仍不新增 Segment
   mergedLesionIds?: string[];
   // [2026-08-26 功能] Lesion 状态持久化：记录合并前 component 的几何身份，用于刷新后恢复业务合并关系
@@ -861,7 +866,7 @@ export class TMTVLesionService {
     segmentationVolumeId: string;
     dimensions: [number, number, number];
   }): TMTVLesion[] {
-    return components.map((component, componentIndex) => {
+    const lesions: TMTVLesion[] = components.map((component, componentIndex) => {
       // [2026-08-25 功能] 第三阶段病灶统计统一委托给 TMTVStatisticsService，LesionService 只负责生命周期和列表状态
       const stats = computeLesionStatisticsForComponent({
         voxelIndices: component.voxelIndices,
@@ -891,6 +896,14 @@ export class TMTVLesionService {
         modified: false,
       };
     });
+
+    const worldBounds = segmentationVolume?.imageData?.getBounds?.() ?? null;
+    const suggestions = classifyPhysiologicalUptake(lesions, worldBounds);
+
+    return lesions.map(lesion => ({
+      ...lesion,
+      physiologicalUptake: suggestions.get(lesion.id),
+    }));
   }
 
   private async extractLesionsForSegmentationAsync(
@@ -1659,6 +1672,14 @@ function mergeLesionGroup(lesions: TMTVLesion[]): TMTVLesion {
       lesions.flatMap(lesion => lesion.mergedLesionIdentityKeys ?? [getLesionIdentityKey(lesion)])
     )
   );
+  const physiologicalCategories = new Set(
+    lesions.map(lesion => lesion.physiologicalUptake?.category).filter(Boolean)
+  );
+  const physiologicalUptake =
+    physiologicalCategories.size === 1 &&
+    lesions.every(lesion => lesion.physiologicalUptake?.confidence === 'high')
+      ? lesions[0].physiologicalUptake
+      : undefined;
 
   return {
     ...primaryLesion,
@@ -1675,6 +1696,7 @@ function mergeLesionGroup(lesions: TMTVLesion[]): TMTVLesion {
     status: 'candidate',
     createdBy: 'brush',
     modified: true,
+    physiologicalUptake,
     mergedLesionIds,
     mergedLesionIdentityKeys,
   };

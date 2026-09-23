@@ -21,6 +21,7 @@ const SEGMENT_INDEX = 1;
 const LESION_FILTERS = ['all', 'confirmed', 'candidate', 'rejected'];
 const LESION_QUALITY_FILTERS = [
   'all',
+  'physiologicalUptake',
   'review',
   'smallVolume',
   'lowUptake',
@@ -109,6 +110,13 @@ function getLesionQualityTags(lesion): LesionQualityTag[] {
   const suvMax = getSortableNumber(lesion.suvMax);
   const tlg = getSortableNumber(lesion.tlg);
 
+  if (lesion.physiologicalUptake) {
+    tags.push({
+      key: `physiologicalUptake:${lesion.physiologicalUptake.category}`,
+      tone: 'warning',
+    });
+  }
+
   if (volume > -Infinity && volume < LESION_QUALITY_RULES.smallVolumeML) {
     tags.push({ key: 'smallVolume', tone: 'warning' });
   }
@@ -125,7 +133,14 @@ function getLesionQualityTags(lesion): LesionQualityTag[] {
     tags.push({ key: 'highBurden', tone: 'accent' });
   }
 
-  if (tags.some(tag => tag.key === 'smallVolume' || tag.key === 'lowUptake')) {
+  if (
+    tags.some(
+      tag =>
+        tag.key.startsWith('physiologicalUptake:') ||
+        tag.key === 'smallVolume' ||
+        tag.key === 'lowUptake'
+    )
+  ) {
     tags.unshift({ key: 'review', tone: 'warning' });
   }
 
@@ -135,6 +150,10 @@ function getLesionQualityTags(lesion): LesionQualityTag[] {
 function doesLesionMatchQualityFilter(lesion, qualityFilter: string): boolean {
   if (qualityFilter === 'all') {
     return true;
+  }
+
+  if (qualityFilter === 'physiologicalUptake') {
+    return !!lesion.physiologicalUptake;
   }
 
   return getLesionQualityTags(lesion).some(tag => tag.key === qualityFilter);
@@ -1270,6 +1289,10 @@ export default function PanelRoiThresholdSegmentation() {
   };
 
   const getQualityFilterLabel = filter => {
+    if (filter === 'physiologicalUptake') {
+      return t('Possible physiological uptake', { defaultValue: 'Possible physiological' });
+    }
+
     if (filter === 'review') {
       return t('Needs review', { defaultValue: 'Needs review' });
     }
@@ -1294,6 +1317,20 @@ export default function PanelRoiThresholdSegmentation() {
   };
 
   const getQualityTagLabel = tagKey => {
+    if (tagKey.startsWith('physiologicalUptake:')) {
+      const category = tagKey.split(':')[1];
+      const categoryLabels: Record<string, string> = {
+        brain: t('Brain', { defaultValue: 'Brain' }),
+        liver: t('Liver', { defaultValue: 'Liver' }),
+        urinaryBladder: t('Urinary bladder', { defaultValue: 'Urinary bladder' }),
+        renalPair: t('Kidneys', { defaultValue: 'Kidneys' }),
+      };
+
+      return `${t('Possible physiological uptake', {
+        defaultValue: 'Possible physiological uptake',
+      })} · ${categoryLabels[category] ?? category}`;
+    }
+
     if (tagKey === 'review') {
       return t('Needs review', { defaultValue: 'Needs review' });
     }
