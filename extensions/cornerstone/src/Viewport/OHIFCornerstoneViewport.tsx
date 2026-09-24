@@ -126,8 +126,8 @@ const OHIFCornerstoneViewport = React.memo(
 
           if (width > 0 && height > 0 && hasDimensionsChanged) {
             viewportDimensions.set(viewportId, { width, height });
-            // Perform resize operations
-            cornerstoneViewportService.resize();
+            // 2026-09-24 功能说明：ResizeObserver 在绘制前立即同步画布，避免布局还原时先显示拉伸图像。
+            cornerstoneViewportService.resize(true);
             setImageScrollBarHeight();
           }
         }

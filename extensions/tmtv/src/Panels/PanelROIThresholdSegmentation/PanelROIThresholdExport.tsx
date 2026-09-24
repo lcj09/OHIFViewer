@@ -419,16 +419,12 @@ export default function PanelRoiThresholdSegmentation() {
         return;
       }
 
-      const metabolicStats = await handleROIThresholding({
+      await handleROIThresholding({
         segmentationId,
         commandsManager,
         segmentationService,
         segmentations: currentSegmentations,
       });
-
-      if (metabolicStats == null) {
-        return;
-      }
 
       if (
         lesionRefreshRequestIdRef.current !== requestId ||
@@ -654,6 +650,55 @@ export default function PanelRoiThresholdSegmentation() {
         await refreshTMTVAndLesions(restoredSegmentationId, {
           restorePersistedMask: true,
         });
+
+        // 2026-09-24 功能说明：恢复后以实时 Session 收口病灶状态；若异步刷新被初始化竞态取消，则从已恢复的 mask 重建列表。
+        const restoredSide = tmtvSessionService.getActiveSide();
+        const restoredSession = tmtvSessionService.getSession(restoredSide);
+        const restoredLesionSessionId =
+          restoredSide === 'single' ? undefined : restoredSession?.sessionId;
+        const restoredSegmentationIds = (restoredSession?.segmentationIds || []).filter(
+          segmentationId =>
+            !tmtvLesionHighlightService.isHighlightSegmentationId(segmentationId) &&
+            !!segmentationService.getSegmentation?.(segmentationId)
+        );
+        const scopedRestoredSegmentationIds = restoredSegmentationIds.includes(
+          restoredSegmentationId
+        )
+          ? restoredSegmentationIds
+          : [restoredSegmentationId];
+        let restoredLesionState = tmtvLesionService.getState(
+          scopedRestoredSegmentationIds,
+          restoredLesionSessionId
+        );
+
+        if (!restoredLesionState.lesions.length) {
+          const restoredSegmentations = scopedRestoredSegmentationIds
+            .map(segmentationId => segmentationService.getSegmentation(segmentationId))
+            .filter(Boolean);
+
+          if (restoredSegmentations.length) {
+            restoredLesionState = await tmtvLesionService.extractLesionsForSegmentationsAsync(
+              restoredSegmentations,
+              SEGMENT_INDEX,
+              { sessionId: restoredLesionSessionId }
+            );
+          }
+        }
+
+        if (tmtvSessionService.getActiveSide() === restoredSide) {
+          setLesionState(restoredLesionState);
+          tmtvSessionService.setSegmentationIds(
+            restoredSide,
+            restoredLesionState.segmentationIds,
+            restoredSegmentationId
+          );
+          tmtvSessionService.setTotals(restoredSide, restoredLesionState.totals);
+          segmentationService.setSegmentationGroupStats(restoredLesionState.segmentationIds, {
+            tmtv: restoredLesionState.totals.tmtv,
+            tlg: restoredLesionState.totals.tlg,
+          });
+        }
+
         await refreshLocalMaskInfo();
       }
     } finally {

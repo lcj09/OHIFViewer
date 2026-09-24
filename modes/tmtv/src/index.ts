@@ -21,6 +21,7 @@ import {
   drainLifecycleSubscriptions,
   runLifecycleCleanups,
 } from '../../../extensions/tmtv/src/utils/runLifecycleCleanups';
+import installTMTVSegmentationRenderGuard from '../../../extensions/tmtv/src/utils/installTMTVSegmentationRenderGuard';
 
 const { MetadataProvider } = classes;
 
@@ -62,6 +63,7 @@ let metadataClearTimer: ReturnType<typeof setTimeout> | null = null;
 // 原代码未跟踪此 timer，mode exit 后 200ms 内回调可能在已销毁的 service 上执行。
 let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 let gpuUploadProbeCleanup: (() => void) | null = null;
+let segmentationRenderGuardCleanup: (() => void) | null = null;
 
 function modeFactory({ modeConfiguration }) {
   return {
@@ -91,6 +93,8 @@ function modeFactory({ modeConfiguration }) {
         clearTimeout(resizeTimer);
         resizeTimer = null;
       }
+      segmentationRenderGuardCleanup?.();
+      segmentationRenderGuardCleanup = null;
 
       const {
         toolbarService,
@@ -101,6 +105,9 @@ function modeFactory({ modeConfiguration }) {
         viewportGridService,
         cornerstoneViewportService,
       } = servicesManager.services;
+
+      // 2026-09-24 功能说明：仅在 TMTV 生命周期内保护布局还原时的 Labelmap 缓存竞态。
+      segmentationRenderGuardCleanup = installTMTVSegmentationRenderGuard(servicesManager).dispose;
 
       const utilityModule = extensionManager.getModuleEntry(
         '@ohif/extension-cornerstone.utilityModule.tools'
@@ -163,19 +170,50 @@ function modeFactory({ modeConfiguration }) {
 
       unsubscriptions.push(unsubscribe);
 
-      // [2026-07-06] 监听布局切换事件，延迟resize确保视口尺寸正确更新，避免图像变形
-      // [内存排查] 跟踪 resize timer，在 onModeExit 中清除，避免回调在 service 销毁后执行
+      // 2026-09-24 功能说明：布局与视口就绪事件共用可取消 resize，修复双击 1x1 还原后的 PET 比例变形。
+      const scheduleViewportResize = (delay = 200, immediate = false) => {
+        if (immediate) {
+          try {
+            cornerstoneViewportService.resize(true);
+          } catch (error) {
+            console.warn('[tmtv-mode] Immediate viewport resize failed', error);
+          }
+        }
+
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          resizeTimer = null;
+          try {
+            cornerstoneViewportService.resize();
+          } catch (error) {
+            console.warn('[tmtv-mode] Deferred viewport resize failed', error);
+          }
+        }, delay);
+      };
+
       const { unsubscribe: protocolUnsubscribe } = hangingProtocolService.subscribe(
         hangingProtocolService.EVENTS.PROTOCOL_CHANGED,
-        () => {
-          if (resizeTimer) clearTimeout(resizeTimer);
-          resizeTimer = setTimeout(() => {
-            cornerstoneViewportService.resize();
-            resizeTimer = null;
-          }, 200);
-        }
+        () => scheduleViewportResize()
       );
       unsubscriptions.push(protocolUnsubscribe);
+
+      const layoutChangedEvent = viewportGridService.EVENTS.LAYOUT_CHANGED;
+      if (layoutChangedEvent) {
+        const { unsubscribe: layoutChangedUnsubscribe } = viewportGridService.subscribe(
+          layoutChangedEvent,
+          () => scheduleViewportResize(200, true)
+        );
+        unsubscriptions.push(layoutChangedUnsubscribe);
+      }
+
+      const viewportsReadyEvent = viewportGridService.EVENTS.VIEWPORTS_READY;
+      if (viewportsReadyEvent) {
+        const { unsubscribe: viewportsReadyUnsubscribe } = viewportGridService.subscribe(
+          viewportsReadyEvent,
+          () => scheduleViewportResize(50, true)
+        );
+        unsubscriptions.push(viewportsReadyUnsubscribe);
+      }
 
       // 2026-08-31 功能说明：跟随 active viewport 和布局变化维护 Baseline/Follow-up 当前操作侧
       const syncComparisonState = ({ viewportId }: { viewportId?: string } = {}) => {
@@ -443,6 +481,8 @@ function modeFactory({ modeConfiguration }) {
     onModeExit: ({ servicesManager, extensionManager }: withAppTypes) => {
       gpuUploadProbeCleanup?.();
       gpuUploadProbeCleanup = null;
+      segmentationRenderGuardCleanup?.();
+      segmentationRenderGuardCleanup = null;
       const {
         toolGroupService,
         syncGroupService,
@@ -607,7 +647,8 @@ function modeFactory({ modeConfiguration }) {
         },*/
         layoutTemplate: ({ studyInstanceUIDs }) => {
           // 2026-09-22 功能说明：单次检查使用窄审核栏；双检查保留审核与对比并列所需宽度。
-          const isComparisonStudy = Array.isArray(studyInstanceUIDs) && studyInstanceUIDs.length > 1;
+          const isComparisonStudy =
+            Array.isArray(studyInstanceUIDs) && studyInstanceUIDs.length > 1;
           return {
             id: ohif.layout,
             props: {

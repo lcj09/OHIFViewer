@@ -84,6 +84,7 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
   viewportResizeTimer = null;
   gridResizeDelay = 50;
   gridResizeTimeOut = null;
+  immediateResizeScheduled = false;
 
   constructor(servicesManager: AppTypes.ServicesManager) {
     super(EVENTS);
@@ -139,7 +140,7 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
    * It triggers the resize on the rendering engine, and renders the viewports
    *
    */
-  public resize() {
+  public resize(immediate = false) {
     // https://stackoverflow.com/a/26279685
     // This resize() call, among other things, rerenders the viewports. But when the entire viewer is
     // display: none'd, it makes the size of all hidden elements 0, including the viewport canvas and its containers.
@@ -152,6 +153,22 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     });
     if (areViewportsHidden) {
       console.warn('Ignoring resize when viewports have size 0');
+      return;
+    }
+
+    // 2026-09-24 功能说明：布局恢复可绕过大体积视口队列，在首帧绘制前立即同步画布尺寸。
+    if (immediate) {
+      if (this.immediateResizeScheduled) {
+        return;
+      }
+
+      this.immediateResizeScheduled = true;
+      clearTimeout(this.viewportResizeTimer);
+      this.resizeQueue = [];
+      this.performResize(true);
+      queueMicrotask(() => {
+        this.immediateResizeScheduled = false;
+      });
       return;
     }
 
@@ -1752,9 +1769,7 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     this.resizeQueue = [];
   }
 
-  private performResize() {
-    const isImmediate = false;
-
+  private performResize(isImmediate = false) {
     try {
       const viewports = this.getRenderingEngine().getViewports();
 

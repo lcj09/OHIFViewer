@@ -37,6 +37,7 @@ import {
   getExistingSessionSegmentationIds,
 } from './utils/tmtvSegmentationScope';
 import addSegmentationRepresentationPreservingCamera from './utils/addSegmentationRepresentationPreservingCamera';
+import isLabelmapImageCacheComplete from './utils/isLabelmapImageCacheComplete';
 
 const { SegmentationRepresentations } = Enums;
 const { formatPN } = utils;
@@ -810,25 +811,44 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     calculateTMTV: async ({ segmentations }) => {
       // 2026-09-02 功能说明：只计算 Cornerstone 状态中已完整注册的 labelmap，兼容新建分割事件先于面板渲染。
-      const segmentationIds = (segmentations || [])
-        .map(segmentation => segmentation?.segmentationId)
-        .filter(segmentationId => {
-          if (!segmentationId) return false;
-          const cornerstoneSegmentation =
-            csTools.segmentation.state.getSegmentation(segmentationId);
-          return !!cornerstoneSegmentation?.representationData?.[
-            SegmentationRepresentations.Labelmap
-          ];
-        });
+      const segmentationIds: string[] = [];
+
+      for (const segmentation of segmentations || []) {
+        const segmentationId = segmentation?.segmentationId;
+        if (!segmentationId) continue;
+
+        const cornerstoneSegmentation =
+          csTools.segmentation.state.getSegmentation(segmentationId);
+        const labelmapData =
+          cornerstoneSegmentation?.representationData?.[SegmentationRepresentations.Labelmap];
+
+        if (!labelmapData) {
+          return null;
+        }
+
+        // 2026-09-24 功能说明：本地 mask 可由缓存 volume 正常显示，但代谢统计还会读取全部派生 image；缺失时跳过，避免读取 undefined.referencedImageId。
+        if (!isLabelmapImageCacheComplete(labelmapData)) {
+          return null;
+        }
+
+        segmentationIds.push(segmentationId);
+      }
 
       if (!segmentationIds.length) {
         return null;
       }
 
-      const stats = await csTools.utilities.segmentation.computeMetabolicStats({
-        segmentationIds,
-        segmentIndex: 1,
-      });
+      let stats;
+      try {
+        stats = await csTools.utilities.segmentation.computeMetabolicStats({
+          segmentationIds,
+          segmentIndex: 1,
+        });
+      } catch (error) {
+        // 2026-09-24 功能说明：校验后仍可能发生缓存淘汰竞态；统计失败不应中断 mask 恢复和病灶列表重建。
+        console.warn('[TMTV] Metabolic statistics skipped because image cache is incomplete.', error);
+        return null;
+      }
 
       segmentationService.setSegmentationGroupStats(segmentationIds, stats);
       return stats;
