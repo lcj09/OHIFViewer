@@ -30,6 +30,11 @@ const LESION_QUALITY_FILTERS = [
 ];
 const LESION_SORT_OPTIONS = ['volume', 'suvMax', 'tlg', 'displayIndex'];
 const MAX_VISIBLE_LESION_MATCHES = 100;
+const DEFAULT_REVIEW_PANE_WIDTH_PERCENT = 56;
+const MIN_REVIEW_PANE_WIDTH_PERCENT = 40;
+const MAX_REVIEW_PANE_WIDTH_PERCENT = 75;
+const MIN_UPPER_TOOLS_PANE_HEIGHT = 20;
+const MIN_LESION_LIST_HEIGHT = 120;
 const LESION_QUALITY_RULES = {
   smallVolumeML: 1,
   lowSUVMax: 3,
@@ -269,11 +274,27 @@ export default function PanelRoiThresholdSegmentation() {
   const [isLesionComparisonExpanded, setIsLesionComparisonExpanded] = useState(true);
   const [lesionSortKey, setLesionSortKey] = useState('volume');
   const [lesionSortDirection, setLesionSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [reviewPaneWidthPercent, setReviewPaneWidthPercent] = useState(
+    DEFAULT_REVIEW_PANE_WIDTH_PERCENT
+  );
+  const [isReviewPaneResizing, setIsReviewPaneResizing] = useState(false);
+  const [upperToolsPaneHeight, setUpperToolsPaneHeight] = useState<number | null>(null);
+  const [isUpperToolsPaneResizing, setIsUpperToolsPaneResizing] = useState(false);
   const hasAttemptedInitialMaskRestoreRef = useRef(false);
   const localMaskRequestIdRef = useRef(0);
   const lesionRefreshRequestIdRef = useRef(0);
   const isRestoringPersistedMaskRef = useRef(false);
   const previousSessionSideRef = useRef(sessionSide);
+  const reviewPaneContainerRef = useRef<HTMLDivElement | null>(null);
+  const reviewPaneSplitterPointerIdRef = useRef<number | null>(null);
+  const upperToolsPaneRef = useRef<HTMLDivElement | null>(null);
+  const lesionListRef = useRef<HTMLDivElement | null>(null);
+  const upperToolsSplitterSessionRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startHeight: number;
+    maxHeight: number;
+  } | null>(null);
 
   useEffect(() => {
     // 2026-09-02 功能说明：同步保存实时 Session，避免切换检查后 lesion 通知读取上一轮 React 闭包。
@@ -793,8 +814,12 @@ export default function PanelRoiThresholdSegmentation() {
       ]
     : [];
   const hasPatientComparison = !!patientComparison;
-  // 2026-09-22 功能说明：对比时收窄审核列，并让右侧筛选按钮贴近两栏分界线。
-  const reviewPaneWidthClass = hasPatientComparison ? 'w-[56%]' : 'w-full';
+  const reviewPaneStyle = {
+    width: hasPatientComparison ? `${reviewPaneWidthPercent}%` : '100%',
+  };
+  const comparisonPaneStyle = {
+    width: `${100 - reviewPaneWidthPercent}%`,
+  };
   const baselineComparisonState = baselineComparisonSession
     ? tmtvLesionService.getState(
         baselineComparisonSession.segmentationIds,
@@ -1419,13 +1444,154 @@ export default function PanelRoiThresholdSegmentation() {
     return 'bg-primary';
   };
 
+  // 2026-09-23 功能说明：根据拖拽位置调整病灶审核区宽度，并限制两侧面板都保留可用空间。
+  const updateReviewPaneWidth = useCallback((clientX: number) => {
+    const container = reviewPaneContainerRef.current;
+    if (!container) return;
+
+    const bounds = container.getBoundingClientRect();
+    if (!Number.isFinite(bounds.width) || bounds.width <= 0) return;
+
+    const nextWidthPercent = ((clientX - bounds.left) / bounds.width) * 100;
+    setReviewPaneWidthPercent(
+      Math.min(
+        MAX_REVIEW_PANE_WIDTH_PERCENT,
+        Math.max(MIN_REVIEW_PANE_WIDTH_PERCENT, nextWidthPercent)
+      )
+    );
+  }, []);
+
+  const handleReviewPaneResizeStart = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!hasPatientComparison || event.button !== 0) return;
+
+      event.preventDefault();
+      reviewPaneSplitterPointerIdRef.current = event.pointerId;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setIsReviewPaneResizing(true);
+      updateReviewPaneWidth(event.clientX);
+    },
+    [hasPatientComparison, updateReviewPaneWidth]
+  );
+
+  const handleReviewPaneResizeMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (reviewPaneSplitterPointerIdRef.current !== event.pointerId) return;
+      updateReviewPaneWidth(event.clientX);
+    },
+    [updateReviewPaneWidth]
+  );
+
+  const handleReviewPaneResizeEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (reviewPaneSplitterPointerIdRef.current !== event.pointerId) return;
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    reviewPaneSplitterPointerIdRef.current = null;
+    setIsReviewPaneResizing(false);
+  }, []);
+
+  const handleReviewPaneResizeKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+
+      event.preventDefault();
+      const direction = event.key === 'ArrowLeft' ? -1 : 1;
+      setReviewPaneWidthPercent(currentWidth =>
+        Math.min(
+          MAX_REVIEW_PANE_WIDTH_PERCENT,
+          Math.max(MIN_REVIEW_PANE_WIDTH_PERCENT, currentWidth + direction * 2)
+        )
+      );
+    },
+    []
+  );
+
+  // 2026-09-23 功能说明：拖动病灶列表上边缘时压缩或展开上方工具区，把释放的高度交给病灶列表。
+  const handleUpperToolsPaneResizeStart = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) return;
+
+      const upperToolsPane = upperToolsPaneRef.current;
+      const lesionList = lesionListRef.current;
+      if (!upperToolsPane || !lesionList) return;
+
+      event.preventDefault();
+      const startHeight = upperToolsPane.getBoundingClientRect().height;
+      const lesionListHeight = lesionList.getBoundingClientRect().height;
+      if (!Number.isFinite(startHeight) || startHeight <= 0) return;
+
+      upperToolsSplitterSessionRef.current = {
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        startHeight,
+        maxHeight: startHeight + Math.max(0, lesionListHeight - MIN_LESION_LIST_HEIGHT),
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setUpperToolsPaneHeight(startHeight);
+      setIsUpperToolsPaneResizing(true);
+    },
+    []
+  );
+
+  const handleUpperToolsPaneResizeMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const session = upperToolsSplitterSessionRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+
+      const nextHeight = session.startHeight + event.clientY - session.startY;
+      setUpperToolsPaneHeight(
+        Math.min(session.maxHeight, Math.max(MIN_UPPER_TOOLS_PANE_HEIGHT, nextHeight))
+      );
+    },
+    []
+  );
+
+  const handleUpperToolsPaneResizeEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const session = upperToolsSplitterSessionRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    upperToolsSplitterSessionRef.current = null;
+    setIsUpperToolsPaneResizing(false);
+  }, []);
+
+  const handleUpperToolsPaneResizeKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+
+      const upperToolsPane = upperToolsPaneRef.current;
+      const lesionList = lesionListRef.current;
+      if (!upperToolsPane || !lesionList) return;
+
+      event.preventDefault();
+      const currentHeight = upperToolsPane.getBoundingClientRect().height;
+      const lesionListHeight = lesionList.getBoundingClientRect().height;
+      const maxHeight = currentHeight + Math.max(0, lesionListHeight - MIN_LESION_LIST_HEIGHT);
+      const direction = event.key === 'ArrowUp' ? -1 : 1;
+      setUpperToolsPaneHeight(
+        Math.min(maxHeight, Math.max(MIN_UPPER_TOOLS_PANE_HEIGHT, currentHeight + direction * 8))
+      );
+    },
+    []
+  );
+
   return (
     <div className="mb-2 flex min-h-0 flex-1 flex-col">
       {/* [2026-08-26 功能] Lesion 管理区使用 flex 剩余高度，避免阈值工具展开后高级分割数据栏悬浮/重叠 */}
-      <div className="bg-background relative flex min-h-[180px] flex-1 flex-col overflow-hidden">
+      <div
+        ref={reviewPaneContainerRef}
+        className={`bg-background relative flex min-h-[180px] flex-1 flex-col overflow-hidden ${
+          isReviewPaneResizing || isUpperToolsPaneResizing ? 'select-none' : ''
+        }`}
+      >
         {/* [2026-09-22 功能说明] 对比模式下统计分两行显示，避免窄审核栏中的数值互相覆盖。 */}
         <div
-          className={`bg-popover flex min-w-0 flex-shrink-0 flex-col gap-1 px-2 py-1 ${reviewPaneWidthClass}`}
+          className="bg-popover flex min-w-0 flex-shrink-0 flex-col gap-1 px-2 py-1"
+          style={reviewPaneStyle}
         >
           <div
             className={`grid gap-1 leading-4 ${hasPatientComparison ? 'grid-cols-1 text-xs' : 'grid-cols-2 text-sm'}`}
@@ -1453,7 +1619,8 @@ export default function PanelRoiThresholdSegmentation() {
           {patientComparison && (
             <div
               data-cy="tmtvComparisonPane"
-              className="bg-popover border-border absolute inset-y-0 right-0 z-20 flex min-h-0 w-[44%] flex-col border-l px-1.5 py-0.5"
+              className="bg-popover border-border absolute inset-y-0 right-0 z-20 flex min-h-0 flex-col border-l px-1.5 py-0.5"
+              style={comparisonPaneStyle}
             >
               <div className="border-border flex h-7 flex-shrink-0 items-center border-b text-xs font-semibold">
                 <span>对比结果</span>
@@ -1478,13 +1645,13 @@ export default function PanelRoiThresholdSegmentation() {
                     }`}
                   />
                 </button>
-                {/* 2026-09-22 功能说明：数值列弹性分配宽度，长结果换行而不截断，同时限制整表宽度保持列距紧凑。 */}
+                {/* 2026-09-23 功能说明：总量表格使用紧凑固定列宽，缩短项目与数值列间距并完整容纳常见结果。 */}
                 {isPatientComparisonExpanded && (
                   <div
-                    className="grid gap-x-0.5 text-[10px] leading-4"
+                    className="grid gap-x-0 text-[10px] leading-4"
                     style={{
-                      gridTemplateColumns: '2.25rem repeat(2, minmax(0, 1fr))',
-                      maxWidth: '13rem',
+                      gridTemplateColumns: '2rem 4.5rem 4.75rem',
+                      maxWidth: '11.25rem',
                     }}
                   >
                     <span className="text-muted-foreground">项目</span>
@@ -1564,10 +1731,11 @@ export default function PanelRoiThresholdSegmentation() {
                                   ? `${baselineLabel} → ${followupLabel}`
                                   : baselineLabel || followupLabel;
 
+                              // 2026-09-23 功能说明：压缩状态与距离固定列，将有限宽度优先留给检查配对信息。
                               return (
                                 <div
                                   key={match.matchId}
-                                  className="grid grid-cols-[3.75rem_minmax(0,1fr)_3rem] items-center gap-0.5 border-b border-white/5 py-0.5 text-[9px] leading-4 last:border-b-0"
+                                  className="grid grid-cols-[2.625rem_minmax(0,1fr)_2.75rem] items-center gap-0 border-b border-white/5 py-0.5 text-[9px] leading-4 last:border-b-0"
                                   title={`${match.baselineLesionId || '-'} → ${
                                     match.followupLesionId || '-'
                                   }`}
@@ -1610,6 +1778,36 @@ export default function PanelRoiThresholdSegmentation() {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+          {patientComparison && (
+            <div
+              role="separator"
+              tabIndex={0}
+              aria-label="调整病灶窗口宽度"
+              aria-orientation="vertical"
+              aria-valuemin={MIN_REVIEW_PANE_WIDTH_PERCENT}
+              aria-valuemax={MAX_REVIEW_PANE_WIDTH_PERCENT}
+              aria-valuenow={Math.round(reviewPaneWidthPercent)}
+              data-cy="tmtvReviewPaneResizeHandle"
+              className={`group absolute inset-y-0 z-30 w-2 -translate-x-1/2 cursor-col-resize touch-none focus:outline-none ${
+                isReviewPaneResizing ? 'bg-primary/10' : ''
+              }`}
+              style={{ left: `${reviewPaneWidthPercent}%` }}
+              title="拖动调整病灶窗口宽度，双击恢复默认宽度"
+              onPointerDown={handleReviewPaneResizeStart}
+              onPointerMove={handleReviewPaneResizeMove}
+              onPointerUp={handleReviewPaneResizeEnd}
+              onPointerCancel={handleReviewPaneResizeEnd}
+              onLostPointerCapture={handleReviewPaneResizeEnd}
+              onKeyDown={handleReviewPaneResizeKeyDown}
+              onDoubleClick={() => setReviewPaneWidthPercent(DEFAULT_REVIEW_PANE_WIDTH_PERCENT)}
+            >
+              <div
+                className={`bg-border group-hover:bg-primary group-focus:bg-primary h-full w-px transition-colors ${
+                  isReviewPaneResizing ? 'bg-primary' : ''
+                }`}
+              />
             </div>
           )}
           <div className="flex flex-shrink-0 items-center justify-between gap-1">
@@ -1655,153 +1853,190 @@ export default function PanelRoiThresholdSegmentation() {
           </div>
         </div>
         <div
-          className={`border-border bg-background flex flex-shrink-0 flex-col border-t px-2 py-1 ${reviewPaneWidthClass}`}
+          ref={upperToolsPaneRef}
+          className="ohif-scrollbar min-h-0 flex-shrink-0 overflow-y-auto overflow-x-hidden"
+          style={{
+            ...reviewPaneStyle,
+            ...(upperToolsPaneHeight === null ? {} : { height: `${upperToolsPaneHeight}px` }),
+          }}
         >
-          {/* [2026-08-26 功能] 自动分割区折叠展示：运行后收起参数，给病灶审核列表让出高度 */}
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              className="text-muted-foreground flex min-w-0 flex-1 items-center gap-1 text-left text-xs font-semibold uppercase"
-              onClick={() => setIsAutoSegmentationExpanded(isExpanded => !isExpanded)}
-            >
-              <span>{isAutoSegmentationExpanded ? '▾' : '▸'}</span>
-              <span>{t('Auto segmentation', { defaultValue: 'Auto segmentation' })}</span>
-              {!isAutoSegmentationExpanded && (
-                <span className="truncate text-[11px] font-normal normal-case">
-                  {`${autoSUVThreshold} / ${autoMinVolumeML} mL / ${t(
-                    autoWriteMode === 'append' ? 'Append' : 'Overwrite',
-                    {
-                      defaultValue: autoWriteMode === 'append' ? 'Append' : 'Overwrite',
-                    }
-                  )}`}
-                </span>
-              )}
-            </button>
-            <Button
-              dataCY="runTmtvAutoSegmentation"
-              size="sm"
-              variant="default"
-              className="h-7 flex-shrink-0 px-2 text-xs"
-              disabled={isRunningAutoSegmentation}
-              onClick={handleRunAutoSegmentation}
-            >
-              <span>
-                {isRunningAutoSegmentation
-                  ? t('Running', { defaultValue: 'Running...' })
-                  : t('Run', { defaultValue: 'Run' })}
-              </span>
-            </Button>
-          </div>
-          {isAutoSegmentationExpanded && (
-            <div className="mt-1 grid grid-cols-[4.25rem_4.75rem_minmax(0,1fr)] gap-1">
-              <label className="text-muted-foreground flex min-w-0 flex-col gap-0.5 text-[11px]">
-                <span>{t('SUV threshold', { defaultValue: 'SUV threshold' })}</span>
-                <input
-                  data-cy="tmtvAutoSUVThreshold"
-                  type="number"
-                  min="0"
-                  step="0.1"
-                  className="border-input bg-popover text-foreground h-7 min-w-0 w-full rounded border px-1 text-xs"
-                  value={autoSUVThreshold}
-                  onChange={event =>
-                    setAutoSUVThreshold(getFiniteInputNumber(event.target.value, 2.5))
-                  }
-                />
-              </label>
-              <label className="text-muted-foreground flex min-w-0 flex-col gap-0.5 text-[11px]">
-                <span>{t('Min volume mL', { defaultValue: 'Min volume mL' })}</span>
-                <input
-                  data-cy="tmtvAutoMinVolume"
-                  type="number"
-                  min="0"
-                  step="0.1"
-                  className="border-input bg-popover text-foreground h-7 min-w-0 w-full rounded border px-1 text-xs"
-                  value={autoMinVolumeML}
-                  onChange={event =>
-                    setAutoMinVolumeML(getFiniteInputNumber(event.target.value, 0.1))
-                  }
-                />
-              </label>
-              <label className="text-muted-foreground flex min-w-0 flex-col gap-0.5 text-[11px]">
-                <span>{t('Write mode', { defaultValue: 'Write mode' })}</span>
-                <select
-                  data-cy="tmtvAutoWriteMode"
-                  className="border-input bg-popover text-foreground h-7 min-w-0 w-full rounded border px-1 text-xs"
-                  value={autoWriteMode}
-                  onChange={event =>
-                    setAutoWriteMode(event.target.value === 'append' ? 'append' : 'overwrite')
-                  }
-                >
-                  <option value="overwrite">{t('Overwrite', { defaultValue: 'Overwrite' })}</option>
-                  <option value="append">{t('Append', { defaultValue: 'Append' })}</option>
-                </select>
-              </label>
-            </div>
-          )}
-          {!!autoSegmentationSummary && (
-            <div className="text-muted-foreground mt-0.5 truncate text-[11px]">
-              {autoSegmentationSummary}
-            </div>
-          )}
-        </div>
-        <div
-          className={`border-border bg-background flex flex-shrink-0 items-center justify-between gap-2 border-t px-2 py-1 ${reviewPaneWidthClass}`}
-        >
-          {/* [2026-08-27 功能] 本地存储管理 UI：显示当前病例 Segment 1 浏览器本地保存状态，并支持一键清除本地备份 */}
-          <div className="min-w-0 text-[11px] leading-4">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <span className="text-muted-foreground font-semibold uppercase">
-                {t('Local segmentation storage', {
-                  defaultValue: 'Local save',
-                })}
-              </span>
-              <span
-                className={
-                  localMaskInfo
-                    ? 'text-green-400'
-                    : isCheckingLocalMask
-                      ? 'text-primary'
-                      : 'text-muted-foreground'
-                }
+          <div className="border-border bg-background flex w-full flex-shrink-0 flex-col border-t px-2 py-1">
+            {/* [2026-08-26 功能] 自动分割区折叠展示：运行后收起参数，给病灶审核列表让出高度 */}
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="text-muted-foreground flex min-w-0 flex-1 items-center gap-1 text-left text-xs font-semibold uppercase"
+                onClick={() => setIsAutoSegmentationExpanded(isExpanded => !isExpanded)}
               >
-                {isCheckingLocalMask
-                  ? t('Checking', { defaultValue: 'Checking...' })
-                  : localMaskInfo
-                    ? t('Saved', { defaultValue: 'Saved' })
-                    : t('Not saved', { defaultValue: 'Not saved' })}
-              </span>
+                <span>{isAutoSegmentationExpanded ? '▾' : '▸'}</span>
+                <span>{t('Auto segmentation', { defaultValue: 'Auto segmentation' })}</span>
+                {!isAutoSegmentationExpanded && (
+                  <span className="truncate text-[11px] font-normal normal-case">
+                    {`${autoSUVThreshold} / ${autoMinVolumeML} mL / ${t(
+                      autoWriteMode === 'append' ? 'Append' : 'Overwrite',
+                      {
+                        defaultValue: autoWriteMode === 'append' ? 'Append' : 'Overwrite',
+                      }
+                    )}`}
+                  </span>
+                )}
+              </button>
+              <Button
+                dataCY="runTmtvAutoSegmentation"
+                size="sm"
+                variant="default"
+                className="h-7 flex-shrink-0 px-2 text-xs"
+                disabled={isRunningAutoSegmentation}
+                onClick={handleRunAutoSegmentation}
+              >
+                <span>
+                  {isRunningAutoSegmentation
+                    ? t('Running', { defaultValue: 'Running...' })
+                    : t('Run', { defaultValue: 'Run' })}
+                </span>
+              </Button>
             </div>
-            {localMaskInfo && (
-              <div className="text-muted-foreground truncate">
-                {`${t('Saved at', { defaultValue: 'Saved at' })} ${formatLocalMaskUpdatedAt(
-                  localMaskInfo.updatedAt
-                )} · ${formatCount(localMaskInfo.voxelCount)} ${t('Voxels', {
-                  defaultValue: 'voxels',
-                })}`}
+            {isAutoSegmentationExpanded && (
+              <div className="mt-1 grid grid-cols-[4.25rem_4.75rem_minmax(0,1fr)] gap-1">
+                <label className="text-muted-foreground flex min-w-0 flex-col gap-0.5 text-[11px]">
+                  <span>{t('SUV threshold', { defaultValue: 'SUV threshold' })}</span>
+                  <input
+                    data-cy="tmtvAutoSUVThreshold"
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    className="border-input bg-popover text-foreground h-7 w-full min-w-0 rounded border px-1 text-xs"
+                    value={autoSUVThreshold}
+                    onChange={event =>
+                      setAutoSUVThreshold(getFiniteInputNumber(event.target.value, 2.5))
+                    }
+                  />
+                </label>
+                <label className="text-muted-foreground flex min-w-0 flex-col gap-0.5 text-[11px]">
+                  <span>{t('Min volume mL', { defaultValue: 'Min volume mL' })}</span>
+                  <input
+                    data-cy="tmtvAutoMinVolume"
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    className="border-input bg-popover text-foreground h-7 w-full min-w-0 rounded border px-1 text-xs"
+                    value={autoMinVolumeML}
+                    onChange={event =>
+                      setAutoMinVolumeML(getFiniteInputNumber(event.target.value, 0.1))
+                    }
+                  />
+                </label>
+                <label className="text-muted-foreground flex min-w-0 flex-col gap-0.5 text-[11px]">
+                  <span>{t('Write mode', { defaultValue: 'Write mode' })}</span>
+                  <select
+                    data-cy="tmtvAutoWriteMode"
+                    className="border-input bg-popover text-foreground h-7 w-full min-w-0 rounded border px-1 text-xs"
+                    value={autoWriteMode}
+                    onChange={event =>
+                      setAutoWriteMode(event.target.value === 'append' ? 'append' : 'overwrite')
+                    }
+                  >
+                    <option value="overwrite">
+                      {t('Overwrite', { defaultValue: 'Overwrite' })}
+                    </option>
+                    <option value="append">{t('Append', { defaultValue: 'Append' })}</option>
+                  </select>
+                </label>
+              </div>
+            )}
+            {!!autoSegmentationSummary && (
+              <div className="text-muted-foreground mt-0.5 truncate text-[11px]">
+                {autoSegmentationSummary}
               </div>
             )}
           </div>
-          {localMaskInfo && (
-            <Button
-              dataCY="clearTmtvLocalSegmentation"
-              size="sm"
-              variant="ghost"
-              className="h-6 flex-shrink-0 px-2 text-xs text-red-300 hover:text-red-200"
-              disabled={isClearingLocalMask}
-              onClick={handleClearLocalMask}
-            >
-              <span>
-                {isClearingLocalMask
-                  ? t('Clearing', { defaultValue: 'Clearing...' })
-                  : t('Clear local segmentation', {
-                      defaultValue: 'Clear',
-                    })}
-              </span>
-            </Button>
-          )}
+          <div className="border-border bg-background flex w-full flex-shrink-0 items-center justify-between gap-2 border-t px-2 py-1">
+            {/* [2026-08-27 功能] 本地存储管理 UI：显示当前病例 Segment 1 浏览器本地保存状态，并支持一键清除本地备份 */}
+            <div className="min-w-0 text-[11px] leading-4">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="text-muted-foreground font-semibold uppercase">
+                  {t('Local segmentation storage', {
+                    defaultValue: 'Local save',
+                  })}
+                </span>
+                <span
+                  className={
+                    localMaskInfo
+                      ? 'text-green-400'
+                      : isCheckingLocalMask
+                        ? 'text-primary'
+                        : 'text-muted-foreground'
+                  }
+                >
+                  {isCheckingLocalMask
+                    ? t('Checking', { defaultValue: 'Checking...' })
+                    : localMaskInfo
+                      ? t('Saved', { defaultValue: 'Saved' })
+                      : t('Not saved', { defaultValue: 'Not saved' })}
+                </span>
+              </div>
+              {localMaskInfo && (
+                <div className="text-muted-foreground truncate">
+                  {`${t('Saved at', { defaultValue: 'Saved at' })} ${formatLocalMaskUpdatedAt(
+                    localMaskInfo.updatedAt
+                  )} · ${formatCount(localMaskInfo.voxelCount)} ${t('Voxels', {
+                    defaultValue: 'voxels',
+                  })}`}
+                </div>
+              )}
+            </div>
+            {localMaskInfo && (
+              <Button
+                dataCY="clearTmtvLocalSegmentation"
+                size="sm"
+                variant="ghost"
+                className="h-6 flex-shrink-0 px-2 text-xs text-red-300 hover:text-red-200"
+                disabled={isClearingLocalMask}
+                onClick={handleClearLocalMask}
+              >
+                <span>
+                  {isClearingLocalMask
+                    ? t('Clearing', { defaultValue: 'Clearing...' })
+                    : t('Clear local segmentation', {
+                        defaultValue: 'Clear',
+                      })}
+                </span>
+              </Button>
+            )}
+          </div>
         </div>
         <div
-          className={`border-border flex flex-shrink-0 flex-col gap-0.5 border-t px-1.5 py-0.5 ${reviewPaneWidthClass}`}
+          role="separator"
+          tabIndex={0}
+          aria-label="调整病灶列表高度"
+          aria-orientation="horizontal"
+          aria-valuemin={MIN_UPPER_TOOLS_PANE_HEIGHT}
+          aria-valuenow={
+            upperToolsPaneHeight === null ? undefined : Math.round(upperToolsPaneHeight)
+          }
+          data-cy="tmtvLesionListResizeHandle"
+          className={`group relative z-30 h-2 flex-shrink-0 cursor-row-resize touch-none focus:outline-none ${
+            isUpperToolsPaneResizing ? 'bg-primary/10' : ''
+          }`}
+          style={reviewPaneStyle}
+          title="上下拖动调整病灶列表高度，双击恢复自动高度"
+          onPointerDown={handleUpperToolsPaneResizeStart}
+          onPointerMove={handleUpperToolsPaneResizeMove}
+          onPointerUp={handleUpperToolsPaneResizeEnd}
+          onPointerCancel={handleUpperToolsPaneResizeEnd}
+          onLostPointerCapture={handleUpperToolsPaneResizeEnd}
+          onKeyDown={handleUpperToolsPaneResizeKeyDown}
+          onDoubleClick={() => setUpperToolsPaneHeight(null)}
+        >
+          <div
+            className={`bg-border group-hover:bg-primary group-focus:bg-primary absolute inset-x-0 top-1/2 h-px -translate-y-1/2 transition-colors ${
+              isUpperToolsPaneResizing ? 'bg-primary' : ''
+            }`}
+          />
+        </div>
+        <div
+          className="border-border flex flex-shrink-0 flex-col gap-0.5 border-t px-1.5 py-0.5"
+          style={reviewPaneStyle}
         >
           {/* [2026-08-26 功能] 病灶审核头部：计数压缩成一行状态摘要，减少自动分割后右侧面板拥挤 */}
           <div className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 text-[11px] font-semibold uppercase">
@@ -1818,7 +2053,8 @@ export default function PanelRoiThresholdSegmentation() {
           </div>
         </div>
         <div
-          className={`border-border flex flex-shrink-0 flex-col gap-0.5 border-t px-1.5 py-0.5 ${reviewPaneWidthClass}`}
+          className="border-border flex flex-shrink-0 flex-col gap-0.5 border-t px-1.5 py-0.5"
+          style={reviewPaneStyle}
         >
           {/* [2026-08-25 功能] Lesion 过滤仅改变右侧展示，不触发重新分割或统计，避免额外性能开销 */}
           <div className="flex flex-wrap gap-1">
@@ -1841,10 +2077,10 @@ export default function PanelRoiThresholdSegmentation() {
               );
             })}
           </div>
-          <div className="flex items-center justify-end gap-1">
+          <div className="flex flex-wrap items-center justify-start gap-1">
             <select
               data-cy="tmtvLesionQualityFilter"
-              className="border-input bg-popover text-foreground h-6 min-w-0 w-[5.75rem] rounded border px-1 text-[11px]"
+              className="border-input bg-popover text-foreground h-6 w-[5.75rem] min-w-0 rounded border px-1 text-[11px]"
               value={lesionQualityFilter}
               onChange={event => setLesionQualityFilter(event.target.value)}
             >
@@ -1859,7 +2095,7 @@ export default function PanelRoiThresholdSegmentation() {
             </select>
             <select
               data-cy="tmtvLesionSort"
-              className="border-input bg-popover text-foreground h-6 min-w-0 w-[4.25rem] rounded border px-1 text-[11px]"
+              className="border-input bg-popover text-foreground h-6 w-[4.25rem] min-w-0 rounded border px-1 text-[11px]"
               value={lesionSortKey}
               onChange={event => setLesionSortKey(event.target.value)}
             >
@@ -1895,7 +2131,8 @@ export default function PanelRoiThresholdSegmentation() {
           selectedDeleteCount > 0 ||
           mergeSelectionIds.length >= 2) && (
           <div
-            className={`border-border flex flex-shrink-0 flex-wrap gap-1 border-t px-2 py-1 ${reviewPaneWidthClass}`}
+            className="border-border flex flex-shrink-0 flex-wrap gap-1 border-t px-2 py-1"
+            style={reviewPaneStyle}
           >
             {/* [2026-08-26 功能] 自动分割批量审核：当前筛选和勾选病灶都支持一键 Confirm/Reject */}
             {filteredConfirmCount > 0 && (
@@ -2010,7 +2247,9 @@ export default function PanelRoiThresholdSegmentation() {
         )}
         {/* [2026-08-26 功能] Lesion 列表紧凑显示：减少卡片间距，提升右侧小面板中的可见病灶数量 */}
         <div
-          className={`ohif-scrollbar ohif-scrollbar-stable-gutter min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-1.5 py-1 ${reviewPaneWidthClass}`}
+          ref={lesionListRef}
+          className="ohif-scrollbar ohif-scrollbar-stable-gutter min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-1.5 py-1"
+          style={reviewPaneStyle}
         >
           {!lesionCount && (
             <div className="text-muted-foreground flex flex-col gap-2 py-2 text-sm">
@@ -2077,6 +2316,9 @@ export default function PanelRoiThresholdSegmentation() {
                       checked={mergeSelectionIds.includes(lesion.id)}
                       onClick={event => event.stopPropagation()}
                       onChange={event => handleToggleMergeSelection(event, lesion.id)}
+                      title={t('Select lesions for batch actions or merge', {
+                        defaultValue: '勾选病灶，用于批量操作或合并',
+                      })}
                       aria-label={`${t('Select for merge', {
                         defaultValue: 'Select for merge',
                       })} ${lesion.displayIndex ?? lesion.lesionNumber}`}
