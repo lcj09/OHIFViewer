@@ -48,6 +48,8 @@ function ViewerHeader({ appConfig }: withAppTypes<{ appConfig: AppTypes.Config }
       searchQuery.append('datasources', pathname.substring(dataSourceIdx + 1));
     }
     preserveQueryParameters(searchQuery);
+    // 2026-09-24 功能说明：返回查询页时清除查看器挂片协议，避免对比协议污染下一次普通检查。
+    searchQuery.delete('hangingProtocolId');
 
     navigate({
       pathname: '/',
