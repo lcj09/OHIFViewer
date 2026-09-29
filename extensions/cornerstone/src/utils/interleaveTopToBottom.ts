@@ -207,23 +207,11 @@ export default function interleaveTopToBottom({
   // imageIds for all the volumes but interleaved
   const interleavedRequests = compact(flatten(zip(...AllRequests)));
 
-  // set the finalRequests to the imageLoadPoolManager
-  const finalRequests = [];
-  interleavedRequests.forEach(request => {
-    const { imageId } = request;
-
-    AllRequests.forEach(volumeRequests => {
-      const volumeImageIdRequest = volumeRequests.find(req => req.imageId === imageId);
-      if (volumeImageIdRequest) {
-        finalRequests.push(volumeImageIdRequest);
-      }
-    });
-  });
-
   const requestType = Enums.RequestType.Prefetch;
   const priority = 0;
 
-  finalRequests.forEach(({ callLoadImage, additionalDetails, imageId, imageIdIndex, options }) => {
+  // 2026-09-28 功能说明：直接按交错顺序入队，避免逐张扫描全部体积并交叉匹配同名 ID。
+  interleavedRequests.forEach(({ callLoadImage, additionalDetails, imageId, imageIdIndex, options }) => {
     const callLoadImageBound = callLoadImage.bind(null, imageId, imageIdIndex, options);
 
     imageLoadPoolManager.addRequest(callLoadImageBound, requestType, additionalDetails, priority);

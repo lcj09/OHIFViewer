@@ -502,7 +502,7 @@ describe('interleaveTopToBottom', () => {
     );
   });
 
-  it('should handle multiple volumes with same requests', () => {
+  it('should enqueue each interleaved request once when volumes share an image ID', () => {
     const mockVolume2 = {
       metadata: { SeriesInstanceUID: 'test-series-uid-2' },
       getImageLoadRequests: jest.fn().mockReturnValue([mockImageLoadRequest]),
@@ -528,8 +528,7 @@ describe('interleaveTopToBottom', () => {
       ],
     ]);
 
-    (compact as jest.Mock).mockReturnValue([mockImageLoadRequest]);
-    (flatten as jest.Mock).mockReturnValue([mockImageLoadRequest]);
+    (zip as jest.Mock).mockImplementation((...lists) => [lists.map(requests => requests[0])]);
 
     interleaveTopToBottom({
       ...defaultParameters,
