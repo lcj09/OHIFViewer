@@ -1061,7 +1061,7 @@ function commandsModule({
         }
       }
     },
-    setToolActiveToolbar: ({ value, itemId, toolName, toolGroupIds = [], bindings }) => {
+    setToolActiveToolbar: ({ value, itemId, toolName, toolGroupIds = [], bindings, toggle }) => {
       // Sometimes it is passed as value (tools with options), sometimes as itemId (toolbar buttons)
       toolName = toolName || itemId || value;
 
@@ -1078,6 +1078,29 @@ function commandsModule({
       } catch (e) {}
 
       toolGroupIds = toolGroupIds.length ? toolGroupIds : toolGroupService.getToolGroupIds();
+
+      // 2026-10-09 新增 toggle 支持：当 toggle=true 且工具已在所有指定工具组中激活时，
+      // 停用该工具（设为 passive）并恢复默认 WindowLevel 工具，使滚轮翻页等操作恢复正常。
+      if (toggle) {
+        const allActive = toolGroupIds.every(tgId => {
+          const tg = toolGroupService.getToolGroup(tgId);
+          return tg && tg.getActivePrimaryMouseButtonTool() === toolName;
+        });
+        if (allActive) {
+          // 已激活 → 停用并恢复默认工具
+          toolGroupIds.forEach(tgId => {
+            const tg = toolGroupService.getToolGroup(tgId);
+            if (tg) {
+              tg.setToolPassive(toolName);
+            }
+          });
+          // 恢复 WindowLevel 为默认激活工具
+          toolGroupIds.forEach(tgId => {
+            actions.setToolActive({ toolName: 'WindowLevel', toolGroupId: tgId, bindings });
+          });
+          return;
+        }
+      }
 
       toolGroupIds.forEach(toolGroupId => {
         actions.setToolActive({ toolName, toolGroupId, bindings });

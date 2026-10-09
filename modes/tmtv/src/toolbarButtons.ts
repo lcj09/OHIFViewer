@@ -16,6 +16,8 @@ const setSegmentationToolActiveToolbar = {
   commandOptions: {
     // [2026-08-27 功能] TMTV 分割编辑只绑定 PT/Fusion，避免 CT/MIP 视口坐标写入 PT labelmap 时出现偏移
     toolGroupIds: [toolGroupIds.PT, toolGroupIds.Fusion],
+    // 2026-10-09 新增 toggle 支持：再次点击已激活的分割工具时停用并恢复默认工具
+    toggle: true,
   },
 };
 const ensurePrimaryTMTVSegmentationActive = {
