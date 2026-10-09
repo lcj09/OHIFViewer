@@ -1,9 +1,13 @@
 import React from 'react';
 import PropTypes from 'prop-types';
+import { useTranslation } from 'react-i18next';
 import Typography from '../Typography';
 import { Icons } from '@ohif/ui-next';
 
 const ContextMenu = ({ items, ...props }) => {
+  // 2026-10-09 上下文菜单项文本走i18n翻译（如 Delete measurement/Add Label）
+  const { t } = useTranslation('ContextMenu');
+
   if (!items) {
     return null;
   }
@@ -22,7 +26,7 @@ const ContextMenu = ({ items, ...props }) => {
           style={{ justifyContent: 'space-between' }}
           className="hover:bg-primary-dark border-primary-dark flex cursor-pointer items-center border-b px-4 py-3 transition duration-300 last:border-b-0"
         >
-          <Typography>{item.label}</Typography>
+          <Typography>{t(item.label)}</Typography>
           {item.iconRight && (
             <Icons.ByName
               name={item.iconRight}

@@ -6,14 +6,11 @@ export default {
       {
         id: 'forExistingMeasurement',
         selector: ({ nearbyToolData }) => !!nearbyToolData,
+        // 2026-10-09 隐藏"Add Label(添加标签)"菜单项，仅保留删除测量
         items: [
           {
             label: 'Delete measurement',
             commands: 'removeMeasurement',
-          },
-          {
-            label: 'Add Label',
-            commands: 'setMeasurementLabel',
           },
         ],
       },
