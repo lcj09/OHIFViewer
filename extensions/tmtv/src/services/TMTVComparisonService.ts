@@ -254,6 +254,10 @@ class TMTVComparisonService {
         () => {
           this.mipResizeGuard?.capture();
           this.refreshViewportResizeBindings();
+          // 2026-10-12 功能说明：布局变化后重新建立跨检查同步组，确保折叠/恢复后滚轮同步生效
+          // 当两侧都折叠为1x1时，强制启用跨检查同步（忽略用户设置），
+          // 因为此时用户必然需要左右对比滚动翻页
+          this._applyComparisonSyncForCollapsedLayout();
           this.scheduleViewportScaleReconciliation();
         }
       );
@@ -552,6 +556,50 @@ class TMTVComparisonService {
 
     applyTMTVZoomSync(servicesManager, this.isComparisonProtocolActive(servicesManager));
     this.notify();
+  }
+
+  /**
+   * 2026-10-12 功能说明：检测当前布局是否为对比折叠状态，自动启用/恢复跨检查同步。
+   *
+   * 当两侧都折叠为1x1（视口数<=2）时，强制启用跨检查相机同步，
+   * 使左右视口滚轮翻页联动。布局恢复后回退到用户同步设置。
+   */
+  private _applyComparisonSyncForCollapsedLayout() {
+    const servicesManager = this.servicesManager;
+    if (!servicesManager) return;
+
+    const viewportGridService = servicesManager.services?.viewportGridService;
+    if (!viewportGridService) return;
+
+    const gridState = viewportGridService.getState();
+    const viewportCount = gridState.viewports.size;
+
+    if (!this.isComparisonProtocolActive(servicesManager)) {
+      return;
+    }
+
+    if (viewportCount <= 2) {
+      // 两侧都折叠为1x1：强制启用跨检查相机同步（不依赖 comparisonStudySync 设置）
+      // 先清理旧同步组，再重建，确保无残留订阅
+      this.removeComparisonStudySync(servicesManager);
+      this.ensureComparisonStudySync(servicesManager, false);
+      // 2026-10-12 延迟重试：视口可能尚未完全创建，逐步增加延迟重试
+      const retry = (attempt: number) => {
+        if (attempt > 5) return;
+        setTimeout(() => {
+          if (!this.servicesManager || !this.isComparisonProtocolActive()) return;
+          const state = this.servicesManager.services?.viewportGridService?.getState();
+          if (state && state.viewports.size <= 2) {
+            this.ensureComparisonStudySync(this.servicesManager, false);
+            retry(attempt + 1);
+          }
+        }, 200 * attempt);
+      };
+      retry(1);
+    } else {
+      // 非折叠状态：按用户设置恢复
+      this.applyComparisonStudySyncFromSettings(servicesManager);
+    }
   }
 
   /**

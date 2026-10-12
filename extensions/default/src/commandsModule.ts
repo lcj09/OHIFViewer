@@ -25,6 +25,7 @@ import { useHangingProtocolStageIndexStore } from './stores/useHangingProtocolSt
 import { useToggleHangingProtocolStore } from './stores/useToggleHangingProtocolStore';
 import { useViewportsByPositionStore } from './stores/useViewportsByPositionStore';
 import { useToggleOneUpViewportGridStore } from './stores/useToggleOneUpViewportGridStore';
+import { useCompareToggleStore } from './stores/useCompareToggleStore';
 import requestDisplaySetCreationForStudy from './Panels/requestDisplaySetCreationForStudy';
 import promptSaveReport from './utils/promptSaveReport';
 
@@ -58,6 +59,123 @@ const commandsModule = ({
 
   // Define a context menu controller for use with any context menus
   const contextMenuController = new ContextMenuController(servicesManager, commandsManager);
+
+  /**
+   * 2026-10-12 功能说明：根据折叠状态应用对比布局
+   *
+   * 根据左右侧折叠状态，从完整2x4网格状态中选取视口并构建 layoutOptions。
+   * 四种布局状态：
+   *   - 左折叠+右展开: 2行4列5视口，左侧1个占半幅，右侧4个原位
+   *   - 左展开+右折叠: 2行4列5视口，左侧4个原位，右侧1个占半幅
+   *   - 两侧都折叠:   1行2列2视口
+   *   - 两侧都展开:   由 _restoreCompareLayout 处理
+   */
+  function _applyCompareLayout(
+    viewportGridService,
+    fullGridState,
+    collapseState
+  ) {
+    const { leftCollapsed, rightCollapsed, leftOneUpViewportId, rightOneUpViewportId } =
+      collapseState;
+    const allViewports = Array.from(fullGridState.viewports.values());
+
+    // 按侧别分类，保持原始插入顺序
+    const leftViewports = allViewports.filter(
+      v => v.viewportOptions?.customViewportProps?.tmtvComparisonSide === 'Baseline'
+    );
+    const rightViewports = allViewports.filter(
+      v => v.viewportOptions?.customViewportProps?.tmtvComparisonSide === 'Follow-up'
+    );
+
+    let viewportList = [];
+    let layoutOptions = [];
+
+    if (leftCollapsed && rightCollapsed) {
+      // 两侧都折叠：1行2列
+      const leftVp =
+        leftViewports.find(v => v.viewportId === leftOneUpViewportId) || leftViewports[0];
+      const rightVp =
+        rightViewports.find(v => v.viewportId === rightOneUpViewportId) || rightViewports[0];
+      viewportList = [leftVp, rightVp];
+      layoutOptions = [
+        { x: 0, y: 0, width: 0.5, height: 1 },
+        { x: 0.5, y: 0, width: 0.5, height: 1 },
+      ];
+    } else if (leftCollapsed && !rightCollapsed) {
+      // 左折叠+右展开：2行4列5视口
+      const leftVp =
+        leftViewports.find(v => v.viewportId === leftOneUpViewportId) || leftViewports[0];
+      viewportList = [leftVp, ...rightViewports];
+      layoutOptions = [
+        { x: 0, y: 0, width: 0.5, height: 1 },
+        { x: 0.5, y: 0, width: 0.25, height: 0.5 },
+        { x: 0.75, y: 0, width: 0.25, height: 0.5 },
+        { x: 0.5, y: 0.5, width: 0.25, height: 0.5 },
+        { x: 0.75, y: 0.5, width: 0.25, height: 0.5 },
+      ];
+    } else if (!leftCollapsed && rightCollapsed) {
+      // 左展开+右折叠：2行4列5视口
+      const rightVp =
+        rightViewports.find(v => v.viewportId === rightOneUpViewportId) || rightViewports[0];
+      viewportList = [...leftViewports, rightVp];
+      layoutOptions = [
+        { x: 0, y: 0, width: 0.25, height: 0.5 },
+        { x: 0.25, y: 0, width: 0.25, height: 0.5 },
+        { x: 0, y: 0.5, width: 0.25, height: 0.5 },
+        { x: 0.25, y: 0.5, width: 0.25, height: 0.5 },
+        { x: 0.5, y: 0, width: 0.5, height: 1 },
+      ];
+    } else {
+      return;
+    }
+
+    const findOrCreateViewport = position => {
+      const vp = viewportList[position];
+      if (!vp) return null;
+      return {
+        viewportOptions: vp.viewportOptions,
+        displaySetInstanceUIDs: vp.displaySetInstanceUIDs,
+        displaySetOptions: vp.displaySetOptions,
+      };
+    };
+
+    const numRows = leftCollapsed && rightCollapsed ? 1 : 2;
+    const numCols = leftCollapsed && rightCollapsed ? 2 : 4;
+
+    viewportGridService.setLayout({
+      numRows,
+      numCols,
+      layoutOptions,
+      findOrCreateViewport,
+      isHangingProtocolLayout: true,
+    });
+  }
+
+  /**
+   * 2026-10-12 功能说明：从保存的完整2x4状态恢复布局
+   */
+  function _restoreCompareLayout(viewportGridService, savedGridState) {
+    const layoutOptions = viewportGridService.getLayoutOptionsFromState(savedGridState);
+    const savedViewports = Array.from(savedGridState.viewports.values());
+
+    const findOrCreateViewport = position => {
+      const vp = savedViewports[position];
+      if (!vp) return null;
+      return {
+        viewportOptions: vp.viewportOptions,
+        displaySetInstanceUIDs: vp.displaySetInstanceUIDs,
+        displaySetOptions: vp.displaySetOptions,
+      };
+    };
+
+    viewportGridService.setLayout({
+      numRows: savedGridState.layout.numRows,
+      numCols: savedGridState.layout.numCols,
+      layoutOptions,
+      findOrCreateViewport,
+      isHangingProtocolLayout: true,
+    });
+  }
 
   const actions = {
     /**
@@ -532,8 +650,118 @@ const commandsModule = ({
     toggleOneUp() {
       const viewportGridState = viewportGridService.getState();
       const { activeViewportId, viewports, layout, isHangingProtocolLayout } = viewportGridState;
+      const activeViewport = viewports.get(activeViewportId);
       const { displaySetInstanceUIDs, displaySetOptions, viewportOptions } =
-        viewports.get(activeViewportId);
+        activeViewport;
+
+      // 2026-10-12 功能说明：TMTV对比布局分侧折叠逻辑
+      // 检测当前激活视口是否属于对比布局（有 tmtvComparisonSide 标记）
+      const comparisonSide =
+        viewportOptions?.customViewportProps?.tmtvComparisonSide;
+
+      if (comparisonSide) {
+        const compareStore = useCompareToggleStore.getState();
+        let { leftCollapsed, rightCollapsed } = compareStore;
+
+        // 健全性检查：如果当前视口数与折叠状态不匹配（如切换stage后store过期），重置
+        const currentVpCount = viewports.size;
+        if ((leftCollapsed || rightCollapsed) && currentVpCount >= 8) {
+          compareStore.reset();
+          leftCollapsed = false;
+          rightCollapsed = false;
+        }
+        // gridStateForViewports: 始终使用保存的完整2x4状态（含全部8个视口）
+        // 首次折叠时 savedGridState 为 null，使用当前 viewportGridState
+        const gridStateForViewports = compareStore.savedGridState || viewportGridState;
+        const isLeftClick = comparisonSide === 'Baseline';
+
+        // 判断当前是否已处于折叠状态
+        if (!leftCollapsed && !rightCollapsed) {
+          // 状态1：完整2x4 → 折叠点击侧
+          compareStore.setSavedGridState(viewportGridState);
+          compareStore.setOneUpViewportIds(
+            isLeftClick ? activeViewportId : null,
+            !isLeftClick ? activeViewportId : null
+          );
+          compareStore.setCollapsed(isLeftClick, !isLeftClick);
+          _applyCompareLayout(viewportGridService, viewportGridState, {
+            leftCollapsed: isLeftClick,
+            rightCollapsed: !isLeftClick,
+            leftOneUpViewportId: isLeftClick ? activeViewportId : null,
+            rightOneUpViewportId: !isLeftClick ? activeViewportId : null,
+          });
+        } else if (leftCollapsed && !rightCollapsed) {
+          // 状态2：左折叠+右展开
+          if (isLeftClick) {
+            // 点击左侧折叠视口 → 恢复完整2x4
+            compareStore.reset();
+            _restoreCompareLayout(viewportGridService, gridStateForViewports);
+          } else {
+            // 点击右侧视口 → 折叠右侧，两侧都1x1
+            compareStore.setOneUpViewportIds(
+              compareStore.leftOneUpViewportId,
+              activeViewportId
+            );
+            compareStore.setCollapsed(true, true);
+            _applyCompareLayout(viewportGridService, gridStateForViewports, {
+              leftCollapsed: true,
+              rightCollapsed: true,
+              leftOneUpViewportId: compareStore.leftOneUpViewportId,
+              rightOneUpViewportId: activeViewportId,
+            });
+          }
+        } else if (!leftCollapsed && rightCollapsed) {
+          // 状态3：左展开+右折叠
+          if (!isLeftClick) {
+            // 点击右侧折叠视口 → 恢复完整2x4
+            compareStore.reset();
+            _restoreCompareLayout(viewportGridService, gridStateForViewports);
+          } else {
+            // 点击左侧视口 → 折叠左侧，两侧都1x1
+            compareStore.setOneUpViewportIds(
+              activeViewportId,
+              compareStore.rightOneUpViewportId
+            );
+            compareStore.setCollapsed(true, true);
+            _applyCompareLayout(viewportGridService, gridStateForViewports, {
+              leftCollapsed: true,
+              rightCollapsed: true,
+              leftOneUpViewportId: activeViewportId,
+              rightOneUpViewportId: compareStore.rightOneUpViewportId,
+            });
+          }
+        } else {
+          // 状态4：两侧都折叠（1x2）
+          if (isLeftClick) {
+            // 恢复左侧2x2，右侧保持1x1
+            compareStore.setCollapsed(false, true);
+            _applyCompareLayout(viewportGridService, gridStateForViewports, {
+              leftCollapsed: false,
+              rightCollapsed: true,
+              leftOneUpViewportId: null,
+              rightOneUpViewportId: compareStore.rightOneUpViewportId,
+            });
+          } else {
+            // 恢复右侧2x2，左侧保持1x1
+            compareStore.setCollapsed(true, false);
+            _applyCompareLayout(viewportGridService, gridStateForViewports, {
+              leftCollapsed: true,
+              rightCollapsed: false,
+              leftOneUpViewportId: compareStore.leftOneUpViewportId,
+              rightOneUpViewportId: null,
+            });
+          }
+        }
+
+        setTimeout(() => {
+          commandsManager.runCommand('resetCrosshairs');
+        }, 0);
+        return;
+      }
+
+      // 原始 toggleOneUp 逻辑（非对比布局）
+      // 清理可能残留的对比折叠状态
+      useCompareToggleStore.getState().reset();
 
       if (layout.numCols === 1 && layout.numRows === 1) {
         // The viewer is in one-up. Check if there is a state to restore/toggle back to.

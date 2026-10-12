@@ -47,8 +47,11 @@ export function syncComparisonCamera(_sync, source, target, event, { servicesMan
     hangingProtocolService,
   } = servicesManager.services;
   const settings = customizationService?.getCustomization?.('syncSettings') || {};
+  // 2026-10-12 修复：折叠布局（≤2视口）下强制同步，不依赖 comparisonStudySync 设置
+  const viewportGridService = servicesManager.services?.viewportGridService;
+  const isCollapsedLayout = viewportGridService?.getState?.()?.viewports?.size <= 2;
   if (
-    settings.comparisonStudySync !== true ||
+    (!isCollapsedLayout && settings.comparisonStudySync !== true) ||
     hangingProtocolService?.getActiveProtocol?.()?.protocol?.id !==
       '@ohif/extension-tmtv.hangingProtocolModule.ptCTCompare'
   )
@@ -58,10 +61,10 @@ export function syncComparisonCamera(_sync, source, target, event, { servicesMan
   if (sourceSide === targetSide) return;
   const mip = source.viewportId.includes('MIP');
   const anchorSuffix = mip ? 'MIPSagittal' : 'CTAxial';
-  const sourceAnchor = initialState.get(
+  let sourceAnchor = initialState.get(
     service.getCornerstoneViewport(`${sourceSide}${anchorSuffix}`)
   )?.camera?.focalPoint;
-  const targetAnchor = initialState.get(
+  let targetAnchor = initialState.get(
     service.getCornerstoneViewport(`${targetSide}${anchorSuffix}`)
   )?.camera?.focalPoint;
   const viewport = service.getCornerstoneViewport(target.viewportId);
@@ -76,6 +79,14 @@ export function syncComparisonCamera(_sync, source, target, event, { servicesMan
     )
   )
     return;
+  // 2026-10-12 修复：折叠布局下 anchor 视口可能不存在（如双击PT/Fusion/MIP），
+  // 回退到使用源/目标视口自身的初始 focalPoint 作为 anchor
+  if (!validPoint(sourceAnchor)) {
+    sourceAnchor = initialState.get(sourceViewport)?.camera?.focalPoint;
+  }
+  if (!validPoint(targetAnchor)) {
+    targetAnchor = initialState.get(viewport)?.camera?.focalPoint;
+  }
   if (!sharedFOR && ![sourceAnchor, targetAnchor].every(validPoint)) return;
   const offset = sharedFOR ? [0, 0, 0] : targetAnchor.map((value, i) => value - sourceAnchor[i]);
   const focalPoint = camera.focalPoint.map((value, i) => value + offset[i]);

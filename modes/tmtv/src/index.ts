@@ -17,6 +17,7 @@ import tmtvComparisonService from '../../../extensions/tmtv/src/services/TMTVCom
 import tmtvSessionService from '../../../extensions/tmtv/src/services/TMTVSessionService';
 import tmtvLesionComparisonService from '../../../extensions/tmtv/src/services/TMTVLesionComparisonService';
 import ComparisonSideSelector from '../../../extensions/tmtv/src/Panels/ComparisonSideSelector';
+import { useCompareToggleStore } from '../../../extensions/default/src/stores/useCompareToggleStore';
 import {
   drainLifecycleSubscriptions,
   runLifecycleCleanups,
@@ -483,6 +484,8 @@ function modeFactory({ modeConfiguration }) {
       gpuUploadProbeCleanup = null;
       segmentationRenderGuardCleanup?.();
       segmentationRenderGuardCleanup = null;
+      // 2026-10-12 清理对比布局折叠状态
+      useCompareToggleStore.getState().reset();
       const {
         toolGroupService,
         syncGroupService,
