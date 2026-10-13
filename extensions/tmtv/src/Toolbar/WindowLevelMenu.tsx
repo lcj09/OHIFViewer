@@ -65,11 +65,26 @@ function WindowLevelMenu({ commandsManager, servicesManager, ...props }) {
   };
 
   // [2026-08-20] 应用CT预设到CT视口（仅ctToolGroup下的视口，不影响PET/Fusion/MIP）
+  // [2026-10-13 修复] 折叠布局下ctToolGroup可能暂无视口，增加fallback到所有可见CT视口
   const handleApplyCTPreset = preset => {
     setIsMenuOpen(false);
     try {
       const ctToolGroup = toolGroupService.getToolGroup('ctToolGroup');
-      const ctViewportIds = ctToolGroup?.getViewportIds?.() || [];
+      let ctViewportIds = ctToolGroup?.getViewportIds?.() || [];
+
+      // 2026-10-13 折叠布局下ctToolGroup可能为空，遍历当前所有可见视口找CT视口
+      if (ctViewportIds.length === 0) {
+        const gridState = viewportGridService?.getState?.();
+        if (gridState) {
+          for (const [vpId, vp] of gridState.viewports) {
+            const tgId = vp?.viewportOptions?.toolGroupId;
+            if (tgId === 'ctToolGroup' || tgId === 'fusionToolGroup') {
+              ctViewportIds.push(vpId);
+            }
+          }
+        }
+      }
+
       for (const viewportId of ctViewportIds) {
         commandsManager.runCommand('setViewportWindowLevel', {
           viewportId,
