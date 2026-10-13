@@ -579,23 +579,31 @@ class TMTVComparisonService {
     }
 
     if (viewportCount <= 2) {
-      // 两侧都折叠为1x1：强制启用跨检查相机同步（不依赖 comparisonStudySync 设置）
-      // 先清理旧同步组，再重建，确保无残留订阅
-      this.removeComparisonStudySync(servicesManager);
-      this.ensureComparisonStudySync(servicesManager, false);
-      // 2026-10-12 延迟重试：视口可能尚未完全创建，逐步增加延迟重试
-      const retry = (attempt: number) => {
-        if (attempt > 5) return;
-        setTimeout(() => {
-          if (!this.servicesManager || !this.isComparisonProtocolActive()) return;
-          const state = this.servicesManager.services?.viewportGridService?.getState();
-          if (state && state.viewports.size <= 2) {
-            this.ensureComparisonStudySync(this.servicesManager, false);
-            retry(attempt + 1);
-          }
-        }, 200 * attempt);
-      };
-      retry(1);
+      // 2026-10-13 修复：折叠布局下也必须依赖用户 comparisonStudySync 设置
+      // 只有用户选中"同步两次检查"时才建立同步组，否则不强制同步
+      const customizationService = servicesManager.services?.customizationService;
+      const settings = customizationService?.getCustomization?.('syncSettings') || {};
+      if (settings.comparisonStudySync === true) {
+        // 先清理旧同步组，再重建，确保无残留订阅
+        this.removeComparisonStudySync(servicesManager);
+        this.ensureComparisonStudySync(servicesManager, false);
+        // 延迟重试：视口可能尚未完全创建，逐步增加延迟重试
+        const retry = (attempt: number) => {
+          if (attempt > 5) return;
+          setTimeout(() => {
+            if (!this.servicesManager || !this.isComparisonProtocolActive()) return;
+            const state = this.servicesManager.services?.viewportGridService?.getState();
+            if (state && state.viewports.size <= 2) {
+              this.ensureComparisonStudySync(this.servicesManager, false);
+              retry(attempt + 1);
+            }
+          }, 200 * attempt);
+        };
+        retry(1);
+      } else {
+        // 未选中同步：确保不建立同步组
+        this.removeComparisonStudySync(servicesManager);
+      }
     } else {
       // 非折叠状态：按用户设置恢复
       this.applyComparisonStudySyncFromSettings(servicesManager);

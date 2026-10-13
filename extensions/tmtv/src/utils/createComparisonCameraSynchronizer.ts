@@ -47,11 +47,9 @@ export function syncComparisonCamera(_sync, source, target, event, { servicesMan
     hangingProtocolService,
   } = servicesManager.services;
   const settings = customizationService?.getCustomization?.('syncSettings') || {};
-  // 2026-10-12 修复：折叠布局（≤2视口）下强制同步，不依赖 comparisonStudySync 设置
-  const viewportGridService = servicesManager.services?.viewportGridService;
-  const isCollapsedLayout = viewportGridService?.getState?.()?.viewports?.size <= 2;
+  // 2026-10-13 修复：折叠布局也必须依赖用户 comparisonStudySync 设置，未选中时不同步
   if (
-    (!isCollapsedLayout && settings.comparisonStudySync !== true) ||
+    settings.comparisonStudySync !== true ||
     hangingProtocolService?.getActiveProtocol?.()?.protocol?.id !==
       '@ohif/extension-tmtv.hangingProtocolModule.ptCTCompare'
   )
