@@ -1,5 +1,10 @@
 import { Types, DicomMetadataStore, utils } from '@ohif/core';
-import { cache as cornerstoneCache, Enums as CornerstoneEnums } from '@cornerstonejs/core';
+import {
+  cache as cornerstoneCache,
+  Enums as CornerstoneEnums,
+  utilities as cornerstoneUtils,
+} from '@cornerstonejs/core';
+import * as cornerstoneTools from '@cornerstonejs/tools';
 import dcmjs from 'dcmjs';
 
 const { downloadBlob } = utils;
@@ -64,6 +69,7 @@ const commandsModule = ({
   // 2026-10-14 功能说明：记录单视口切换前的主 volume 窗宽窗位，仅用于双击放大/还原。
   const oneUpViewportVoiStates = new Map();
   const oneUpViewportVoiTimers = new Map();
+  const oneUpViewportPresentationStates = new Map();
 
   /**
    * 2026-10-14 功能说明：保存指定视口当前显示 volume 的 VOI；Fusion 优先保存 CT，避免误取 PET。
@@ -210,6 +216,55 @@ const commandsModule = ({
 
   function _restoreAllSavedOneUpVOIs() {
     oneUpViewportVoiStates.forEach((_state, viewportId) => _restoreOneUpViewportVOI(viewportId));
+  }
+
+  /**
+   * 2026-10-15 功能说明：在双击布局切换前保存视口的切片/相机呈现，避免还原时回到默认层。
+   */
+  function _storeOneUpViewportPresentation(viewportId) {
+    if (!viewportId) return;
+    const { cornerstoneViewportService } = servicesManager.services;
+    try {
+      const viewport = cornerstoneViewportService?.getCornerstoneViewport?.(viewportId);
+      const imageIndex = viewport?.getCurrentImageIdIndex?.();
+      oneUpViewportPresentationStates.set(viewportId, {
+        imageIndex: Number.isInteger(imageIndex) ? imageIndex : undefined,
+      });
+      cornerstoneViewportService?.storePresentation?.({ viewportId });
+    } catch (error) {
+      // 视口可能正在销毁；呈现保存失败不应阻断双击布局切换。
+      console.warn('[toggleOneUp] 保存视口呈现失败', error);
+    }
+  }
+
+  /**
+   * 2026-10-15 功能说明：布局还原后重新触发测量标注渲染，保留已创建的矩形测量结果。
+   */
+  function _refreshOneUpViewportAnnotations(viewportId, attempt = 0) {
+    if (!viewportId) return;
+    const { cornerstoneViewportService } = servicesManager.services;
+    const viewport = cornerstoneViewportService?.getCornerstoneViewport?.(viewportId);
+    if (!viewport) {
+      if (attempt < 5) {
+        setTimeout(() => _refreshOneUpViewportAnnotations(viewportId, attempt + 1), 50);
+      }
+      return;
+    }
+    const imageIndex = oneUpViewportPresentationStates.get(viewportId)?.imageIndex;
+    if (Number.isInteger(imageIndex) && viewport.element) {
+      try {
+        cornerstoneUtils.jumpToSlice(viewport.element, { imageIndex });
+      } catch (error) {
+        // 部分非堆栈视口不支持按 image index 跳层，保留其已有视图呈现。
+        console.debug('[toggleOneUp] 恢复当前层失败', error);
+      }
+    }
+    cornerstoneTools.triggerAnnotationRenderForViewportIds?.([viewportId]);
+    viewport.render?.();
+    // 布局重建是异步的，连续短暂复核可覆盖旧 viewport 尚未替换完成的竞态。
+    if (attempt < 5) {
+      setTimeout(() => _refreshOneUpViewportAnnotations(viewportId, attempt + 1), 50);
+    }
   }
 
   /**
@@ -808,6 +863,7 @@ const commandsModule = ({
       const { displaySetInstanceUIDs, displaySetOptions, viewportOptions } =
         activeViewport;
       _captureAllOneUpViewportVOIs();
+      _storeOneUpViewportPresentation(activeViewportId);
 
       // 2026-10-12 功能说明：TMTV对比布局分侧折叠逻辑
       // 检测当前激活视口是否属于对比布局（有 tmtvComparisonSide 标记）
@@ -928,6 +984,7 @@ const commandsModule = ({
         // There is a state to toggle back to. The viewport that was
         // originally toggled to one up was the former active viewport.
         const viewportIdToUpdate = toggleOneUpViewportGridStore.activeViewportId;
+        _storeOneUpViewportPresentation(viewportIdToUpdate);
 
         // We are restoring the previous layout but taking into the account that
         // the current one up viewport might have a new displaySet dragged and dropped on it.
@@ -982,11 +1039,9 @@ const commandsModule = ({
           isHangingProtocolLayout: true,
         });
         _restoreAllSavedOneUpVOIs();
+        _refreshOneUpViewportAnnotations(viewportIdToUpdate);
 
-        // Reset crosshairs after restoring the layout
-        setTimeout(() => {
-          commandsManager.runCommand('resetCrosshairs');
-        }, 0);
+        // 2026-10-15 功能说明：普通单检查还原不重置十字线，避免跳回中心层导致矩形测量暂时不可见。
       } else {
         // We are not in one-up, so toggle to one up.
 
