@@ -586,7 +586,8 @@ class TMTVComparisonService {
       if (settings.comparisonStudySync === true) {
         // 先清理旧同步组，再重建，确保无残留订阅
         this.removeComparisonStudySync(servicesManager);
-        this.ensureComparisonStudySync(servicesManager, false);
+        // 2026-10-15 功能说明：两侧均双击放大后仍保留跨检查 VOI 同步，避免调窗监听被清除。
+        this.ensureComparisonStudySync(servicesManager, settings.voiSync !== false);
         // 延迟重试：视口可能尚未完全创建，逐步增加延迟重试
         const retry = (attempt: number) => {
           if (attempt > 5) return;
@@ -594,7 +595,14 @@ class TMTVComparisonService {
             if (!this.servicesManager || !this.isComparisonProtocolActive()) return;
             const state = this.servicesManager.services?.viewportGridService?.getState();
             if (state && state.viewports.size <= 2) {
-              this.ensureComparisonStudySync(this.servicesManager, false);
+              const retrySettings =
+                this.servicesManager.services?.customizationService?.getCustomization?.(
+                  'syncSettings'
+                ) || {};
+              this.ensureComparisonStudySync(
+                this.servicesManager,
+                retrySettings.voiSync !== false
+              );
               retry(attempt + 1);
             }
           }, 200 * attempt);
