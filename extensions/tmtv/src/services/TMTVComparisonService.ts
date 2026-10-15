@@ -789,10 +789,16 @@ class TMTVComparisonService {
     if (modality !== 'CT' && modality !== 'PT') return;
     const viewportService = this.servicesManager?.services?.cornerstoneViewportService;
     const targetSide = sourceSide === 'baseline' ? 'followup' : 'baseline';
+    // 2026-10-14 功能说明：同步不仅跨检查，还要覆盖同侧 CT/PT 与 Fusion 的对应 volume。
+    // 目标按 modality 过滤，因此 CT 不会把窗宽窗位误写到 PET，反之亦然。
+    const targetViewportIds = Array.from(
+      new Set([...VIEWPORT_IDS_BY_SIDE[sourceSide], ...VIEWPORT_IDS_BY_SIDE[targetSide]])
+    );
 
     this.applyingVoi = true;
     try {
-      for (const viewportId of VIEWPORT_IDS_BY_SIDE[targetSide]) {
+      for (const viewportId of targetViewportIds) {
+        if (viewportId === sourceViewportId) continue;
         try {
           const viewport = viewportService?.getCornerstoneViewport(viewportId);
           const actors = viewport?.getActors?.() || [];

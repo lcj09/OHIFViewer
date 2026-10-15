@@ -146,6 +146,13 @@ export function useViewportRendering(
     }
 
     if (viewportDisplaySets && viewportDisplaySets.length > 0) {
+      // 2026-10-14 功能说明：Fusion 同时包含 CT/PT 时，窗宽窗位显示固定绑定 CT，避免布局还原后误显示 PET 的 6/3。
+      const getModality = displaySet => String(displaySet?.Modality || '').trim().toUpperCase();
+      const fusionCT = viewportDisplaySets.find(displaySet => getModality(displaySet) === 'CT');
+      const hasFusionPT = viewportDisplaySets.some(displaySet => getModality(displaySet) === 'PT');
+      if (fusionCT && hasFusionPT) {
+        return fusionCT.displaySetInstanceUID;
+      }
       return viewportDisplaySets[0].displaySetInstanceUID;
     }
 
@@ -153,6 +160,24 @@ export function useViewportRendering(
   }, [options?.displaySetInstanceUID, viewportDisplaySets]);
 
   const viewportInfo = viewportId ? cornerstoneViewportService.getViewportInfo(viewportId) : null;
+
+  // 2026-10-14 功能说明：优先按 displaySet UID 找 volume，UID 不在 volumeId 中时按 DICOM Modality 兜底。
+  const getVolumeIdForDisplaySet = useCallback(
+    (displaySetUID: string) => {
+      const byUID = getDataIdForViewport(viewport as unknown, displaySetUID);
+      if (byUID) return byUID;
+      const modality = String(
+        displaySetService.getDisplaySetByUID(displaySetUID)?.Modality || ''
+      )
+        .trim()
+        .toUpperCase();
+      return viewport?.getAllVolumeIds?.().find(volumeId => {
+        const volume = cache.getVolume(volumeId);
+        return String(volume?.metadata?.Modality || '').trim().toUpperCase() === modality;
+      });
+    },
+    [displaySetService, viewport]
+  );
 
   const { presets, colorbarProperties, volumeRenderingPresets, volumeRenderingQualityRange } =
     getCustomizationData(customizationService);
@@ -223,8 +248,7 @@ export function useViewportRendering(
       return;
     }
 
-    const volumeIds = viewport.getAllVolumeIds();
-    const volumeId = volumeIds.find(id => id.includes(activeDisplaySetInstanceUID));
+    const volumeId = getVolumeIdForDisplaySet(activeDisplaySetInstanceUID);
 
     if (!volumeId) {
       return;
@@ -244,7 +268,7 @@ export function useViewportRendering(
     const range = voxelManager.getRange();
 
     setPixelValueRange({ min: range[0], max: range[1] });
-  }, [activeDisplaySetInstanceUID, displaySetService, viewport]);
+  }, [activeDisplaySetInstanceUID, displaySetService, getVolumeIdForDisplaySet, viewport]);
 
   // Get the presets specifically for the active display set
   const activeDisplaySetPresets = useMemo(() => {
@@ -270,7 +294,7 @@ export function useViewportRendering(
       return;
     }
     try {
-      const dataId = getDataIdForViewport(viewport as unknown, activeDisplaySetInstanceUID);
+      const dataId = getVolumeIdForDisplaySet(activeDisplaySetInstanceUID);
 
       const properties =
         dataId != null
@@ -304,7 +328,7 @@ export function useViewportRendering(
     } catch (error) {
       console.error('Error initializing VOI range:', error);
     }
-  }, [activeDisplaySetInstanceUID, viewport]);
+  }, [activeDisplaySetInstanceUID, getVolumeIdForDisplaySet, opacityToLinear, viewport]);
 
   useEffect(() => {
     if (!viewportId) {
@@ -352,6 +376,14 @@ export function useViewportRendering(
       }
     };
 
+    // 2026-10-14 功能说明：单视口还原使用静默 VOI 更新，单独刷新当前视口的窗宽窗位显示。
+    const updateOneUpRestoredVOI = eventDetail => {
+      const range = eventDetail.detail?.range;
+      if (!range) return;
+      voiRangeRef.current = range;
+      setVoiRange(range);
+    };
+
     const updateColormap = eventDetail => {
       const { colormap } = eventDetail.detail;
 
@@ -371,13 +403,15 @@ export function useViewportRendering(
     };
 
     element.addEventListener(Enums.Events.VOI_MODIFIED, updateVOI);
+    element.addEventListener('TMTV_ONE_UP_VOI_RESTORED', updateOneUpRestoredVOI);
     element.addEventListener(Enums.Events.COLORMAP_MODIFIED, updateColormap);
 
     return () => {
       element.removeEventListener(Enums.Events.VOI_MODIFIED, updateVOI);
+      element.removeEventListener('TMTV_ONE_UP_VOI_RESTORED', updateOneUpRestoredVOI);
       element.removeEventListener(Enums.Events.COLORMAP_MODIFIED, updateColormap);
     };
-  }, [activeDisplaySetInstanceUID, viewport, opacityToLinear]);
+  }, [activeDisplaySetInstanceUID, getVolumeIdForDisplaySet, viewport, opacityToLinear]);
 
   const validateActiveDisplaySet = useCallback(() => {
     if (!activeDisplaySetInstanceUID) {

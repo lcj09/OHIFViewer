@@ -1,4 +1,5 @@
 import { Types, DicomMetadataStore, utils } from '@ohif/core';
+import { cache as cornerstoneCache, Enums as CornerstoneEnums } from '@cornerstonejs/core';
 import dcmjs from 'dcmjs';
 
 const { downloadBlob } = utils;
@@ -59,6 +60,157 @@ const commandsModule = ({
 
   // Define a context menu controller for use with any context menus
   const contextMenuController = new ContextMenuController(servicesManager, commandsManager);
+
+  // 2026-10-14 功能说明：记录单视口切换前的主 volume 窗宽窗位，仅用于双击放大/还原。
+  const oneUpViewportVoiStates = new Map();
+  const oneUpViewportVoiTimers = new Map();
+
+  /**
+   * 2026-10-14 功能说明：保存指定视口当前显示 volume 的 VOI；Fusion 优先保存 CT，避免误取 PET。
+   */
+  function _captureOneUpViewportVOI(viewportId) {
+    const { cornerstoneViewportService } = servicesManager.services;
+    const viewportState = viewportGridService.getState()?.viewports?.get(viewportId);
+    const displaySetUIDs = viewportState?.displaySetInstanceUIDs || [];
+    if (!displaySetUIDs.length) return;
+    const primaryDisplaySetUID =
+      displaySetUIDs.find(
+        uid => displaySetService.getDisplaySetByUID(uid)?.Modality === 'CT'
+      ) || displaySetUIDs[0];
+    const viewport = cornerstoneViewportService?.getCornerstoneViewport?.(viewportId);
+    const primaryDisplaySet = displaySetService.getDisplaySetByUID(primaryDisplaySetUID);
+    const primaryModality = String(primaryDisplaySet?.Modality || '').trim().toUpperCase();
+    const volumeIds = viewport?.getAllVolumeIds?.() || [];
+    const volumeId =
+      volumeIds.find(id => id.includes(primaryDisplaySetUID)) ||
+      volumeIds.find(id => {
+        const volume = cornerstoneCache.getVolume(id);
+        return String(volume?.metadata?.Modality || '').trim().toUpperCase() === primaryModality;
+      });
+    const voiRange = volumeId ? viewport?.getProperties?.(volumeId)?.voiRange : undefined;
+    if (!voiRange || !Number.isFinite(voiRange.lower) || !Number.isFinite(voiRange.upper)) return;
+    oneUpViewportVoiStates.set(viewportId, {
+      displaySetUID: primaryDisplaySetUID,
+      modality: primaryModality,
+      voiRange: { lower: voiRange.lower, upper: voiRange.upper },
+    });
+  }
+
+  /**
+   * 2026-10-15 功能说明：布局切换前保存所有视口的 VOI，避免还原其它视口时 PET/MIP 回到默认值。
+   */
+  function _captureAllOneUpViewportVOIs() {
+    viewportGridService.getState()?.viewports?.forEach((_viewportState, viewportId) => {
+      _captureOneUpViewportVOI(viewportId);
+    });
+  }
+
+  /**
+   * 2026-10-14 功能说明：单视口还原后恢复已保存的 VOI，不改动 Fusion 的 CT/PT volume 组成。
+   */
+  function _restoreOneUpViewportVOI(viewportId) {
+    const saved = oneUpViewportVoiStates.get(viewportId);
+    if (!saved) return;
+    const previousTimer = oneUpViewportVoiTimers.get(viewportId);
+    if (previousTimer?.timer) clearTimeout(previousTimer.timer);
+    previousTimer?.unsubscribe?.();
+    let attempt = 0;
+    let finished = false;
+    let unsubscribeVolumesChanged;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      const activeTimer = oneUpViewportVoiTimers.get(viewportId)?.timer;
+      if (activeTimer) clearTimeout(activeTimer);
+      unsubscribeVolumesChanged?.();
+      oneUpViewportVoiTimers.delete(viewportId);
+    };
+    const restore = () => {
+      if (finished) return;
+      const { cornerstoneViewportService } = servicesManager.services;
+      const viewport = cornerstoneViewportService?.getCornerstoneViewport?.(viewportId);
+      const volumeIds = viewport?.getAllVolumeIds?.() || [];
+      const volumeId =
+        volumeIds.find(id => id.includes(saved.displaySetUID)) ||
+        volumeIds.find(id => {
+          const volume = cornerstoneCache.getVolume(id);
+          return String(volume?.metadata?.Modality || '').trim().toUpperCase() === saved.modality;
+        });
+      if (!viewport || !volumeId) {
+        if (attempt++ < 12) {
+          const timer = setTimeout(restore, 100);
+          oneUpViewportVoiTimers.set(viewportId, {
+            timer,
+            unsubscribe: unsubscribeVolumesChanged,
+          });
+        }
+        return;
+      }
+      try {
+        // 只设置保存的主 volume，避免把 Fusion 的 PET volume 替换或重置。
+        viewport.setProperties(
+          { voiRange: { ...saved.voiRange }, isComputedVOI: false },
+          volumeId,
+          true
+        );
+        viewport.element?.dispatchEvent?.(
+          new CustomEvent(CornerstoneEnums.Events.VOI_MODIFIED, {
+            detail: { volumeId, range: saved.voiRange },
+          })
+        );
+        viewport.element?.dispatchEvent?.(
+          new CustomEvent('TMTV_ONE_UP_VOI_RESTORED', { detail: { range: saved.voiRange } })
+        );
+        _synchronizeRestoredVOI(viewportId, saved.modality, saved.voiRange);
+        viewport.render?.();
+      } finally {
+        finish();
+      }
+    };
+
+    const { cornerstoneViewportService } = servicesManager.services;
+    const volumeChangedEvent = cornerstoneViewportService?.EVENTS?.VIEWPORT_VOLUMES_CHANGED;
+    if (volumeChangedEvent) {
+      const subscription = cornerstoneViewportService.subscribe(volumeChangedEvent, event => {
+        if (event?.viewportInfo?.viewportId !== viewportId || finished) return;
+        // Cornerstone 在广播事件前会排入默认 VOI 的 0ms 回调，此处再排一个回调覆盖默认值。
+        setTimeout(restore, 0);
+      });
+      unsubscribeVolumesChanged = subscription?.unsubscribe;
+    }
+
+    const timer = setTimeout(restore, 500);
+    oneUpViewportVoiTimers.set(viewportId, {
+      timer,
+      unsubscribe: unsubscribeVolumesChanged,
+    });
+  }
+
+  /**
+   * 2026-10-15 功能说明：Fusion 还原后按 DICOM Modality 同步对应 CT/PT volume，避免依赖同步器绑定时序。
+   */
+  function _synchronizeRestoredVOI(sourceViewportId, modality, voiRange) {
+    const { cornerstoneViewportService } = servicesManager.services;
+    const viewports = viewportGridService.getState()?.viewports;
+    viewports?.forEach((_viewportState, targetViewportId) => {
+      if (targetViewportId === sourceViewportId) return;
+      const targetViewport = cornerstoneViewportService?.getCornerstoneViewport?.(targetViewportId);
+      const targetVolumeId = (targetViewport?.getAllVolumeIds?.() || []).find(volumeId => {
+        const volume = cornerstoneCache.getVolume(volumeId);
+        return String(volume?.metadata?.Modality || '').trim().toUpperCase() === modality;
+      });
+      if (!targetViewport || !targetVolumeId) return;
+      targetViewport.setProperties({ voiRange: { ...voiRange }, isComputedVOI: false }, targetVolumeId, true);
+      targetViewport.element?.dispatchEvent?.(
+        new CustomEvent('TMTV_ONE_UP_VOI_RESTORED', { detail: { range: voiRange } })
+      );
+      targetViewport.render?.();
+    });
+  }
+
+  function _restoreAllSavedOneUpVOIs() {
+    oneUpViewportVoiStates.forEach((_state, viewportId) => _restoreOneUpViewportVOI(viewportId));
+  }
 
   /**
    * 2026-10-12 功能说明：根据折叠状态应用对比布局
@@ -149,6 +301,7 @@ const commandsModule = ({
       findOrCreateViewport,
       isHangingProtocolLayout: true,
     });
+    _restoreAllSavedOneUpVOIs();
   }
 
   /**
@@ -175,6 +328,7 @@ const commandsModule = ({
       findOrCreateViewport,
       isHangingProtocolLayout: true,
     });
+    _restoreAllSavedOneUpVOIs();
   }
 
   const actions = {
@@ -653,6 +807,7 @@ const commandsModule = ({
       const activeViewport = viewports.get(activeViewportId);
       const { displaySetInstanceUIDs, displaySetOptions, viewportOptions } =
         activeViewport;
+      _captureAllOneUpViewportVOIs();
 
       // 2026-10-12 功能说明：TMTV对比布局分侧折叠逻辑
       // 检测当前激活视口是否属于对比布局（有 tmtvComparisonSide 标记）
@@ -826,6 +981,7 @@ const commandsModule = ({
           findOrCreateViewport,
           isHangingProtocolLayout: true,
         });
+        _restoreAllSavedOneUpVOIs();
 
         // Reset crosshairs after restoring the layout
         setTimeout(() => {
