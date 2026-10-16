@@ -195,7 +195,8 @@ function _initToolGroups(toolNames, Enums, toolGroupService, commandsManager) {
   // [2026-07-07 新增] 为Fusion工具组的测量工具添加SUV值显示
   // 原理：wrapGetTextLinesWithSUV会检查cachedStats中是否有PT volume的统计
   //       如果没有（CT/PT视口），则返回原始文本，不影响其他视口
-  // 适用工具：椭圆(EllipticalROI)、多边形(PlanarFreehandROI)、圆(CircleROI)、球体(SphereROI)
+  //       如果cachedStats中缺少PT entry（如双击还原后），会从其他视口主动查找PT volume计算
+  // 适用工具：椭圆(EllipticalROI)、矩形(RectangleROI)、多边形(PlanarFreehandROI)、圆(CircleROI)、球体(SphereROI)
   const fusionToolGroup = toolGroupService.getToolGroup(toolGroupIds.Fusion);
   if (fusionToolGroup) {
     const csToolGroup = fusionToolGroup._toolGroup || fusionToolGroup;
