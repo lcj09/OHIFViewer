@@ -192,30 +192,33 @@ function _initToolGroups(toolNames, Enums, toolGroupService, commandsManager) {
   });
   toolGroupService.createToolGroupAndAddTools(toolGroupIds.default, tools);
 
-  // [2026-07-07 新增] 为Fusion工具组的测量工具添加SUV值显示
+  // [2026-07-07 新增] 为Fusion和PT工具组的测量工具添加SUV值显示
   // 原理：wrapGetTextLinesWithSUV会检查cachedStats中是否有PT volume的统计
-  //       如果没有（CT/PT视口），则返回原始文本，不影响其他视口
+  //       如果没有（CT视口），则返回原始文本，不影响其他视口
   //       如果cachedStats中缺少PT entry（如双击还原后），会从其他视口主动查找PT volume计算
   // 适用工具：椭圆(EllipticalROI)、矩形(RectangleROI)、多边形(PlanarFreehandROI)、圆(CircleROI)、球体(SphereROI)
-  const fusionToolGroup = toolGroupService.getToolGroup(toolGroupIds.Fusion);
-  if (fusionToolGroup) {
-    const csToolGroup = fusionToolGroup._toolGroup || fusionToolGroup;
-    const suvToolNames = [
-      toolNames.EllipticalROI,
-      toolNames.RectangleROI,
-      toolNames.PlanarFreehandROI,
-      toolNames.CircleROI,
-      toolNames.SphereROI,
-    ];
-    for (const toolName of suvToolNames) {
-      try {
-        const tool = csToolGroup.getToolInstance(toolName);
-        if (tool?.configuration?.getTextLines) {
-          const originalGetTextLines = tool.configuration.getTextLines;
-          tool.configuration.getTextLines = wrapGetTextLinesWithSUV(originalGetTextLines);
+  const suvToolGroupIds = [toolGroupIds.Fusion, toolGroupIds.PT];
+  const suvToolNames = [
+    toolNames.EllipticalROI,
+    toolNames.RectangleROI,
+    toolNames.PlanarFreehandROI,
+    toolNames.CircleROI,
+    toolNames.SphereROI,
+  ];
+  for (const tgId of suvToolGroupIds) {
+    const toolGroup = toolGroupService.getToolGroup(tgId);
+    if (toolGroup) {
+      const csToolGroup = toolGroup._toolGroup || toolGroup;
+      for (const toolName of suvToolNames) {
+        try {
+          const tool = csToolGroup.getToolInstance(toolName);
+          if (tool?.configuration?.getTextLines) {
+            const originalGetTextLines = tool.configuration.getTextLines;
+            tool.configuration.getTextLines = wrapGetTextLinesWithSUV(originalGetTextLines);
+          }
+        } catch (e) {
+          console.warn(`initToolGroups: 包装${tgId}/${toolName}的getTextLines失败`, e);
         }
-      } catch (e) {
-        console.warn(`initToolGroups: 包装${toolName}的getTextLines失败`, e);
       }
     }
   }

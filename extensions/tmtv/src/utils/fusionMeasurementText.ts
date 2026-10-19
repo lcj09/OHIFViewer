@@ -57,6 +57,7 @@ function _calculatePtStatsFromViewport(data: any, targetId: string) {
       // 计算PT volume的统计值
       const { imageData, dimensions, voxelManager } = ptVolume;
       const worldHandles = data.handles.points;
+      if (!worldHandles || worldHandles.length === 0) continue;
       const indexHandles = worldHandles.map((worldHandle) =>
         csCoreUtils.transformWorldToIndex(imageData, worldHandle)
       );
@@ -82,23 +83,31 @@ function _calculatePtStatsFromViewport(data: any, targetId: string) {
 
       // 2026-10-16 使用voxelManager.forEach遍历计算统计值
       // 注意：voxelManager.forEach的回调签名是({value, index, point})，不是直接(value)
-      let max = -Infinity, min = Infinity, sum = 0, count = 0;
+      let max = -Infinity, min = Infinity, sum = 0, sumSq = 0, count = 0;
       const statsCallback = ({ value }) => {
         if (value == null || isNaN(value)) return;
         if (value > max) max = value;
         if (value < min) min = value;
         sum += value;
+        sumSq += value * value;
         count++;
       };
       voxelManager.forEach(statsCallback, { boundsIJK, imageData });
 
       if (count === 0) continue;
 
+      const mean = sum / count;
+      // 2026-10-19 补充defaultGetTextLines所需的完整字段，避免显示undefined
+      const stdDev = count > 1 ? Math.sqrt(Math.max(0, (sumSq - count * mean * mean) / (count - 1))) : 0;
       return {
         Modality: 'PT',
         max: max === -Infinity ? null : max,
         min: min === Infinity ? null : min,
-        mean: sum / count,
+        mean,
+        stdDev,
+        area: data.cachedStats?.[targetId]?.area ?? null,
+        areaUnit: data.cachedStats?.[targetId]?.areaUnit ?? 'mm²',
+        modalityUnit: 'SUV',
       };
     }
     return null;
@@ -122,11 +131,44 @@ function _calculatePtStatsFromViewport(data: any, targetId: string) {
  */
 export function wrapGetTextLinesWithSUV(originalGetTextLines: Function) {
   return function (data: any, targetId: string) {
-    // 调用原始getTextLines获取基础文本
-    const textLines = originalGetTextLines(data, targetId);
-
     const { cachedStats } = data;
-    if (!cachedStats) return textLines;
+    if (!cachedStats) {
+      const lines = originalGetTextLines(data, targetId);
+      return Array.isArray(lines) ? lines : [];
+    }
+
+    // 2026-10-16 判断当前targetId对应的volume是否为PT volume
+    let isPTViewport = false;
+    if (targetId?.startsWith('volumeId:')) {
+      const currentVolumeId = csCoreUtils.getVolumeId?.(targetId) || targetId.split('?')[0].replace('volumeId:', '');
+      const currentVol = cache.getVolume(currentVolumeId);
+      isPTViewport = currentVol?.metadata?.Modality === 'PT';
+    }
+
+    // PT视口：显示原始默认文本（Area/Mean/Max/Min/StdDev + SUV单位），不额外添加SUV行
+    if (isPTViewport) {
+      // 检查cachedStats中是否有PT entry，没有则尝试fallback计算并写回cachedStats
+      let hasPtStats = false;
+      for (const key of Object.keys(cachedStats)) {
+        if (cachedStats[key]?.Modality === 'PT') {
+          hasPtStats = true;
+          break;
+        }
+      }
+      if (!hasPtStats) {
+        const ptStats = _calculatePtStatsFromViewport(data, targetId);
+        if (ptStats) {
+          // 2026-10-19 将计算结果写回cachedStats，让originalGetTextLines能读取到PT stats
+          cachedStats[targetId] = ptStats;
+        }
+      }
+      const lines = originalGetTextLines(data, targetId);
+      return Array.isArray(lines) ? lines : [];
+    }
+
+    // 非PT视口（Fusion/CT）：显示原始文本 + 额外SUV值
+    const textLines = originalGetTextLines(data, targetId);
+    const safeTextLines = Array.isArray(textLines) ? textLines : [];
 
     // 查找PT volume的stats（Modality === 'PT'）
     let ptStats = null;
@@ -144,14 +186,14 @@ export function wrapGetTextLinesWithSUV(originalGetTextLines: Function) {
     }
 
     // 如果没有找到PT stats，返回原始文本
-    if (!ptStats) return textLines;
+    if (!ptStats) return safeTextLines;
 
     // 检查PT stats是否有有效的SUV值
     const suvMax = ptStats.max ?? ptStats.suvMax;
     const suvMin = ptStats.min ?? ptStats.suvMin;
     const suvMean = ptStats.mean ?? ptStats.suvMean;
 
-    if (suvMin == null && suvMax == null && suvMean == null) return textLines;
+    if (suvMin == null && suvMax == null && suvMean == null) return safeTextLines;
 
     // 添加SUV值到文本
     const suvLines: string[] = [];
@@ -159,6 +201,6 @@ export function wrapGetTextLinesWithSUV(originalGetTextLines: Function) {
     if (suvMin != null) suvLines.push(`SUV Min: ${csUtils.roundNumber(suvMin)}`);
     if (suvMean != null) suvLines.push(`SUV Mean: ${csUtils.roundNumber(suvMean)}`);
 
-    return [...textLines, ...suvLines];
+    return [...safeTextLines, ...suvLines];
   };
 }
