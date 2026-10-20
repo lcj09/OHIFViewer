@@ -153,6 +153,7 @@ import {
 import { ToolSingleSliceLine } from './Sources/ToolSingleSliceLine';
 import ToolFusionAdjust from './Sources/ToolFusionAdjust';
 import ToolSave from './Sources/ToolSave';
+import ToolPrint from './Sources/ToolPrint'; // [2026-10-19 新增] 打印机图标用于工具栏打印按钮
 import ActionNewDialog from './Sources/ActionNewDialog';
 import NotificationInfo from './Sources/NotificationInfo';
 import StatusLocked from './Sources/StatusLocked';
@@ -794,6 +795,7 @@ export const Icons = {
   'tool-single-slice-line': (props: IconProps) => ToolSingleSliceLine(props),
   'tool-fusion-adjust': (props: IconProps) => ToolFusionAdjust(props),
   'tool-save': (props: IconProps) => ToolSave(props),
+  'tool-print': (props: IconProps) => ToolPrint(props), // [2026-10-19 新增] 打印按钮图标
   'actions-smooth': (props: IconProps) => ActionsSmooth(props),
   'actions-simplify': (props: IconProps) => ActionsSimplify(props),
   'actions-combine': (props: IconProps) => ActionsCombine(props),

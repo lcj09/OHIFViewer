@@ -60,6 +60,8 @@
   "Rotate 180": "旋转180°",
   "Sagittal": "矢状面",
   "Save": "保存",
+  "Print": "打印",
+  "Save current viewport layout as a local image": "将当前视口布局保存为本地图片",
   "Soft tissue": "软组织窗",
   "Stack Image Sync": "图像切片同步",
   "Stack Scroll": "切片滚动",

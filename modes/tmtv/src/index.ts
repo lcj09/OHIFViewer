@@ -268,6 +268,7 @@ function modeFactory({ modeConfiguration }) {
         'Rotate90', // [2026-08-17 新增] 顺时针旋转90°
         'FlipHorizontal', // [2026-08-18 修改] 水平翻转（原系统的Flip Horizontal功能，替代180°旋转）
         'Save', // 保存下拉菜单（图像/序列）
+        'Print', // [2026-10-19 新增] 打印按钮（截取当前视口布局保存为本地 PNG）
         'MeasurementTools', // 测量工具组 (下拉菜单)
         'Zoom', // 缩放工具
         'Pan', // 平移工具

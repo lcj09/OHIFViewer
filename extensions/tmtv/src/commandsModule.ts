@@ -2,6 +2,7 @@ import OHIF from '@ohif/core';
 import * as cs from '@cornerstonejs/core';
 import { utilities as csUtils, BaseVolumeViewport } from '@cornerstonejs/core';
 import * as csTools from '@cornerstonejs/tools';
+import html2canvas from 'html2canvas'; // [2026-10-19 新增] 用于截图保存当前视口布局到本地
 import { classes } from '@ohif/core';
 import i18n from '@ohif/i18n';
 import getThresholdValues from './utils/getThresholdValue';
@@ -1695,6 +1696,69 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     disableSingleLine: () => {
       crosshairDisplayService.disable();
     },
+
+    // 2026-10-19 功能说明：截取当前视口网格（所见即所得的布局）并下载到本地为 PNG 图片。
+    // 流程：定位 data-cy="viewport-grid" 容器 → html2canvas 截图 → 触发浏览器下载。
+    // 注意：截图完成后必须释放 canvas/链接 DOM 引用，避免内存泄漏。
+    printTMTVLayout: async () => {
+      let gridElement: Element | null = null;
+      let canvas: HTMLCanvasElement | null = null;
+      let link: HTMLAnchorElement | null = null;
+      try {
+        gridElement = document.querySelector('[data-cy="viewport-grid"]');
+        if (!gridElement) {
+          throw new Error('未找到视口网格容器');
+        }
+
+        // 使用 html2canvas 截取整个网格（包含所有视口的 Canvas + SVG 标注 + React 覆盖层）
+        // scale 取 devicePixelRatio 以获得高清截图；backgroundColor 黑色与影像背景一致
+        canvas = await html2canvas(gridElement as HTMLElement, {
+          useCORS: true,
+          backgroundColor: '#000000',
+          scale: window.devicePixelRatio || 1,
+          logging: false,
+        });
+
+        // 转 PNG 并触发下载
+        const dataUrl = canvas.toDataURL('image/png');
+        const timestamp = new Date()
+          .toISOString()
+          .replace(/[:.]/g, '-')
+          .slice(0, 19);
+        link = document.createElement('a');
+        link.download = `TMTV_${timestamp}.png`;
+        link.href = dataUrl;
+        document.body.appendChild(link);
+        link.click();
+
+        uiNotificationService.show({
+          title: '保存成功',
+          message: '当前视口布局已保存到本地',
+          type: 'success',
+        });
+      } catch (error) {
+        // 错误日志包含错误类型、发生位置、关键变量值（gridElement 是否找到）
+        console.warn(
+          '[printTMTVLayout] 截图保存失败',
+          error instanceof Error ? error.message : error,
+          { gridFound: !!gridElement }
+        );
+        uiNotificationService.show({
+          title: '保存失败',
+          message:
+            error instanceof Error ? error.message : '截图保存过程中发生错误',
+          type: 'error',
+        });
+      } finally {
+        // 显式释放 DOM 引用，便于 GC 回收 canvas 内存
+        if (link && link.parentNode) {
+          link.parentNode.removeChild(link);
+        }
+        canvas = null;
+        link = null;
+        gridElement = null;
+      }
+    },
   };
 
   const definitions = {
@@ -1800,6 +1864,9 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
     },
     disableSingleLine: {
       commandFn: actions.disableSingleLine,
+    },
+    printTMTVLayout: {
+      commandFn: actions.printTMTVLayout,
     },
   };
 

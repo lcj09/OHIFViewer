@@ -84,6 +84,19 @@ const toolbarButtons = [
       evaluate: 'evaluate.action',
     },
   },
+  // [2026-10-19 新增] 打印按钮 - 截取当前视口网格布局并下载到本地为 PNG 图片
+  // 功能：所见即所得，按当前布局（2x2 / 1x2 / 1x1 等）整体保存为单张图片
+  {
+    id: 'Print',
+    uiType: 'ohif.toolButton',
+    props: {
+      icon: 'tool-print',
+      label: i18n.t('Buttons:Print'),
+      tooltip: i18n.t('Buttons:Save current viewport layout as a local image'),
+      commands: 'printTMTVLayout',
+      evaluate: 'evaluate.action',
+    },
+  },
 
   {
     id: 'MeasurementTools',

@@ -44,6 +44,8 @@
   "Rotate 180": "Rotate 180",
   "Sagittal": "Sagittal",
   "Save": "Save",
+  "Print": "Print",
+  "Save current viewport layout as a local image": "Save current viewport layout as a local image",
   "Stack Scroll": "Stack Scroll",
   "Stack Image Sync": "Stack Image Sync",
   "Stop": "$t(Common:Stop)",
