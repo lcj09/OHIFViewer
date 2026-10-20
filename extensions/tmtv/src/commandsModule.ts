@@ -1717,6 +1717,54 @@ const commandsModule = ({ servicesManager, commandsManager, extensionManager }: 
           backgroundColor: '#000000',
           scale: window.devicePixelRatio || 1,
           logging: false,
+          // [2026-10-20 修复] html2canvas 会在克隆 DOM 中按 span 的行盒裁剪四角标注，
+          // 导致导出的文字只剩半行。仅修改截图副本，避免影响实时视口布局。
+          onclone: clonedDocument => {
+            const overlayTextElements = clonedDocument.querySelectorAll<HTMLElement>('.overlay-text');
+            overlayTextElements.forEach(element => {
+              element.style.position = 'absolute';
+              element.style.inset = '0';
+              element.style.width = '100%';
+              element.style.height = '100%';
+              element.style.overflow = 'visible';
+              element.style.lineHeight = 'normal';
+            });
+
+            const overlayElements = clonedDocument.querySelectorAll<HTMLElement>('.viewport-overlay');
+            overlayElements.forEach(element => {
+              element.style.overflow = 'visible';
+              element.style.lineHeight = 'normal';
+            });
+
+            const overlaySpans = clonedDocument.querySelectorAll<HTMLElement>('.viewport-overlay span');
+            overlaySpans.forEach(element => {
+              element.style.display = 'block';
+              element.style.overflow = 'visible';
+              element.style.maxHeight = 'none';
+              element.style.height = 'auto';
+              element.style.lineHeight = 'normal';
+              element.style.whiteSpace = 'nowrap';
+            });
+
+            // [2026-10-20 修复] 导出图片不包含当前视口的选中边框和交互按钮。
+            clonedDocument.querySelectorAll<HTMLElement>('.border-highlight').forEach(element => {
+              element.style.border = '0';
+              element.style.boxShadow = 'none';
+            });
+            clonedDocument.querySelectorAll<HTMLElement>('[data-cy="viewport-action-corners"]').forEach(element => {
+              element.style.display = 'none';
+            });
+
+            // 给文字上下边界留出少量安全区，避免字形超出视口边界后被裁掉。
+            clonedDocument.querySelectorAll<HTMLElement>('[data-cy="viewport-overlay-top-left"], [data-cy="viewport-overlay-top-right"]')
+              .forEach(element => {
+                element.style.top = '4px';
+              });
+            clonedDocument.querySelectorAll<HTMLElement>('[data-cy="viewport-overlay-bottom-left"], [data-cy="viewport-overlay-bottom-right"]')
+              .forEach(element => {
+                element.style.bottom = '4px';
+              });
+          },
         });
 
         // 转 PNG 并触发下载

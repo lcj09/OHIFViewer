@@ -92,6 +92,7 @@ function Container({ children }: { children: ReactNode }) {
     <ViewportActionCornersContext.Provider value={{ registerCorner }}>
       {children}
       <div
+        data-cy="viewport-action-corners"
         className="pointer-events-none absolute h-full w-full select-none"
         onDoubleClick={event => {
           event.preventDefault();
