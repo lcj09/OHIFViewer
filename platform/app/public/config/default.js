@@ -247,18 +247,33 @@ window.config = {
         //wadoRoot: 'http://localhost/pacs/dicom-web',
          friendlyName: 'local Orthanc Server',
         name: 'Orthanc',
-        wadoUriRoot: '/dicomweb/wado',//解决跨域
-        qidoRoot: '/dicomweb',
-        wadoRoot: '/dicomweb',
+        // [2026-11-03 切换WADO-URI模式] 以下为原WADO-RS配置，注释保留以便回切
+         wadoUriRoot: '/dicomweb/wado',//解决跨域
+         qidoRoot: '/dicomweb',
+         wadoRoot: '/dicomweb',
         qidoSupportsIncludeField: false,
-        supportsReject: true,
-        dicomUploadEnabled: true,
-        imageRendering: 'wadors',
-        thumbnailRendering: 'wadors',
-        enableStudyLazyLoad: true,
-        supportsFuzzyMatching: true,
-        supportsWildcard: true,
+         supportsReject: true,
+         dicomUploadEnabled: true,
+         imageRendering: 'wadors',
+         thumbnailRendering: 'wadors',
+         enableStudyLazyLoad: true,
+         supportsFuzzyMatching: true,
+         supportsWildcard: true,
         omitQuotationForMultipartRequest: true,
+        // WADO-URI 模式配置
+        //wadoUriRoot: '/dicomweb/wado',// WADO-URI 接口根路径，buildInstanceWadoUrl 会拼接 ?requestType=WADO&...
+        //qidoRoot: '/dicomweb',
+        //wadoRoot: '/dicomweb',
+        //qidoSupportsIncludeField: false,
+        //supportsReject: true,
+        //dicomUploadEnabled: true,
+        //imageRendering: 'wadouri',
+        //thumbnailRendering: 'wadouri',
+       // enableStudyLazyLoad: true,
+        //supportsFuzzyMatching: true,
+        //supportsWildcard: true,
+       // omitQuotationForMultipartRequest: true,
+
         bulkDataURI: {
           enabled: true,
           // This is an example config that can be used to fix the retrieve URL
