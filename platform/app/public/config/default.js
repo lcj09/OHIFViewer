@@ -114,7 +114,8 @@ window.config = {
     },
   ],
   //defaultDataSourceName: 'ohif',
-  defaultDataSourceName: 'orthanc',
+  //defaultDataSourceName: 'orthanc',
+  defaultDataSourceName: 'pacs', // [2026-11-04] 切换到自定义 PACS 服务端
   /* Dynamic config allows user to pass "configUrl" query string this allows to load config without recompiling application. The regex will ensure valid configuration source */
   // dangerouslyUseDynamicConfig: {
   //   enabled: true,
@@ -248,31 +249,31 @@ window.config = {
          friendlyName: 'local Orthanc Server',
         name: 'Orthanc',
         // [2026-11-03 切换WADO-URI模式] 以下为原WADO-RS配置，注释保留以便回切
-         wadoUriRoot: '/dicomweb/wado',//解决跨域
-         qidoRoot: '/dicomweb',
-         wadoRoot: '/dicomweb',
-        qidoSupportsIncludeField: false,
-         supportsReject: true,
-         dicomUploadEnabled: true,
-         imageRendering: 'wadors',
-         thumbnailRendering: 'wadors',
-         enableStudyLazyLoad: true,
-         supportsFuzzyMatching: true,
-         supportsWildcard: true,
-        omitQuotationForMultipartRequest: true,
-        // WADO-URI 模式配置
-        //wadoUriRoot: '/dicomweb/wado',// WADO-URI 接口根路径，buildInstanceWadoUrl 会拼接 ?requestType=WADO&...
-        //qidoRoot: '/dicomweb',
-        //wadoRoot: '/dicomweb',
+         //wadoUriRoot: '/dicomweb/wado',//解决跨域
+         //qidoRoot: '/dicomweb',
+         //wadoRoot: '/dicomweb',
         //qidoSupportsIncludeField: false,
-        //supportsReject: true,
-        //dicomUploadEnabled: true,
-        //imageRendering: 'wadouri',
-        //thumbnailRendering: 'wadouri',
-       // enableStudyLazyLoad: true,
-        //supportsFuzzyMatching: true,
-        //supportsWildcard: true,
-       // omitQuotationForMultipartRequest: true,
+         //supportsReject: true,
+        // dicomUploadEnabled: true,
+         //imageRendering: 'wadors',
+         //thumbnailRendering: 'wadors',
+        // enableStudyLazyLoad: true,
+         //supportsFuzzyMatching: true,
+         //supportsWildcard: true,
+        //omitQuotationForMultipartRequest: true,
+        // WADO-URI 模式配置
+        wadoUriRoot: '/dicomweb/wado',// WADO-URI 接口根路径，buildInstanceWadoUrl 会拼接 ?requestType=WADO&...
+        qidoRoot: '/dicomweb',
+        wadoRoot: '/dicomweb',
+        qidoSupportsIncludeField: false,
+        supportsReject: true,
+        dicomUploadEnabled: true,
+        imageRendering: 'wadouri',
+        thumbnailRendering: 'wadouri',
+        enableStudyLazyLoad: true,
+        supportsFuzzyMatching: true,
+        supportsWildcard: true,
+       omitQuotationForMultipartRequest: true,
 
         bulkDataURI: {
           enabled: true,
@@ -288,6 +289,39 @@ window.config = {
           // startsWith: 'http://localhost/',
           // prefixWith: '/orthanc/',
         },
+      },
+    },
+
+    // [2026-11-04] 自定义 PACS 服务端数据源（保留 Orthanc 配置不动）
+    // 相对路径，由 nginx 代理转发到 PACS 服务端
+    // 前缀 /pacs/dicomweb 与 Orthanc 的 /dicomweb 区分，nginx 按前缀分流
+    {
+      namespace: '@ohif/extension-default.dataSourcesModule.dicomweb',
+      sourceName: 'pacs',
+      configuration: {
+        friendlyName: 'PACS Server',
+        name: 'PACS',
+        // [2026-11-04] 以下为原 WADO-RS 配置，注释保留以便回切
+        // qidoRoot: '/pacs/dicomweb',     // WADO-RS：nginx 转发到 PACS:8042/dicom-web
+        // wadoRoot: '/pacs/dicomweb',     // WADO-RS：nginx 转发到 PACS:8042/dicom-web
+        // qidoSupportsIncludeField: true,
+        // supportsFuzzyMatching: true,
+        // supportsWildcard: true,
+        // imageRendering: 'wadors',
+        // thumbnailRendering: 'wadors',
+        // enableStudyLazyLoad: false,
+        // WADO-URI 模式配置（优先使用）
+        // QIDO-RS 和 metadata 仍走 WADO-RS（端口 8042，路径 /dicom-web）
+        // 像素数据走 WADO-URI（端口 1000，路径 /test）
+        qidoRoot: '/pacs/dicomweb',              // QIDO-RS / metadata：PACS:8042/dicom-web
+        wadoRoot: '/pacs/dicomweb',              // WADO-RS metadata：PACS:8042/dicom-web
+        wadoUriRoot: '/pacs/dicomweb/test',      // WADO-URI 像素数据：PACS:1000/test
+        qidoSupportsIncludeField: true,
+        supportsFuzzyMatching: true,
+        supportsWildcard: true,
+        imageRendering: 'wadouri',               // ← WADO-URI 模式
+        thumbnailRendering: 'wadouri',           // ← WADO-URI 模式
+        enableStudyLazyLoad: false,
       },
     },
 
