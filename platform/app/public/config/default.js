@@ -302,26 +302,26 @@ window.config = {
         friendlyName: 'PACS Server',
         name: 'PACS',
         // [2026-11-04] 以下为原 WADO-RS 配置，注释保留以便回切
-        // qidoRoot: '/pacs/dicomweb',     // WADO-RS：nginx 转发到 PACS:8042/dicom-web
-        // wadoRoot: '/pacs/dicomweb',     // WADO-RS：nginx 转发到 PACS:8042/dicom-web
-        // qidoSupportsIncludeField: true,
-        // supportsFuzzyMatching: true,
-        // supportsWildcard: true,
-        // imageRendering: 'wadors',
-        // thumbnailRendering: 'wadors',
-        // enableStudyLazyLoad: false,
+         qidoRoot: '/pacs/dicomweb',     // WADO-RS：nginx 转发到 PACS:8042/dicom-web
+         wadoRoot: '/pacs/dicomweb',     // WADO-RS：nginx 转发到 PACS:8042/dicom-web
+         qidoSupportsIncludeField: true,
+         supportsFuzzyMatching: true,
+         supportsWildcard: true,
+         imageRendering: 'wadors',
+         thumbnailRendering: 'wadors',
+         enableStudyLazyLoad: false,
         // WADO-URI 模式配置（优先使用）
         // QIDO-RS 和 metadata 仍走 WADO-RS（端口 8042，路径 /dicom-web）
         // 像素数据走 WADO-URI（端口 1000，路径 /test）
-        qidoRoot: '/pacs/dicomweb',              // QIDO-RS / metadata：PACS:8042/dicom-web
-        wadoRoot: '/pacs/dicomweb',              // WADO-RS metadata：PACS:8042/dicom-web
-        wadoUriRoot: '/pacs/dicomweb/test',      // WADO-URI 像素数据：PACS:1000/test
-        qidoSupportsIncludeField: true,
-        supportsFuzzyMatching: true,
-        supportsWildcard: true,
-        imageRendering: 'wadouri',               // ← WADO-URI 模式
-        thumbnailRendering: 'wadouri',           // ← WADO-URI 模式
-        enableStudyLazyLoad: false,
+        //qidoRoot: '/pacs/dicomweb',              // QIDO-RS / metadata：PACS:8042/dicom-web
+        //wadoRoot: '/pacs/dicomweb',              // WADO-RS metadata：PACS:8042/dicom-web
+        //wadoUriRoot: '/pacs/dicomweb/test',      // WADO-URI 像素数据：PACS:1000/test
+        //qidoSupportsIncludeField: true,
+        //supportsFuzzyMatching: true,
+        //supportsWildcard: true,
+        //imageRendering: 'wadouri',               // ← WADO-URI 模式
+        //thumbnailRendering: 'wadouri',           // ← WADO-URI 模式
+        //enableStudyLazyLoad: false,
       },
     },
 
