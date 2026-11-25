@@ -309,6 +309,8 @@ window.config = {
          supportsWildcard: true,
          imageRendering: 'wadors',
          thumbnailRendering: 'wadors',
+         // [2026-11-20] lazyLoad 实测在 HDD 服务器上负载涨 9 倍（18 次序列级请求 vs Sync 模式 1 次全量，
+         // 且缩略图路径与序列加载路径不去重导致每序列重复请求 2 遍），回退为 false 走一次性全量 metadata
          enableStudyLazyLoad: false,
         // WADO-URI 模式配置（优先使用）
         // QIDO-RS 和 metadata 仍走 WADO-RS（端口 8042，路径 /dicom-web）

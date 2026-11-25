@@ -376,6 +376,25 @@ const stage3: AppTypes.HangingProtocol.ProtocolStage = {
   viewports: [ctAXIAL, ptAXIAL, fusionAXIAL, mipSAGITTAL],
 };
 
+/** 2026-11-25 功能说明：提供与默认横断面布局相同的 CT/PT/Fusion 视口，单独对照移除 MIP 的加载耗时。 */
+const stageAxialNoMIP: AppTypes.HangingProtocol.ProtocolStage = {
+  name: 'Axial (no MIP)',
+  id: 'axial-no-mip-layout',
+  viewportStructure: {
+    layoutType: 'grid',
+    properties: {
+      rows: 2,
+      columns: 2,
+      layoutOptions: [
+        { x: 0, y: 0, width: 1 / 2, height: 1 / 2 },
+        { x: 1 / 2, y: 0, width: 1 / 2, height: 1 / 2 },
+        { x: 0, y: 1 / 2, width: 1 / 2, height: 1 / 2 },
+      ],
+    },
+  },
+  viewports: [ctAXIAL, ptAXIAL, fusionAXIAL],
+};
+
 /** 2026-09-18 功能说明：通过 URL 参数隔离 CT、PET 和后续视口，定位 GPU 进程内存增量。 */
 function getMemoryProbeStage(): AppTypes.HangingProtocol.ProtocolStage | null {
   if (typeof window === 'undefined') {
@@ -667,9 +686,19 @@ const ptCT: AppTypes.HangingProtocol.Protocol = {
     },
   },
   // [2026-05-11 修改] 扩展stages数组，新增冠状位2x2、原始2x3、原始2x4、TMTV MPR布局
-  // [2026-06-30 修改] 默认布局改为 Axial（stage3），将 stage3 放到第一位
+  // 2026-11-25 功能说明：恢复原有含 MIP 的默认横断面布局，并保留无 MIP 对照布局。
   //可选的多种布局
-  stages: [getMemoryProbeStage() || stage3, stage1, stage2, stage4, stage5, stage6, stage7, stage8],
+  stages: [
+    getMemoryProbeStage() || stage3,
+    stageAxialNoMIP,
+    stage1,
+    stage2,
+    stage4,
+    stage5,
+    stage6,
+    stage7,
+    stage8,
+  ],
   numberOfPriorsReferenced: -1,
 };
 
