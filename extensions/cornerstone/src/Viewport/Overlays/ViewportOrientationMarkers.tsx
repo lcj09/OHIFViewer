@@ -78,7 +78,7 @@ function ViewportOrientationMarkers({
     return orientationMarkers.map((m, index) => (
       <div
         className={classNames(
-          'overlay-text',
+          // 2026-11-26 功能说明：仅使用方位标记本身的定位，避免四角文字的全视口样式改变字母位置。
           `${m}-mid orientation-marker`,
           isLight ? 'text-neutral-dark/70' : 'text-neutral-light/70',
           isLight ? 'shadow-light' : 'shadow-dark',

@@ -10,7 +10,8 @@ import PixelInfoOverlay from './PixelInfoOverlay';
 
 function CornerstoneOverlays(props: withAppTypes) {
   const { viewportId, element, scrollbarHeight, servicesManager } = props;
-  const { cornerstoneViewportService, viewportGridService } = servicesManager.services;
+  const { cornerstoneViewportService, viewportGridService, customizationService } =
+    servicesManager.services;
   const [imageSliceData, setImageSliceData] = useState({
     imageIndex: 0,
     numberOfSlices: 0,
@@ -40,6 +41,20 @@ function CornerstoneOverlays(props: withAppTypes) {
 
   const viewportInfo = viewportData ? cornerstoneViewportService.getViewportInfo(viewportId) : null;
   const customViewportProps = viewportInfo?.viewportOptions?.customViewportProps;
+  // 2026-11-26 功能说明：允许阅片模式将方位字母限制在指定工具组。
+  const orientationMarkersToolGroup = customizationService?.getCustomization(
+    'viewportOverlay.orientationMarkersToolGroup'
+  );
+  const orientationMarkers =
+    (!orientationMarkersToolGroup || viewportInfo?.getToolGroupId() === orientationMarkersToolGroup) && (
+      <ViewportOrientationMarkers
+        imageSliceData={imageSliceData}
+        element={element}
+        viewportData={viewportData}
+        servicesManager={servicesManager}
+        viewportId={viewportId}
+      />
+    );
   const volumeLoadingProgressMode = customViewportProps?.volumeLoadingProgressMode;
   const loadingProgress =
     volumeLoadingProgressMode === 'compact' || volumeLoadingProgressMode === 'blocking' ? (
@@ -74,13 +89,7 @@ function CornerstoneOverlays(props: withAppTypes) {
               element={element}
             />
           )}
-          <ViewportOrientationMarkers
-            imageSliceData={imageSliceData}
-            element={element}
-            viewportData={viewportData}
-            servicesManager={servicesManager}
-            viewportId={viewportId}
-          />
+          {orientationMarkers}
         </div>
       );
     }
@@ -112,13 +121,7 @@ function CornerstoneOverlays(props: withAppTypes) {
         element={element}
       />
 
-      <ViewportOrientationMarkers
-        imageSliceData={imageSliceData}
-        element={element}
-        viewportData={viewportData}
-        servicesManager={servicesManager}
-        viewportId={viewportId}
-      />
+      {orientationMarkers}
 
       {/* [2026-04-29] 自动探针功能 - 鼠标移动自动显示+点击固定标注 */}
       <PixelInfoOverlay

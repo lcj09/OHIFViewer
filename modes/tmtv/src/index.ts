@@ -350,6 +350,8 @@ function modeFactory({ modeConfiguration }) {
       toolbarService.updateSection('BrushTools', ['Brush', 'Eraser', 'Threshold']);
 
       customizationService.setCustomizations({
+        // 2026-11-26 功能说明：TMTV 仅在 MIP 工具组显示方向字母，避免与阅片视口的四角信息重叠。
+        'viewportOverlay.orientationMarkersToolGroup': 'mipToolGroup',
         'panelSegmentation.tableMode': {
           $set: 'expanded',
         },

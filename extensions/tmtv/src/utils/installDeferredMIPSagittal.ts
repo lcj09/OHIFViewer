@@ -41,10 +41,18 @@ export default function installDeferredMIPSagittal({ cornerstoneViewportService,
 
   const onVolumeModified = () => scheduleCheck();
   eventTarget.addEventListener(EVENTS.IMAGE_VOLUME_MODIFIED, onVolumeModified);
+  eventTarget.addEventListener(EVENTS.IMAGE_VOLUME_LOADING_COMPLETED, onVolumeModified);
 
   const readyEvent = viewportGridService?.EVENTS?.VIEWPORTS_READY;
   const readySubscription = readyEvent
     ? viewportGridService.subscribe(readyEvent, scheduleCheck)
+    : null;
+  // 2026-11-26 功能说明：双击还原重新绑定缓存中的 PT 时可能没有切片加载事件，在绑定完成后恢复 MIP。
+  const volumesChangedEvent = cornerstoneViewportService?.EVENTS?.VIEWPORT_VOLUMES_CHANGED;
+  const volumesChangedSubscription = volumesChangedEvent
+    ? cornerstoneViewportService.subscribe(volumesChangedEvent, ({ viewportInfo }) => {
+        if (viewportInfo?.getViewportId() === 'mipSagittal') scheduleCheck();
+      })
     : null;
   scheduleCheck();
 
@@ -54,7 +62,9 @@ export default function installDeferredMIPSagittal({ cornerstoneViewportService,
       if (disposed) return;
       disposed = true;
       eventTarget.removeEventListener(EVENTS.IMAGE_VOLUME_MODIFIED, onVolumeModified);
+      eventTarget.removeEventListener(EVENTS.IMAGE_VOLUME_LOADING_COMPLETED, onVolumeModified);
       readySubscription?.unsubscribe?.();
+      volumesChangedSubscription?.unsubscribe();
       if (checkTimer !== null) {
         clearTimeout(checkTimer);
         checkTimer = null;
