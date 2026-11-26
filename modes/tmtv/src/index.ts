@@ -23,6 +23,7 @@ import {
   runLifecycleCleanups,
 } from '../../../extensions/tmtv/src/utils/runLifecycleCleanups';
 import installTMTVSegmentationRenderGuard from '../../../extensions/tmtv/src/utils/installTMTVSegmentationRenderGuard';
+import installDeferredMIPSagittal from '../../../extensions/tmtv/src/utils/installDeferredMIPSagittal';
 
 const { MetadataProvider } = classes;
 
@@ -65,6 +66,7 @@ let metadataClearTimer: ReturnType<typeof setTimeout> | null = null;
 let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 let gpuUploadProbeCleanup: (() => void) | null = null;
 let segmentationRenderGuardCleanup: (() => void) | null = null;
+let deferredMIPCleanup: (() => void) | null = null;
 
 function modeFactory({ modeConfiguration }) {
   return {
@@ -81,6 +83,8 @@ function modeFactory({ modeConfiguration }) {
       // 2026-09-18 功能说明：仅诊断 URL 启用 GPU 上传统计，避免影响正常 TMTV 阅片。
       gpuUploadProbeCleanup?.();
       gpuUploadProbeCleanup = installGpuUploadProbe();
+      deferredMIPCleanup?.();
+      deferredMIPCleanup = null;
       // 2026-09-04 功能说明：异常退出后再次进入时先清除遗留订阅，避免事件监听随进入次数累积。
       drainLifecycleSubscriptions(unsubscriptions);
       // Cancel any pending delayed metadata clear from a previous mode exit.
@@ -106,6 +110,12 @@ function modeFactory({ modeConfiguration }) {
         viewportGridService,
         cornerstoneViewportService,
       } = servicesManager.services;
+
+      // 2026-11-25 功能说明：延后默认 MIP 投影到 PT 体数据加载完成后，降低流式加载期间的渲染竞争。
+      deferredMIPCleanup = installDeferredMIPSagittal({
+        cornerstoneViewportService,
+        viewportGridService,
+      }).dispose;
 
       // 2026-09-24 功能说明：仅在 TMTV 生命周期内保护布局还原时的 Labelmap 缓存竞态。
       segmentationRenderGuardCleanup = installTMTVSegmentationRenderGuard(servicesManager).dispose;
@@ -483,6 +493,8 @@ function modeFactory({ modeConfiguration }) {
     onModeExit: ({ servicesManager, extensionManager }: withAppTypes) => {
       gpuUploadProbeCleanup?.();
       gpuUploadProbeCleanup = null;
+      deferredMIPCleanup?.();
+      deferredMIPCleanup = null;
       segmentationRenderGuardCleanup?.();
       segmentationRenderGuardCleanup = null;
       // 2026-10-12 清理对比布局折叠状态

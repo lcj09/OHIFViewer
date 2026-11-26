@@ -7,6 +7,10 @@ window.config = {
   extensions: [],
   modes: [],
   customizationService: {
+    // TMTV 图像加载进度条：off=关闭，compact=小型不遮挡，blocking=全屏遮罩
+    'tmtv.loadingProgress': {
+      mode: 'off',
+    },
     // TMTV模式图像上传服务地址
     // 部署时只需修改此处的apiUrl即可，无需改动源码
     'tmtv.imageUpload': {

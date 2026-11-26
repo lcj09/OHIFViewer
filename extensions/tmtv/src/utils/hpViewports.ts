@@ -15,6 +15,18 @@ const hydrateSegSync = {
     matchingRules: ['sameFOR'],
   },
 };
+
+/** 2026-11-26 功能说明：读取 TMTV 加载条显示模式；仅接受 off、compact、blocking，缺省关闭。 */
+const configuredLoadingProgressMode =
+  typeof window !== 'undefined'
+    ? (window.config?.customizationService?.['tmtv.loadingProgress'] as
+        | { mode?: string }
+        | undefined)?.mode
+    : undefined;
+const tmtvLoadingProgressMode = ['compact', 'blocking'].includes(configuredLoadingProgressMode)
+  ? configuredLoadingProgressMode
+  : 'off';
+
 //融合视图配置
 const ctAXIAL: AppTypes.HangingProtocol.Viewport = {
   viewportOptions: {
@@ -22,6 +34,7 @@ const ctAXIAL: AppTypes.HangingProtocol.Viewport = {
     viewportType: 'volume', //体积视图
     orientation: 'axial', //横截面
     toolGroupId: 'ctToolGroup', //CT工具组
+    customViewportProps: { volumeLoadingProgressMode: tmtvLoadingProgressMode },
     initialImageOptions: {
       // index: 5,
       preset: 'first', // 'first', 'last', 'middle'
@@ -475,7 +488,8 @@ const mipSAGITTAL: AppTypes.HangingProtocol.Viewport = {
     {
       // [2026-05-11 优化] slabThickness: 500mm（减少GPU显存占用，原:fullVolume）
       options: {
-        blendMode: 'MIP',
+        // 2026-11-25 功能说明：先以普通复合模式加载 PT，待共享 PT volume 完整后再启用 MIP，减少加载期间重复投影。
+        blendMode: undefined,
         slabThickness: 500,
         voi: {
           custom: 'getPTVOIRange',

@@ -4,6 +4,7 @@ import ViewportImageScrollbar from './ViewportImageScrollbar';
 import CustomizableViewportOverlay from './CustomizableViewportOverlay';
 import ViewportOrientationMarkers from './ViewportOrientationMarkers';
 import ViewportImageSliceLoadingIndicator from './ViewportImageSliceLoadingIndicator';
+import ViewportVolumeLoadingProgress from './ViewportVolumeLoadingProgress';
 // [2026-04-29] 导入实时像素信息显示组件 - 自动探针功能
 import PixelInfoOverlay from './PixelInfoOverlay';
 
@@ -37,9 +38,11 @@ function CornerstoneOverlays(props: withAppTypes) {
     return null;
   }
 
-  if (viewportData) {
-    const viewportInfo = cornerstoneViewportService.getViewportInfo(viewportId);
+  const viewportInfo = viewportData ? cornerstoneViewportService.getViewportInfo(viewportId) : null;
+  const volumeLoadingProgressMode =
+    viewportInfo?.viewportOptions?.customViewportProps?.volumeLoadingProgressMode;
 
+  if (viewportData) {
     if (viewportInfo?.viewportOptions?.customViewportProps?.hideOverlays) {
       // [2026-08-12 修复] 当 hideOverlays 为 true 时，仍渲染方位标记，
       // 但隐藏其他叠加层（滚动条、文字叠加、切片加载指示器、像素信息）。
@@ -49,6 +52,14 @@ function CornerstoneOverlays(props: withAppTypes) {
         viewportInfo.viewportOptions.customViewportProps.showPatientOverlay === true;
       return (
         <div className="noselect">
+          {volumeLoadingProgressMode !== undefined && volumeLoadingProgressMode !== 'off' && (
+            <ViewportVolumeLoadingProgress
+              viewportId={viewportId}
+              cornerstoneViewportService={cornerstoneViewportService}
+              aggregateAllViewports
+              mode={volumeLoadingProgressMode}
+            />
+          )}
           {showPatientOverlay && (
             <CustomizableViewportOverlay
               imageSliceData={imageSliceData}
@@ -72,6 +83,16 @@ function CornerstoneOverlays(props: withAppTypes) {
 
   return (
     <div className="noselect">
+      {viewportData &&
+        volumeLoadingProgressMode !== undefined &&
+        volumeLoadingProgressMode !== 'off' && (
+          <ViewportVolumeLoadingProgress
+            viewportId={viewportId}
+            cornerstoneViewportService={cornerstoneViewportService}
+            aggregateAllViewports
+            mode={volumeLoadingProgressMode}
+          />
+        )}
       <ViewportImageScrollbar
         viewportId={viewportId}
         viewportData={viewportData}

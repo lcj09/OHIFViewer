@@ -192,6 +192,7 @@ export default function interleaveTopToBottom({
   // iterate over all volumes, and get their imageIds, and interleave
   // the imageIds and save them in AllRequests for later use
   const AllRequests = [];
+  const initialRequests = [];
   volumes.forEach(volume => {
     const requests = volume.getImageLoadRequests?.() ?? [];
 
@@ -199,8 +200,31 @@ export default function interleaveTopToBottom({
       return;
     }
 
-    // reverse the requests
-    AllRequests.push(requests.reverse());
+    // 2026-11-25 功能说明：Cornerstone 流式 volume 默认约每完成 2% 切片才重绘；
+    // 因此优先加载中心切片附近略多于 2% 的请求，尽早越过首屏重绘阈值。
+    // 首屏批次之后仍按距中心由近到远加载，保证滚轮相邻层先于远端层到达。
+    const centerImageIndex = Math.floor(requests.length / 2);
+    const initialRequestCount = Math.min(requests.length, Math.ceil(requests.length * 0.02) + 1);
+    const prioritizedRequests = requests
+      .slice()
+      .sort(
+        (left, right) =>
+          Math.abs((left.imageIdIndex ?? requests.indexOf(left)) - centerImageIndex) -
+          Math.abs((right.imageIdIndex ?? requests.indexOf(right)) - centerImageIndex)
+      )
+      .slice(0, initialRequestCount);
+    const prioritizedRequestSet = new Set(prioritizedRequests);
+    initialRequests.push(...prioritizedRequests);
+
+    const pendingRequests = requests.filter(request => !prioritizedRequestSet.has(request));
+    pendingRequests.sort((left, right) => {
+      const leftIndex = left.imageIdIndex ?? requests.indexOf(left);
+      const rightIndex = right.imageIdIndex ?? requests.indexOf(right);
+      const distanceDifference =
+        Math.abs(leftIndex - centerImageIndex) - Math.abs(rightIndex - centerImageIndex);
+      return distanceDifference || leftIndex - rightIndex;
+    });
+    AllRequests.push(pendingRequests);
   });
 
   // flatten the AllRequests array, which will result in a list of all the
@@ -209,6 +233,16 @@ export default function interleaveTopToBottom({
 
   const requestType = Enums.RequestType.Prefetch;
   const priority = 0;
+
+  initialRequests.forEach(({ callLoadImage, additionalDetails, imageId, imageIdIndex, options }) => {
+    const callLoadImageBound = callLoadImage.bind(null, imageId, imageIdIndex, options);
+    imageLoadPoolManager.addRequest(
+      callLoadImageBound,
+      Enums.RequestType.Interaction,
+      additionalDetails,
+      priority
+    );
+  });
 
   // 2026-09-28 功能说明：直接按交错顺序入队，避免逐张扫描全部体积并交叉匹配同名 ID。
   interleavedRequests.forEach(({ callLoadImage, additionalDetails, imageId, imageIdIndex, options }) => {
