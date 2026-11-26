@@ -101,6 +101,11 @@ function getPositionPresentationId(viewport, viewports, isUpdatingSameViewport) 
     positionPresentationArr.push(viewportOptionId);
   }
 
+  // 2026-11-26 功能说明：按视口隔离投影相机，避免与同方向、同序列的普通切片共享位置状态。
+  if (viewportOptions.customViewportProps?.preserveVolumeCamera === true) {
+    positionPresentationArr.push(viewport.viewportId || viewportOptions.viewportId);
+  }
+
   if (displaySetOptions?.some(ds => ds.options?.blendMode || ds.options?.displayPreset)) {
     positionPresentationArr.push(`custom`);
   }

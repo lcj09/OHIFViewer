@@ -668,6 +668,7 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     return viewportInfo.getPresentationIds();
   }
 
+  /** 2026-11-26 功能说明：投影视口额外保存世界坐标相机，避免重新定位到切片时移动旋转中心。 */
   private _getPositionPresentation(viewportId: string): PositionPresentation {
     const csViewport = this.getCornerstoneViewport(viewportId);
     if (!csViewport) {
@@ -675,12 +676,38 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     }
 
     const viewportInfo = this.viewportsById.get(viewportId);
+    let volumeCamera: PositionPresentation['volumeCamera'];
+    if (
+      viewportInfo.viewportOptions?.customViewportProps?.preserveVolumeCamera === true &&
+      csViewport instanceof BaseVolumeViewport
+    ) {
+      const volumeId = csViewport.getVolumeId();
+      const { position, focalPoint, viewUp, flipHorizontal, flipVertical } = csViewport.getCamera();
+      if (
+        volumeId &&
+        position?.every(Number.isFinite) &&
+        focalPoint?.every(Number.isFinite) &&
+        viewUp?.every(Number.isFinite)
+      ) {
+        volumeCamera = {
+          volumeId,
+          camera: {
+            position: [...position],
+            focalPoint: [...focalPoint],
+            viewUp: [...viewUp],
+            flipHorizontal,
+            flipVertical,
+          },
+        };
+      }
+    }
 
     return {
       viewportType: viewportInfo.getViewportType(),
       viewReference: csViewport instanceof VolumeViewport3D ? null : csViewport.getViewReference(),
       viewPresentation: csViewport.getViewPresentation({ pan: true, zoom: true }),
       viewportId,
+      ...(volumeCamera ? { volumeCamera } : {}),
     };
   }
 
@@ -1835,10 +1862,23 @@ class CornerstoneViewportService extends PubSubService implements IViewportServi
     }
   }
 
+  /** 2026-11-26 功能说明：同一体数据还原投影视口相机与相对缩放，避免切片跳转和重复应用平移。 */
   private _setPositionPresentation(
     viewport: Types.IStackViewport | Types.IVolumeViewport,
     positionPresentation: PositionPresentation
   ): void {
+    const preserveVolumeCamera =
+      this.getViewportInfo(viewport.id)?.viewportOptions?.customViewportProps?.preserveVolumeCamera;
+    if (preserveVolumeCamera === true && viewport instanceof BaseVolumeViewport) {
+      const { volumeCamera, viewPresentation } = positionPresentation ?? {};
+      if (volumeCamera && volumeCamera.volumeId === viewport.getVolumeId()) {
+        viewport.setCamera(volumeCamera.camera);
+        const zoom = viewPresentation?.zoom;
+        if (Number.isFinite(zoom) && zoom > 0) viewport.setZoom(zoom);
+      }
+      return;
+    }
+
     const viewRef = positionPresentation?.viewReference;
     if (viewRef) {
       // The orientation can be updated here to navigate to the specified

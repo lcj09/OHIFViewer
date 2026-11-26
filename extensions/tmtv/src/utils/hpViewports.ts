@@ -483,6 +483,8 @@ const mipSAGITTAL: AppTypes.HangingProtocol.Viewport = {
       // in the cornerstone extension.
       hideOverlays: true,
       showPatientOverlay: true,
+      // 2026-11-26 功能说明：还原布局时保留 MIP 的世界坐标旋转中心。
+      preserveVolumeCamera: true,
     },
   },
   displaySets: [

@@ -11,6 +11,7 @@ export type PositionPresentation = {
   viewReference: Types.ViewReference;
   // The position information has the zoom/pan and possibly other related information, but not LUT
   viewPresentation: Types.ViewPresentation;
+  volumeCamera?: { volumeId: string; camera: Types.ICamera };
   /**
    * Optionals
    */
