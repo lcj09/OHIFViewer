@@ -10,7 +10,7 @@ import PixelInfoOverlay from './PixelInfoOverlay';
 
 function CornerstoneOverlays(props: withAppTypes) {
   const { viewportId, element, scrollbarHeight, servicesManager } = props;
-  const { cornerstoneViewportService } = servicesManager.services;
+  const { cornerstoneViewportService, viewportGridService } = servicesManager.services;
   const [imageSliceData, setImageSliceData] = useState({
     imageIndex: 0,
     numberOfSlices: 0,
@@ -39,8 +39,20 @@ function CornerstoneOverlays(props: withAppTypes) {
   }
 
   const viewportInfo = viewportData ? cornerstoneViewportService.getViewportInfo(viewportId) : null;
-  const volumeLoadingProgressMode =
-    viewportInfo?.viewportOptions?.customViewportProps?.volumeLoadingProgressMode;
+  const customViewportProps = viewportInfo?.viewportOptions?.customViewportProps;
+  const volumeLoadingProgressMode = customViewportProps?.volumeLoadingProgressMode;
+  const loadingProgress =
+    volumeLoadingProgressMode === 'compact' || volumeLoadingProgressMode === 'blocking' ? (
+      <ViewportVolumeLoadingProgress
+        viewportId={viewportId}
+        cornerstoneViewportService={cornerstoneViewportService}
+        comparisonGridService={
+          customViewportProps?.tmtvComparisonSide ? viewportGridService : undefined
+        }
+        aggregateAllViewports
+        mode={volumeLoadingProgressMode}
+      />
+    ) : null;
 
   if (viewportData) {
     if (viewportInfo?.viewportOptions?.customViewportProps?.hideOverlays) {
@@ -52,14 +64,7 @@ function CornerstoneOverlays(props: withAppTypes) {
         viewportInfo.viewportOptions.customViewportProps.showPatientOverlay === true;
       return (
         <div className="noselect">
-          {volumeLoadingProgressMode !== undefined && volumeLoadingProgressMode !== 'off' && (
-            <ViewportVolumeLoadingProgress
-              viewportId={viewportId}
-              cornerstoneViewportService={cornerstoneViewportService}
-              aggregateAllViewports
-              mode={volumeLoadingProgressMode}
-            />
-          )}
+          {loadingProgress}
           {showPatientOverlay && (
             <CustomizableViewportOverlay
               imageSliceData={imageSliceData}
@@ -83,16 +88,7 @@ function CornerstoneOverlays(props: withAppTypes) {
 
   return (
     <div className="noselect">
-      {viewportData &&
-        volumeLoadingProgressMode !== undefined &&
-        volumeLoadingProgressMode !== 'off' && (
-          <ViewportVolumeLoadingProgress
-            viewportId={viewportId}
-            cornerstoneViewportService={cornerstoneViewportService}
-            aggregateAllViewports
-            mode={volumeLoadingProgressMode}
-          />
-        )}
+      {loadingProgress}
       <ViewportImageScrollbar
         viewportId={viewportId}
         viewportData={viewportData}

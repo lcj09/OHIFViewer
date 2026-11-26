@@ -5,6 +5,7 @@ import { cache, eventTarget, EVENTS } from '@cornerstonejs/core';
 function ViewportVolumeLoadingProgress({
   viewportId,
   cornerstoneViewportService,
+  comparisonGridService,
   aggregateAllViewports = false,
   mode = 'compact',
 }) {
@@ -14,20 +15,30 @@ function ViewportVolumeLoadingProgress({
     let active = true;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
+    /** 2026-11-26 功能说明：按对比网格收集两侧已绑定的体数据，等待未绑定的视口并对共享 volume 去重。 */
     const refreshProgress = () => {
       if (!active) return;
-      const viewportIds = aggregateAllViewports
-        ? cornerstoneViewportService?.getViewportIds?.() ?? []
-        : [viewportId];
-      const volumeIds = Array.from(
-        new Set(
-          viewportIds.flatMap(id => {
-            const viewport = cornerstoneViewportService?.getCornerstoneViewport?.(id);
-            return viewport?.getAllVolumeIds?.() ?? [];
-          })
-        )
-      );
-      if (!volumeIds.length) return;
+      const comparisonViewports: AppTypes.ViewportGrid.Viewports | undefined =
+        comparisonGridService?.getState()?.viewports;
+      const viewportIds: string[] = comparisonViewports
+        ? Array.from(comparisonViewports.values())
+            .filter(viewport => viewport.displaySetInstanceUIDs?.length)
+            .map(viewport => viewport.viewportId)
+        : aggregateAllViewports
+          ? cornerstoneViewportService?.getViewportIds?.() ?? []
+          : [viewportId];
+      const volumeIds = new Set<string>();
+      let hasUnboundViewport = false;
+      viewportIds.forEach(id => {
+        const viewport = cornerstoneViewportService?.getCornerstoneViewport?.(id);
+        const ids: string[] = viewport?.getAllVolumeIds?.() ?? [];
+        hasUnboundViewport ||= ids.length === 0;
+        ids.forEach(volumeId => volumeIds.add(volumeId));
+      });
+      if (!volumeIds.size) {
+        setProgress(null);
+        return;
+      }
 
       let completedPercent = 0;
       volumeIds.forEach(volumeId => {
@@ -40,9 +51,13 @@ function ViewportVolumeLoadingProgress({
         }
       });
 
-      let nextProgress = Math.max(0, Math.min(100, Math.round(completedPercent / volumeIds.length)));
-      // TMTV requires both CT and PT; keep the global overlay until both unique volumes are known.
-      if (aggregateAllViewports && volumeIds.length < 2) nextProgress = Math.min(nextProgress, 99);
+      const waitingForVolumes = comparisonViewports
+        ? hasUnboundViewport
+        : aggregateAllViewports && volumeIds.size < 2;
+      const nextProgress = Math.max(
+        0,
+        Math.min(waitingForVolumes ? 99 : 100, Math.floor(completedPercent / volumeIds.size))
+      );
       setProgress(current => (current === nextProgress ? current : nextProgress));
     };
 
@@ -63,18 +78,30 @@ function ViewportVolumeLoadingProgress({
     };
     eventTarget.addEventListener(EVENTS.IMAGE_VOLUME_MODIFIED, onVolumeProgress);
     eventTarget.addEventListener(EVENTS.IMAGE_VOLUME_LOADING_COMPLETED, onVolumeLoadingCompleted);
+    const layoutSubscription = comparisonGridService?.subscribe(
+      comparisonGridService.EVENTS.GRID_STATE_CHANGED,
+      onVolumeProgress
+    );
+    const volumesSubscription = comparisonGridService
+      ? cornerstoneViewportService.subscribe(
+          cornerstoneViewportService.EVENTS.VIEWPORT_VOLUMES_CHANGED,
+          onVolumeProgress
+        )
+      : undefined;
     refreshProgress();
 
     return () => {
       active = false;
       if (refreshTimer !== null) clearTimeout(refreshTimer);
+      layoutSubscription?.unsubscribe();
+      volumesSubscription?.unsubscribe();
       eventTarget.removeEventListener(EVENTS.IMAGE_VOLUME_MODIFIED, onVolumeProgress);
       eventTarget.removeEventListener(
         EVENTS.IMAGE_VOLUME_LOADING_COMPLETED,
         onVolumeLoadingCompleted
       );
     };
-  }, [aggregateAllViewports, cornerstoneViewportService, viewportId]);
+  }, [aggregateAllViewports, comparisonGridService, cornerstoneViewportService, viewportId]);
 
   if (progress === null || progress >= 100) return null;
 

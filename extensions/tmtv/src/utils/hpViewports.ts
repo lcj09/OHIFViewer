@@ -23,9 +23,10 @@ const configuredLoadingProgressMode =
         | { mode?: string }
         | undefined)?.mode
     : undefined;
-const tmtvLoadingProgressMode = ['compact', 'blocking'].includes(configuredLoadingProgressMode)
-  ? configuredLoadingProgressMode
-  : 'off';
+export const tmtvLoadingProgressMode =
+  configuredLoadingProgressMode === 'compact' || configuredLoadingProgressMode === 'blocking'
+    ? configuredLoadingProgressMode
+    : 'off';
 
 //融合视图配置
 const ctAXIAL: AppTypes.HangingProtocol.Viewport = {

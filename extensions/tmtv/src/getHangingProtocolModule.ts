@@ -11,6 +11,7 @@ import {
   ptAXIAL,
   ptCORONAL,
   ptSAGITTAL,
+  tmtvLoadingProgressMode,
 } from './utils/hpViewports';
 import buildCompareSyncGroups from './utils/comparisonSyncGroups';
 
@@ -96,6 +97,10 @@ const createCompareVolumeViewport = ({
     customViewportProps: {
       tmtvComparisonSide: side,
       tmtvComparisonModality: modality,
+      // 2026-11-26 功能说明：由基线 CT 视口挂载一条进度条，汇总两侧体数据。
+      ...(side === 'Baseline' && modality === 'CT'
+        ? { volumeLoadingProgressMode: tmtvLoadingProgressMode }
+        : {}),
     },
   },
   displaySets,
